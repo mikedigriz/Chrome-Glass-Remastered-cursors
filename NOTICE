@@ -1,0 +1,30 @@
+Chrome Glass Remastered - acknowledgement
+=========================================
+
+Chrome Glass Remastered is an unofficial, derivative remaster of:
+
+    "Chrome Glass" by yoyos
+    Published on DeviantArt, 23 April 2006
+    https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748
+
+The cursor frames in src/orig/ are the original 2006 bitmaps; the frames in
+src/ai/ and everything built from them (dist/, release archives, previews)
+are derived from those bitmaps: AI upscaling, colour restoration and
+vector-traced edges applied on top of the original artist's work. The Pin
+and Person cursors are new drawings made for this set in the original's
+style. The 32 px images inside the shipped cursors are the original frames,
+byte for byte.
+
+The "Chrome Glass" name and the original artwork remain the creative work
+and property of their author; "HD" marks this as an unofficial remaster.
+It is published as a tribute, in the belief that a free,
+attribution-preserving revival of a 20-year-old classic is in its spirit.
+If you are the author and want anything changed or removed, open an issue
+and it will be done.
+
+If you build on this project, keep this acknowledgement. Before any use
+beyond this repository (forks aside), consider contacting the original
+author on DeviantArt.
+
+The MIT license in LICENSE covers the code only (build pipeline, tracing,
+rendering and packaging tools), not the cursor artwork.

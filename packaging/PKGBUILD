@@ -1,0 +1,16 @@
+# Maintainer: mikedigriz
+pkgname=chrome-glass-remastered-cursors
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Chrome Glass (2006) cursor remaster: original pixels, crisp 32-256px, 60 fps"
+arch=('any')
+url="https://github.com/mikedigriz/chrome-glass-remastered-cursors"
+license=('custom')
+source=("$url/releases/download/v$pkgver/ChromeGlassRemastered-linux.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    install -dm755 "$pkgdir/usr/share/icons"
+    cp -r "$srcdir/Chrome Glass Remastered" "$pkgdir/usr/share/icons/"
+    find "$pkgdir/usr/share/icons" -type f -exec chmod 644 {} +
+}

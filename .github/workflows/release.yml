@@ -1,0 +1,39 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: pip install pillow numpy
+
+      - name: Regenerate traced silhouettes
+        run: python trace.py
+
+      - name: Traced silhouettes must match the committed ones
+        run: git diff --exit-code traced.json
+
+      - name: Build cursor themes and packages
+        run: python build.py
+
+      - name: Attach artifacts to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            packages/ChromeGlassRemastered-windows.zip
+            packages/ChromeGlassRemastered-linux.tar.gz
+            packages/ChromeGlassRemastered.cape
+            packages/chrome-glass-remastered-cursors_*_all.deb

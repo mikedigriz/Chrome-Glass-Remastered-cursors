@@ -1,0 +1,12 @@
+# Keep shell scripts LF so they run on Linux even when cloned on Windows.
+*.sh            text eol=lf
+*.py            text eol=lf
+# Windows INF expects CRLF.
+*.inf           text eol=crlf
+# Binary assets - never touch line endings.
+*.png           binary
+*.webp          binary
+*.gif           binary
+*.cur           binary
+*.ani           binary
+*.deb           binary
