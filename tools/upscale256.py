@@ -1,9 +1,16 @@
 """Regenerate src/ai256: a Real-ESRGAN x4 pass over the processed 128px
-hybrid frames, downsampled to 256px RGB.
+hybrid frames (static cursors only - animated .ani files never ship a
+256px frame, see build.py's ANI_SIZES_WIN), downsampled to 256px RGB.
 
-Needs `pip install py-real-esrgan` (pulls torch). The results are committed,
-so the normal build (and CI) never needs torch: hybrid.py picks src/ai256 up
-when present and falls back to Lanczos otherwise.
+Needs `pip install py-real-esrgan opencv-python` (pulls torch). The results
+are committed, so the normal build (and CI) never needs torch: hybrid.py
+picks src/ai256 up when present and falls back to Lanczos otherwise.
+
+The 128px source is fed through upscale_lib.bleed_extend() first so the
+transparent margin around the silhouette is filled with the nearest visible
+colour instead of black - Real-ESRGAN has no alpha channel and otherwise
+"learns" a dark scalloped halo along every edge. Runs on the first CUDA
+device if present.
 """
 import os, sys
 
@@ -15,27 +22,32 @@ import huggingface_hub
 if not hasattr(huggingface_hub, "cached_download"):        # new hub versions
     huggingface_hub.cached_download = huggingface_hub.hf_hub_download
 import numpy as np
-import torch
 from PIL import Image
-from py_real_esrgan.model import RealESRGAN
 
 import hybrid as H
+import upscale_lib as U
 
 
 def main():
     out_dir = os.path.join(ROOT, "src", "ai256")
     os.makedirs(out_dir, exist_ok=True)
-    model = RealESRGAN(torch.device("cpu"), scale=4)
-    model.load_weights(os.path.join(ROOT, "weights", "RealESRGAN_x4.pth"),
-                       download=True)
-    for name in H.STATIC:
-        key = H._key(name, 0)
-        rgb, _ = H._base128(name, 0)
-        im = Image.fromarray(rgb.round().astype(np.uint8), "RGB")
-        big = model.predict(im)                            # 512px
-        big.resize((256, 256), Image.LANCZOS).save(
-            os.path.join(out_dir, key + ".png"))
-        print("ai256", key)
+    device = U.pick_device()
+    print("device:", device)
+    model = U.load_model(device, scale=4)
+
+    names = list(H.STATIC)
+    for name in names:
+        n = len(H.BY_NAME[name]["frames"])
+        for idx in range(n):
+            key = H._key(name, idx)
+            rgb, alpha = H._base128(name, idx)
+            rgba = np.dstack([rgb, alpha])
+            clean_rgb = U.bleed_extend(rgba)
+            im = Image.fromarray(clean_rgb, "RGB")
+            big = model.predict(im)                            # 512px
+            big.resize((256, 256), Image.LANCZOS).save(
+                os.path.join(out_dir, key + ".png"))
+            print("ai256", key)
 
 
 if __name__ == "__main__":
