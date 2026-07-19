@@ -46,11 +46,15 @@ def smooth(poly, iters=2):
     return pts
 
 
-# the "?" curl of Help is a thin stroke the polygon tracer cannot keep - the
-# mask must still include it or the hybrid alpha would erase the curl
+# the "?" of Help is two things the polygon tracer drops: the thin curl stroke,
+# and the dot beneath it - a separate 10-pixel island the original draws outside
+# the arrow silhouette (centre (19,26.2) in the 2006 frame, x=18..20 y=25..28).
+# trace.py keeps only the arrow body, so both are hand-authored here. The dot must
+# sit at its real island coordinates - placed inside the arrow it renders invisible,
+# since the mask there is already opaque from the arrow polygon.
 HELP_EXTRA = [
     {"line": [(20.2, 9.2), (20.6, 7.9), (21.9, 7.3), (23.3, 7.6), (23.9, 8.9),
               (23.4, 10.2), (22.3, 11.0), (22.1, 12.3)],
      "stroke": ((255, 255, 255, 255), 1.35)},
-    {"dot": (22.1, 14.6, 1.8), "fill": (255, 255, 255, 255)},
+    {"dot": (19.0, 26.2, 1.6), "fill": (255, 255, 255, 255)},
 ]
