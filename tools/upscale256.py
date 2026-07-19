@@ -1,6 +1,8 @@
 """Regenerate src/ai256: a Real-ESRGAN x4 pass over the processed 128px
-hybrid frames (static cursors only - animated .ani files never ship a
-256px frame, see build.py's ANI_SIZES_WIN), downsampled to 256px RGB.
+hybrid frames, downsampled to 256px RGB. Covers static and animated cursors:
+the 256px master feeds every size (hybrid._master), and Linux ships animated
+cursors up to 256px (build.py ANI_SIZES). Windows .ani stays capped at 96px
+(ANI_SIZES_WIN), so its frames never carry a 256px image.
 
 Needs `pip install py-real-esrgan opencv-python` (pulls torch). The results
 are committed, so the normal build (and CI) never needs torch: hybrid.py
@@ -35,7 +37,7 @@ def main():
     print("device:", device)
     model = U.load_model(device, scale=4)
 
-    names = list(H.STATIC)
+    names = list(H.STATIC) + list(H.ANIM)
     for name in names:
         n = len(H.BY_NAME[name]["frames"])
         for idx in range(n):

@@ -28,8 +28,12 @@ THEME = "Chrome Glass Remastered"
 PKG = "chrome-glass-remastered-cursors"
 VERSION = "1.0.0"
 
-SIZES = [32, 48, 64, 96, 128, 256]      # static .cur / Xcursor sizes
-ANI_SIZES = [32, 48, 64, 96, 128]       # animated Xcursor sizes
+SIZES = [32, 48, 64, 96, 128, 256]      # static .cur sizes (256 is the .cur ceiling)
+# Xcursor has no per-image size cap, so Linux ships the extra HiDPI sizes the
+# classic .cur format cannot express (its ICONDIRENTRY width/height is a single
+# byte, 256 encoded as 0 - 384/512 are simply not representable there).
+LINUX_SIZES = SIZES + [384, 512]        # static Xcursor sizes
+ANI_SIZES = [32, 48, 64, 96, 128, 256]  # animated Xcursor sizes
 # sizes inside each .ani frame, largest first; Windows refuses animated
 # frames holding a 128px image (verified empirically), 96 is the ceiling
 ANI_SIZES_WIN = [96, 64, 48, 32]
@@ -124,6 +128,29 @@ def build_windows(dist):
     return out
 
 
+def build_original(dist):
+    """The authentic 2006 set, byte for byte at its native 32px - a reference
+    baseline next to the remaster (and a fallback to generate from). No Pin or
+    Person: those slots did not exist in the original."""
+    out = os.path.join(dist, "original", "Chrome Glass (2006)")
+    os.makedirs(out, exist_ok=True)
+    for name in H.STATIC:
+        hx, hy = H.hotspot(name)
+        frames = [{"img": H.original(name, 0), "hx": hx, "hy": hy}]
+        open(os.path.join(out, name + ".cur"), "wb").write(curlib.write_cur(frames))
+    for name in H.ANIM:
+        hx, hy = H.hotspot(name)
+        rates = list(H.BY_NAME[name]["rates"])
+        blobs = [curlib.write_cur([{"img": H.original(name, i), "hx": hx, "hy": hy}])
+                 for i in range(len(rates))]
+        uniform = len(set(rates)) == 1
+        ani = {"anih": _make_anih(len(rates), rates[0] if uniform else 1),
+               "rates": None if uniform else rates, "seqs": None}
+        open(os.path.join(out, name + ".ani"), "wb").write(
+            curlib.write_ani(ani, blobs, 0, 0))
+    return out
+
+
 def write_inf(out):
     strings = 'CUR_DIR      = "%s"\nSCHEME_NAME  = "%s"' % (THEME, THEME)
     slot_strings = "\n".join('%-12s = "%s"' % (role, fn) for role, fn in WIN_SLOTS)
@@ -197,7 +224,7 @@ def build_linux(dist):
                 for img, rate in zip(frames, rates):
                     imgs.append(_pack_ximage(size, img, hx, hy, _jiffies_ms(rate)))
         else:
-            for size in SIZES:
+            for size in LINUX_SIZES:
                 hx, hy = _scale_hot(role, size)
                 imgs.append(_pack_ximage(size, static_image(role, size), hx, hy, 0))
         data = _xcursor(imgs)
@@ -208,7 +235,7 @@ def build_linux(dist):
         aliases[names[0]] = names[1:]
     open(os.path.join(out, "index.theme"), "w", newline="\n").write(
         "[Icon Theme]\nName=%s\nComment=Chrome Glass remaster - original pixels, "
-        "crisp at 32-256px, 60 fps\nInherits=Adwaita\n" % THEME)
+        "crisp at 32-512px, 60 fps\nInherits=Adwaita\n" % THEME)
     open(os.path.join(out, "cursor.theme"), "w", newline="\n").write(
         "[Icon Theme]\nName=%s\nInherits=%s\n" % (THEME, THEME))
     return out, aliases
@@ -376,17 +403,22 @@ def build_preview():
     order = ["Arrow", "Hand", "Help", "IBeam", "Cross", "SizeAll", "SizeNS", "SizeWE",
              "SizeNWSE", "SizeNESW", "UpArrow", "Arrow_Down", "Pin", "Person",
              "Handwriting", "NO", "Wait", "AppStarting"]
-    cell, pad, cols = 96, 16, 6
+    cell, pad, cols, lab = 192, 22, 6, 26
     rows = (len(order) + cols - 1) // cols
-    sheet = Image.new("RGBA", (pad + cols * (cell + pad), pad + rows * (cell + pad + 14)), (255, 255, 255, 255))
+    # the cursors are pale translucent glass, invisible on white - use a dark
+    # sheet with a subtle checkerboard so every one of them reads. Render each
+    # at 192px (native from the 256 master) so nothing looks soft.
+    sheet = Image.new("RGBA", (pad + cols * (cell + pad), pad + rows * (cell + pad + lab)), (43, 45, 51, 255))
     d = ImageDraw.Draw(sheet)
+    f = _font(20)
     for i, name in enumerate(order):
         if name in ANIM:
             img = H.frame_image(name, 2, cell)
         else:
             img = static_image(name, cell)
-        r, c = divmod(i, cols); x = pad + c * (cell + pad); y = pad + r * (cell + pad + 14)
-        sheet.alpha_composite(_onbg(img), (x, y)); d.text((x, y + cell + 1), name, fill=(60, 60, 60))
+        r, c = divmod(i, cols); x = pad + c * (cell + pad); y = pad + r * (cell + pad + lab)
+        sheet.alpha_composite(_onbg(img, light=(84, 87, 96), dark=(66, 69, 77)), (x, y))
+        d.text((x + 2, y + cell + 3), name, fill=(198, 200, 206), font=f)
     sheet.convert("RGB").save(os.path.join(HERE, "preview.png"))
 
 
@@ -450,26 +482,28 @@ def _font(size):
 
 
 def build_comparison(assets):
-    """assets/comparison.png: what a 4K/HiDPI screen actually shows -
-    the 2006 bitmap stretched by the OS vs the remaster's native detail."""
-    cell, pad, top = 256, 28, 64
+    """assets/comparison.png: what a 4K/HiDPI screen actually shows - the 2006
+    bitmap stretched by the OS vs the remaster's native detail. Dark sheet so
+    the pale translucent glass reads."""
+    cell, pad, top = 512, 32, 84
     pairs = [("Arrow", 0), ("UpArrow", 0), ("Wait", 2)]
     W = pad + len(pairs) * 2 * (cell + pad) + pad
-    sheet = Image.new("RGBA", (W, top + cell + pad + 12), (250, 250, 252, 255))
+    sheet = Image.new("RGBA", (W, top + cell + pad + 18), (43, 45, 51, 255))
     d = ImageDraw.Draw(sheet)
-    f_big, f_small = _font(26), _font(19)
-    d.text((pad, 14), "On a HiDPI / 4K display (large pointer size):",
-           fill=(20, 20, 24), font=f_big)
+    f_big, f_small = _font(32), _font(22)
+    d.text((pad, 24), "Same cursor on a HiDPI / 4K display (large pointer size):",
+           fill=(228, 230, 236), font=f_big)
+    onbg = lambda im: _onbg(im, light=(84, 87, 96), dark=(66, 69, 77))
     for i, (name, idx) in enumerate(pairs):
         x0 = pad + i * 2 * (cell + pad)
-        orig = H.frame_image(name, idx, 32).resize((cell, cell), Image.NEAREST)
-        new = H.frame_image(name, idx, 256)
-        sheet.alpha_composite(_onbg(orig), (x0, top))
-        sheet.alpha_composite(_onbg(new), (x0 + cell + pad, top))
-        d.text((x0 + 4, top + cell + 4), "2006: 32 px stretched",
-               fill=(150, 40, 40), font=f_small)
-        d.text((x0 + cell + pad + 4, top + cell + 4), "Remastered: native 256 px",
-               fill=(30, 110, 50), font=f_small)
+        orig = H.original(name, idx).resize((cell, cell), Image.NEAREST)
+        new = H.frame_image(name, idx, 512)
+        sheet.alpha_composite(onbg(orig), (x0, top))
+        sheet.alpha_composite(onbg(new), (x0 + cell + pad, top))
+        d.text((x0 + 4, top + cell + 8), "Original 2006: 32 px stretched",
+               fill=(232, 150, 150), font=f_small)
+        d.text((x0 + cell + pad + 4, top + cell + 8), "Remastered: native 512 px",
+               fill=(150, 224, 165), font=f_small)
     sheet.convert("RGB").save(os.path.join(assets, "comparison.png"))
 
 
@@ -503,7 +537,7 @@ def check_metrics():
     for name in H.STATIC + ANIM:
         n = len(H.BY_NAME[name]["frames"])
         for idx in range(n):
-            o = H.frame_image(name, idx, 32)
+            o = H.original(name, idx)
             h = H.frame_image(name, idx, 128)
             da = (_med_alpha(h) - _med_alpha(o)) / max(_med_alpha(o), 1e-6) * 100
             so, sh = _sat(o), _sat(h)
@@ -553,6 +587,7 @@ def main():
     if os.path.exists(dist): shutil.rmtree(dist)
     win = build_windows(dist)
     check_inf(win)
+    orig_theme = build_original(dist)
     lin, aliases = build_linux(dist)
     packages = os.path.join(HERE, "packages")
     if os.path.exists(packages): shutil.rmtree(packages)
@@ -564,6 +599,7 @@ def main():
     build_comparison(assets)
     print("macOS   :", os.path.relpath(cape, HERE))
     print("Windows :", os.path.relpath(win, HERE), "-", len(os.listdir(win)), "files")
+    print("Original:", os.path.relpath(orig_theme, HERE), "-", len(os.listdir(orig_theme)), "files (2006, 32px)")
     print("Linux   :", os.path.relpath(lin, HERE), "-", len(os.listdir(os.path.join(lin, "cursors"))), "cursor files")
     print("Debian  :", os.path.relpath(deb, HERE))
     print("Zips    :", os.path.relpath(zpath, HERE), "+", os.path.relpath(tpath, HERE))

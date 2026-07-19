@@ -108,10 +108,12 @@ def _reinhard(rgb, a, ref_rgb, ref_a):
     return np.clip((rgb - mu) / sd * rsd + rmu, 0, 255)
 
 
-def _unsharp(rgb):
-    """Light sharpening of the colour channels only - alpha stays native."""
+def _unsharp(rgb, radius=1.6, percent=55):
+    """Light sharpening of the colour channels only - alpha stays native.
+    radius scales with the working resolution so a 512px frame gets the same
+    perceptual crispness a 128px frame gets at radius 1.6."""
     im = Image.fromarray(rgb.astype(np.uint8), "RGB")
-    im = im.filter(ImageFilter.UnsharpMask(radius=1.6, percent=55, threshold=2))
+    im = im.filter(ImageFilter.UnsharpMask(radius=radius, percent=percent, threshold=2))
     return np.asarray(im, dtype=np.float64)
 
 
@@ -169,21 +171,52 @@ def _compose(rgb, alpha):
 
 
 @functools.lru_cache(maxsize=None)
-def frame_image(name, idx, size):
-    """Final RGBA frame at any size. 32px is the original, byte for byte."""
+def _master(name, idx):
+    """Native 256px colour master -> rgb HxWx3 float. This anchors the whole
+    set at 256px instead of 128: 128/96/64/48 are supersampled down from it,
+    384/512 up from it.
+
+    For coloured cursors the committed Real-ESRGAN pass (src/ai256,
+    tools/upscale256.py) supplies native 256px detail, with its saturation
+    pulled back to the original's (Real-ESRGAN oversaturates). Pale/near-grey
+    glass keeps the honest Lanczos of the 128 base - the AI invents colour
+    noise there, exactly what the 128 pipeline already rejects."""
     key = _key(name, idx)
-    if size == 32:
-        return Image.open(os.path.join(ORIG, key + ".png")).convert("RGBA")
+    orig = _orig(key)
+    orig_sat = _mean_sat(orig[..., :3], orig[..., 3])
     rgb128, a128 = _base128(name, idx)
-    if size == 128:
-        return _compose(rgb128, a128)
     ai256 = os.path.join(HERE, "src", "ai256", key + ".png")
-    if size == 256 and os.path.exists(ai256):
-        # committed Real-ESRGAN pass over the processed 128 (tools/upscale256.py)
-        rgb = np.asarray(Image.open(ai256).convert("RGB"), dtype=np.float64)
+    if name in PALE or orig_sat < 0.05 or not os.path.exists(ai256):
+        rgb, _ = _resize(np.dstack([rgb128, a128]), 256)
+        return rgb
+    rgb = np.asarray(Image.open(ai256).convert("RGB"), dtype=np.float64)
+    _, up_a = _resize(orig, 256)
+    alpha = _mask(name, idx, 256) / 255.0 * up_a
+    return _sat_match(rgb, alpha, orig_sat * 1.05)
+
+
+def original(name, idx):
+    """The author's original 32px frame, byte for byte - the reference the
+    superiority metrics and the 2006-vs-remaster comparison are measured against."""
+    return Image.open(os.path.join(ORIG, _key(name, idx) + ".png")).convert("RGBA")
+
+
+@functools.lru_cache(maxsize=None)
+def frame_image(name, idx, size):
+    """Final RGBA frame at any size. Every size, 32px included, draws its colour
+    from the 256px master (_master) inside a vector-crisp silhouette."""
+    key = _key(name, idx)
+    m_rgb = _master(name, idx)
+    _, m_a = _resize(_orig(key), 256)
+    if size == 256:
+        rgb = m_rgb
     else:
-        scaled = np.dstack([rgb128, a128])
-        rgb, _ = _resize(scaled, size)
+        rgb, _ = _resize(np.dstack([m_rgb, m_a]), size)
+        if size > 256:
+            # upscaling past the master softens it; restore crispness at a
+            # radius proportional to the new resolution (gentle percent to
+            # avoid ringing on glass edges)
+            rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
     _, up_a = _resize(_orig(key), size)
     alpha = _mask(name, idx, size) / 255.0 * up_a
     return _compose(rgb, alpha)

@@ -98,8 +98,15 @@ def _resize_linear(img, size):
     return Image.fromarray(_np.dstack([rgb_u8, a_u8]), "RGBA")
 
 
-def render(primitives, size=256, ss=6):
-    """Render primitives to an RGBA image of (size x size) pixels."""
+def render(primitives, size=256, ss=None):
+    """Render primitives to an RGBA image of (size x size) pixels.
+
+    ss is the supersampling factor. When left at None it adapts so the internal
+    canvas never drops below ~1536px: small sizes get the same crisp diagonal
+    edge as the large ones (32px went to a 192px canvas at the old fixed ss=6),
+    while 256px and above stay at 6x."""
+    if ss is None:
+        ss = max(6, -(-1536 // size))       # ceil(1536 / size), floor 6
     S = size * ss
     scale = S / LOGICAL
     out = Image.new("RGBA", (S, S), (0, 0, 0, 0))

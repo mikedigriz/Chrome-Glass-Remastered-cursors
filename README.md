@@ -15,16 +15,18 @@
 
 </div>
 
-In 2006 a cursor set called "Chrome Glass" appeared on DeviantArt - translucent, shimmering, alive. On modern screens its 32-pixel art turned into blurry blobs, so I brought it back to life. **This is the exact same set, not a lookalike**: the original ships byte for byte, and everything around it is rebuilt for today's resolutions.
+In 2006 a cursor set called "Chrome Glass" appeared on DeviantArt - translucent, shimmering, alive. On modern screens its 32-pixel art turned into blurry blobs, so I brought it back to life. **This is the exact same set, not a lookalike**: the authentic 2006 art is included untouched as its own ready-to-install *Chrome Glass (2006)* theme, and the remaster rebuilds every cursor from it - crisp from 32 all the way to 512 px.
 
 ![original vs remastered on HiDPI](assets/comparison.png)
 
 | | Chrome Glass (2006) | Chrome Glass Remastered |
 |---|---|---|
-| Resolution | 32 px | **32-256 px**, vector edges with no bitmap blur |
+| Resolution | 32 px | **up to 256 px** (Windows) / **512 px** (Linux), vector edges with no bitmap blur |
 | Animation | 9 frames at ~20 fps | **27 frames at 60 fps**, original rhythm preserved |
 | Cursor roles | 15 Windows slots | plus **Pin** and **Person** in the set's own style |
 | Platforms | Windows | Windows, Linux (Xcursor, deb, PKGBUILD), macOS (Mousecape) |
+
+The untouched 2006 set is built alongside the remaster (`dist/original/`), so the reference is always one build away.
 
 ## Install
 
@@ -73,7 +75,7 @@ The cape replaces the core cursors (arrow, text, crosshair, hand, move, wait); t
 
 ## How it works
 
-Every cursor is a hybrid of three sources: the original 32 px frames (`src/orig/`) provide the authentic glass translucency, the 128 px AI upscale (`src/ai/`) keeps the inner sheen (a Reinhard colour transfer restores the washed-out saturation), and vector-traced silhouettes (`traced.json`) give a crisp edge at every size. The 256 px layer gets an extra Real-ESRGAN pass (`src/ai256/`); the results are committed, so the build doesn't need torch.
+Every cursor is a hybrid of three sources: the original 32 px frames (`src/orig/`) provide the authentic glass translucency, an AI upscale keeps the inner sheen (a Reinhard colour transfer restores the washed-out saturation), and vector-traced silhouettes (`traced.json`) give a crisp edge at every size. A committed native 256 px Real-ESRGAN master (`src/ai256/`, static and animated) is the colour source for the whole set - every size, 32 px included, is supersampled down from it or sharpened up from it, so nothing is anchored at a soft 128 px any more. The masters are committed, so the build doesn't need torch. Pale near-grey cursors (IBeam, Cross, the resize arrows) deliberately skip the AI, which invents cross-hatch noise on transparent glass.
 
 ## Build from source
 
