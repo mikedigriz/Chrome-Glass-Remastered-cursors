@@ -172,27 +172,34 @@ def _compose(rgb, alpha):
 
 @functools.lru_cache(maxsize=None)
 def _master(name, idx):
-    """Native 256px colour master -> rgb HxWx3 float. This anchors the whole
-    set at 256px instead of 128: 128/96/64/48 are supersampled down from it,
-    384/512 up from it.
+    """Colour master -> (rgb HxWx3 float, anchor px). Anchors the whole set as
+    high as real detail exists: native src/ai512 when present, else src/ai256,
+    else Lanczos of the 128 base. Sizes below the anchor supersample down from
+    it, sizes above are upscaled and re-sharpened.
 
-    For coloured cursors the committed Real-ESRGAN pass (src/ai256,
-    tools/upscale256.py) supplies native 256px detail, with its saturation
-    pulled back to the original's (Real-ESRGAN oversaturates). Pale/near-grey
-    glass keeps the honest Lanczos of the 128 base - the AI invents colour
-    noise there, exactly what the 128 pipeline already rejects."""
+    For coloured cursors the committed Real-ESRGAN pass (src/ai512 x4 native,
+    tools/upscale512.py - or the 256 fallback) supplies real network detail,
+    with its saturation pulled back to the original's (Real-ESRGAN
+    oversaturates). Pale/near-grey glass keeps the honest Lanczos of the 128
+    base - the AI invents colour noise there, exactly what the 128 pipeline
+    already rejects - so a 256 anchor is enough (its detail ceiling is the 128
+    base regardless)."""
     key = _key(name, idx)
     orig = _orig(key)
     orig_sat = _mean_sat(orig[..., :3], orig[..., 3])
     rgb128, a128 = _base128(name, idx)
-    ai256 = os.path.join(HERE, "src", "ai256", key + ".png")
-    if name in PALE or orig_sat < 0.05 or not os.path.exists(ai256):
+    if name in PALE or orig_sat < 0.05:
         rgb, _ = _resize(np.dstack([rgb128, a128]), 256)
-        return rgb
-    rgb = np.asarray(Image.open(ai256).convert("RGB"), dtype=np.float64)
-    _, up_a = _resize(orig, 256)
-    alpha = _mask(name, idx, 256) / 255.0 * up_a
-    return _sat_match(rgb, alpha, orig_sat * 1.05)
+        return rgb, 256
+    for anchor in (512, 256):
+        path = os.path.join(HERE, "src", f"ai{anchor}", key + ".png")
+        if os.path.exists(path):
+            rgb = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64)
+            _, up_a = _resize(orig, anchor)
+            alpha = _mask(name, idx, anchor) / 255.0 * up_a
+            return _sat_match(rgb, alpha, orig_sat * 1.05), anchor
+    rgb, _ = _resize(np.dstack([rgb128, a128]), 256)
+    return rgb, 256
 
 
 def original(name, idx):
@@ -204,19 +211,21 @@ def original(name, idx):
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
-    from the 256px master (_master) inside a vector-crisp silhouette."""
+    from the AI master (_master, up to native 512px) inside a vector-crisp
+    silhouette."""
     key = _key(name, idx)
-    m_rgb = _master(name, idx)
-    _, m_a = _resize(_orig(key), 256)
-    if size == 256:
+    m_rgb, anchor = _master(name, idx)
+    _, m_a = _resize(_orig(key), anchor)
+    if size == anchor:
         rgb = m_rgb
     else:
         rgb, _ = _resize(np.dstack([m_rgb, m_a]), size)
-        if size > 256:
-            # upscaling past the master softens it; restore crispness at a
-            # radius proportional to the new resolution (gentle percent to
-            # avoid ringing on glass edges)
-            rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
+    if size > 256:
+        # past the 256 detail band glass reads soft; restore crispness at a
+        # radius proportional to the resolution (gentle percent to avoid
+        # ringing on glass edges). Applies to native 512 too, so its own size
+        # is no softer than an upscale would have been.
+        rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
     _, up_a = _resize(_orig(key), size)
     alpha = _mask(name, idx, size) / 255.0 * up_a
     return _compose(rgb, alpha)
