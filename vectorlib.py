@@ -22,6 +22,21 @@ except ImportError:
 
 LOGICAL = 32
 
+_SRGB_THRESH = 0.0031308
+
+
+def srgb_to_linear(u8):
+    """uint8 sRGB array -> float32 linear-light array, 0..1 range."""
+    c = u8.astype(_np.float32) / 255.0
+    return _np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(lin):
+    """float linear-light array (0..1) -> uint8 sRGB array."""
+    c = _np.clip(lin, 0.0, 1.0)
+    c = _np.where(c <= _SRGB_THRESH, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+    return _np.clip(_np.round(c * 255.0), 0, 255).astype(_np.uint8)
+
 
 def _grad_image(size, c1, c2, vec):
     """Linear gradient RGBA image of given pixel size; vec in pixel coords."""
@@ -47,6 +62,40 @@ def _grad_image(size, c1, c2, vec):
 
 def _poly_px(points, scale):
     return [(x * scale, y * scale) for x, y in points]
+
+
+def _composite_linear(base, layer):
+    """Alpha-composite layer over base in linear light instead of sRGB-encoded
+    space - blending translucent edges in gamma space makes them read dark/
+    soft/faceted instead of a true anti-aliased line."""
+    b = _np.asarray(base, dtype=_np.float32)
+    l = _np.asarray(layer, dtype=_np.float32)
+    ba, la = b[..., 3:4] / 255.0, l[..., 3:4] / 255.0
+    brgb = srgb_to_linear(b[..., :3].astype(_np.uint8))
+    lrgb = srgb_to_linear(l[..., :3].astype(_np.uint8))
+    out_a = la + ba * (1.0 - la)
+    out_rgb = (lrgb * la + brgb * ba * (1.0 - la)) / _np.maximum(out_a, 1e-6)
+    rgb_u8 = linear_to_srgb(out_rgb)
+    a_u8 = _np.clip(_np.round(out_a * 255.0), 0, 255).astype(_np.uint8)
+    return Image.fromarray(_np.dstack([rgb_u8, a_u8]), "RGBA")
+
+
+def _resize_linear(img, size):
+    """Downsample premultiplied linear-light RGBA with Lanczos, then encode
+    back to sRGB - keeps edge pixels gamma-correct instead of gamma-averaged."""
+    arr = _np.asarray(img, dtype=_np.float32)
+    a = arr[..., 3] / 255.0
+    rgb_lin = srgb_to_linear(arr[..., :3].astype(_np.uint8))
+    premult = rgb_lin * a[..., None]
+    chans = [_np.asarray(Image.fromarray(premult[..., c], mode="F")
+                          .resize((size, size), Image.LANCZOS), dtype=_np.float32)
+              for c in range(3)]
+    a_r = _np.asarray(Image.fromarray(a, mode="F")
+                       .resize((size, size), Image.LANCZOS), dtype=_np.float32)
+    rgb_r = _np.dstack(chans) / _np.maximum(a_r[..., None], 1e-6)
+    rgb_u8 = linear_to_srgb(rgb_r)
+    a_u8 = _np.clip(_np.round(a_r * 255.0), 0, 255).astype(_np.uint8)
+    return Image.fromarray(_np.dstack([rgb_u8, a_u8]), "RGBA")
 
 
 def render(primitives, size=256, ss=6):
@@ -94,5 +143,5 @@ def render(primitives, size=256, ss=6):
         if p.get("opacity", 1) < 1:
             alpha = layer.split()[3].point(lambda a: round(a * p["opacity"]))
             layer.putalpha(alpha)
-        out = Image.alpha_composite(out, layer)
-    return out.resize((size, size), Image.LANCZOS)
+        out = _composite_linear(out, layer)
+    return _resize_linear(out, size)

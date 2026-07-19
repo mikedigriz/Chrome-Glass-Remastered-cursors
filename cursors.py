@@ -14,19 +14,30 @@ SMOOTH_KEEP_DEG = 55     # corners turning more than this stay sharp when smooth
 
 def smooth(poly, iters=2):
     """Laplacian smoothing that keeps genuinely sharp corners (arrow tips)
-    while melting the staircase left by polygon tracing."""
+    while melting the staircase left by polygon tracing.
+
+    Points traced with a corner flag (x, y, is_corner) trust that flag - it
+    was computed from the dense pre-simplification boundary chain, which is
+    far less noise-prone than a single 3-point angle on an already-simplified
+    polygon. Legacy 2-tuples (e.g. HELP_EXTRA's hand-authored polyline) fall
+    back to the old local-angle threshold test."""
     if len(poly) < 5:
-        return poly
-    pts = list(poly)
+        return [(p[0], p[1]) for p in poly]
+    flagged = [len(p) > 2 for p in poly]
+    pts = [(p[0], p[1]) for p in poly]
     for _ in range(iters):
         n = len(pts)
         out = []
         for i in range(n):
             p0, p, p1 = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
-            a1 = math.atan2(p[1] - p0[1], p[0] - p0[0])
-            a2 = math.atan2(p1[1] - p[1], p1[0] - p[0])
-            turn = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
-            if turn > math.radians(SMOOTH_KEEP_DEG):
+            if flagged[i]:
+                is_corner = poly[i][2]
+            else:
+                a1 = math.atan2(p[1] - p0[1], p[0] - p0[0])
+                a2 = math.atan2(p1[1] - p[1], p1[0] - p[0])
+                turn = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
+                is_corner = turn > math.radians(SMOOTH_KEEP_DEG)
+            if is_corner:
                 out.append(p)                      # real corner - keep it crisp
             else:
                 out.append((0.5 * p[0] + 0.25 * p0[0] + 0.25 * p1[0],

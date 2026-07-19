@@ -68,14 +68,19 @@ def _ai(key):
 
 
 def _resize(arr, size):
-    """Premultiplied Lanczos resize of an RGBA float array -> (rgb, a)."""
-    a = arr[..., 3:4]
-    pre = np.dstack([arr[..., :3] * a / 255.0, a])
-    im = Image.fromarray(np.clip(pre, 0, 255).astype(np.uint8), "RGBA")
-    out = np.asarray(im.resize((size, size), Image.LANCZOS), dtype=np.float64)
-    oa = out[..., 3]
-    rgb = out[..., :3] / np.maximum(oa, 1e-6)[..., None] * 255.0
-    return np.clip(rgb, 0, 255), oa
+    """Premultiplied Lanczos resize of an RGBA float array -> (rgb, a), done
+    in linear light so translucent edges don't come out dark/soft."""
+    a = arr[..., 3] / 255.0
+    rgb_lin = V.srgb_to_linear(np.clip(arr[..., :3], 0, 255).astype(np.uint8))
+    premult = rgb_lin * a[..., None]
+    chans = [np.asarray(Image.fromarray(premult[..., c].astype(np.float32), mode="F")
+                         .resize((size, size), Image.LANCZOS), dtype=np.float64)
+              for c in range(3)]
+    oa = np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
+                     .resize((size, size), Image.LANCZOS), dtype=np.float64)
+    rgb_lin_out = np.dstack(chans) / np.maximum(oa, 1e-6)[..., None]
+    rgb = V.linear_to_srgb(rgb_lin_out).astype(np.float64)
+    return rgb, np.clip(oa, 0, 1) * 255.0
 
 
 @functools.lru_cache(maxsize=None)
@@ -185,15 +190,20 @@ def frame_image(name, idx, size):
 
 
 def _lerp(im_a, im_b, t):
-    """Cross-fade in premultiplied space - no dark fringes."""
+    """Cross-fade in premultiplied linear-light space - no dark fringes and no
+    gamma-space midpoint dimming."""
     a = np.asarray(im_a, dtype=np.float64)
     b = np.asarray(im_b, dtype=np.float64)
-    pa = np.dstack([a[..., :3] * a[..., 3:4] / 255.0, a[..., 3:4]])
-    pb = np.dstack([b[..., :3] * b[..., 3:4] / 255.0, b[..., 3:4]])
+    aa, ba = a[..., 3:4] / 255.0, b[..., 3:4] / 255.0
+    a_lin = V.srgb_to_linear(np.clip(a[..., :3], 0, 255).astype(np.uint8))
+    b_lin = V.srgb_to_linear(np.clip(b[..., :3], 0, 255).astype(np.uint8))
+    pa = np.dstack([a_lin * aa, aa[..., 0]])
+    pb = np.dstack([b_lin * ba, ba[..., 0]])
     m = pa + (pb - pa) * t
     al = m[..., 3]
-    rgb = m[..., :3] / np.maximum(al, 1e-6)[..., None] * 255.0
-    return _compose(rgb, al)
+    rgb_lin = m[..., :3] / np.maximum(al, 1e-6)[..., None]
+    rgb = V.linear_to_srgb(rgb_lin).astype(np.float64)
+    return _compose(rgb, al * 255.0)
 
 
 def anim_frames(name, size):

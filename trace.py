@@ -5,7 +5,7 @@ Outputs, per cursor frame: a simplified polygon (32-logical coords), a fitted
 linear RGBA gradient, and a highlight polygon derived from the residual bright
 region. Used by cursors.py at build time (results are cached to traced.json).
 """
-import json, os, sys
+import json, math, os, sys
 import numpy as np
 from PIL import Image
 
@@ -56,6 +56,104 @@ def simplify(points, eps):
     return [points[0], points[-1]]
 
 
+CORNER_WINDOW = 6        # raw boundary pixels on each side of a point
+CORNER_KEEP_DEG = 55     # windowed turn angle above this = genuine corner
+
+
+def corner_curvature(raw_chain):
+    """Windowed turning-angle curvature over the dense (pre-simplify) boundary
+    chain. A single-pixel-jitter-resistant alternative to a 3-point angle:
+    for each point, fit the average direction of the CORNER_WINDOW points
+    before it and after it, and measure the turn between those two directions."""
+    n = len(raw_chain)
+    if n < 2 * CORNER_WINDOW + 1:
+        return [False] * n
+    flags = []
+    for i in range(n):
+        p = raw_chain[i]
+        before = raw_chain[(i - CORNER_WINDOW) % n]
+        after = raw_chain[(i + CORNER_WINDOW) % n]
+        a1 = math.atan2(p[1] - before[1], p[0] - before[0])
+        a2 = math.atan2(after[1] - p[1], after[0] - p[0])
+        turn = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
+        flags.append(turn > math.radians(CORNER_KEEP_DEG))
+    return flags
+
+
+def nearest_raw_flag(pt, raw_chain, raw_flags):
+    """Is the raw boundary point closest to pt (a simplified/logical-scale
+    vertex) flagged as a genuine corner?"""
+    bx, by = pt[0] * 4.0, pt[1] * 4.0
+    best_i, best_d = 0, float("inf")
+    for i, (x, y) in enumerate(raw_chain):
+        d = (x - bx) ** 2 + (y - by) ** 2
+        if d < best_d:
+            best_d, best_i = d, i
+    return raw_flags[best_i]
+
+
+def merge_corner_clusters(poly, flags):
+    """A genuine tip is ONE vertex, but curvature detection can flag 2-3
+    consecutive simplified vertices near an apex as corners (each sees a
+    sharp turn within its window) - smooth() then leaves all of them crisp,
+    which draws a tiny flat facet across the run instead of a point. Collapse
+    each run of consecutive corner flags down to its single most extreme
+    vertex (the one farthest from the chord joining its non-corner
+    neighbours), so the tip stays one true point."""
+    n = len(poly)
+    if n < 3 or not any(flags):
+        return poly, flags
+    if all(flags):
+        # every vertex flagged (degenerate) - nothing to anchor a run to
+        return poly, flags
+    # start scanning from a non-corner vertex so a run that wraps around the
+    # array boundary (e.g. the tail corner sitting at index 0/n-1) is walked
+    # as a single contiguous run instead of being split by the array seam
+    start = next(k for k in range(n) if not flags[k])
+    order = [(start + k) % n for k in range(n)]
+    runs = []
+    i = 0
+    visited = [False] * n
+    while i < n:
+        idx = order[i]
+        if flags[idx] and not visited[idx]:
+            run = [idx]
+            visited[idx] = True
+            jj = i + 1
+            while jj < n and flags[order[jj]] and not visited[order[jj]]:
+                run.append(order[jj])
+                visited[order[jj]] = True
+                jj += 1
+            runs.append(run)
+            i = jj
+        else:
+            i += 1
+    if all(len(r) <= 1 for r in runs):
+        return poly, flags
+    drop = set()
+    replace = {}
+    for run in runs:
+        if len(run) <= 1:
+            continue
+        before = poly[(run[0] - 1) % n]
+        after = poly[(run[-1] + 1) % n]
+        dx, dy = after[0] - before[0], after[1] - before[1]
+        norm = (dx * dx + dy * dy) ** 0.5 or 1e-9
+        best_idx, best_dist = run[0], -1.0
+        for idx in run:
+            x, y = poly[idx]
+            dist = abs((y - before[1]) * dx - (x - before[0]) * dy) / norm
+            if dist > best_dist:
+                best_dist, best_idx = dist, idx
+        for idx in run:
+            if idx != best_idx:
+                drop.add(idx)
+        replace[best_idx] = True
+    out_poly = [p for i, p in enumerate(poly) if i not in drop]
+    out_flags = [replace.get(i, flags[i]) for i in range(n) if i not in drop]
+    return out_poly, out_flags
+
+
 def _components(mask, min_px=60):
     """Label 4-connected components, return list of sub-masks, largest first."""
     lab = np.zeros(mask.shape, dtype=np.int32)
@@ -82,7 +180,7 @@ def _components(mask, min_px=60):
     return out
 
 
-def trace_frame(key, thresh=60, eps=1.3):
+def trace_frame(key, thresh=60, eps=0.7):
     """key like 'cur__Arrow__0' -> dict with polys / gradient / highlight."""
     im = Image.open(os.path.join(SRC, key + ".png")).convert("RGBA")
     arr = np.array(im, dtype=np.float64)
@@ -93,14 +191,21 @@ def trace_frame(key, thresh=60, eps=1.3):
     mask = a > thresh
 
     polys = []
+    corner_flags = []
     for comp in _components(mask, min_px=25):
         chain = boundary_chain(comp)
+        # corner classification on the dense raw chain, before any
+        # simplification collapses a genuine tip into a misleading angle
+        raw_flags = corner_curvature(chain)
         poly = [(x / 4.0, y / 4.0) for x, y in chain]      # 128 -> 32 logical
         poly = simplify(poly, eps / 4.0)
         if len(poly) > 2 and poly[0] == poly[-1]:
             poly = poly[:-1]
         if len(poly) >= 3:
+            flags = [nearest_raw_flag(p, chain, raw_flags) for p in poly]
+            poly, flags = merge_corner_clusters(poly, flags)
             polys.append(poly)
+            corner_flags.append(flags)
 
     # gradient: least-squares for the DIRECTION, percentile colours for the
     # ENDPOINTS (linear endpoints average away the glass saturation)
@@ -146,7 +251,8 @@ def trace_frame(key, thresh=60, eps=1.3):
                 hl = [[round(x, 2), round(y, 2)] for x, y in hp]
 
     return {
-        "polys": [[[round(x, 2), round(y, 2)] for x, y in poly] for poly in polys],
+        "polys": [[[round(x, 2), round(y, 2), bool(c)] for (x, y), c in zip(poly, flags)]
+                  for poly, flags in zip(polys, corner_flags)],
         "grad": [col_p0, col_p1,
                  [round(p0[0], 2), round(p0[1], 2), round(p1[0], 2), round(p1[1], 2)]],
         "highlight": hl,
