@@ -55,6 +55,8 @@ plasma-apply-cursortheme "Chrome Glass Remastered"                              
 
 Or pick it in GNOME Tweaks / KDE System Settings. On bare X11/Wayland compositors set `XCURSOR_THEME="Chrome Glass Remastered"`.
 
+> **Cursor not changing?** If your file manager's archive tool extracts into an extra wrapper folder (some do when you right-click -> "Extract to..."), make sure the actual theme folder ends up directly at `~/.icons/Chrome Glass Remastered/` or `~/.local/share/icons/Chrome Glass Remastered/`, not nested one level deeper. After switching the theme, GNOME on X11 needs a Shell restart to pick it up (`killall -3 gnome-shell`); on Wayland or KDE, log out and back in.
+
 ### 🍎 macOS
 
 Cursor themes on macOS are applied by the free [Mousecape](https://github.com/alexzielenski/Mousecape):

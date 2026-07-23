@@ -55,6 +55,8 @@ plasma-apply-cursortheme "Chrome Glass Remastered"                              
 
 Или выберите её в GNOME Tweaks / Параметрах KDE. На голых X11/Wayland-композиторах пропишите `XCURSOR_THEME="Chrome Glass Remastered"`.
 
+> **Курсор не меняется?** Если архиватор в файловом менеджере распаковывает архив в лишнюю обёрточную папку (так бывает при «Извлечь в папку...»), проверьте, что сама папка темы лежит прямо в `~/.icons/Chrome Glass Remastered/` или `~/.local/share/icons/Chrome Glass Remastered/`, а не на уровень глубже. После переключения темы GNOME на X11 нужно перезапустить Shell (`killall -3 gnome-shell`); на Wayland или в KDE - выйти из сессии и зайти снова.
+
 ### 🍎 macOS
 
 Темы курсоров в macOS применяет бесплатный [Mousecape](https://github.com/alexzielenski/Mousecape):
