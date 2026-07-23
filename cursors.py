@@ -46,15 +46,17 @@ def smooth(poly, iters=2):
     return pts
 
 
-# the "?" of Help is two things the polygon tracer drops: the thin curl stroke,
-# and the dot beneath it - a separate 10-pixel island the original draws outside
-# the arrow silhouette (centre (19,26.2) in the 2006 frame, x=18..20 y=25..28).
-# trace.py keeps only the arrow body, so both are hand-authored here. The dot must
-# sit at its real island coordinates - placed inside the arrow it renders invisible,
-# since the mask there is already opaque from the arrow polygon.
+# the "?" dot of Help is a separate 10-pixel island the original draws outside
+# the arrow silhouette (centre (19,26.2) in the 2006 frame, x=18..20 y=25..28);
+# trace.py keeps only the arrow body and drops it, so it is hand-authored here.
+# It must sit at its real island coordinates - placed inside the arrow it renders
+# invisible, since the mask there is already opaque from the arrow polygon.
+#
+# The curl itself is NOT hand-drawn: it used to be a stroked polyline here, but
+# that line sat above and right of the real curl (its top ran through y=7..8
+# where the 2006 frame is empty), so once the AI alpha master made the glass
+# crisp it read as a second, ghost "?" over the true one. The AI alpha now holds
+# the real curl on its own, so the line is gone and the ghost with it.
 HELP_EXTRA = [
-    {"line": [(20.2, 9.2), (20.6, 7.9), (21.9, 7.3), (23.3, 7.6), (23.9, 8.9),
-              (23.4, 10.2), (22.3, 11.0), (22.1, 12.3)],
-     "stroke": ((255, 255, 255, 255), 1.35)},
     {"dot": (19.0, 26.2, 1.1), "fill": (255, 255, 255, 255)},
 ]

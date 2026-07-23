@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Reproducible builder for the Chrome Glass Remastered cursor theme (hybrid edition).
 
-Frames come from hybrid.py: the original Chrome Glass pixels (32px verbatim,
-AI-restored colour at 128px) inside vector-crisp traced silhouettes, packaged
+Frames come from hybrid.py: an illustration-tuned Real-ESRGAN colour master
+(anime_6B, native up to 512px) inside vector-crisp traced silhouettes, packaged
 for:
   * Windows - multi-size .cur (32-256px) + 60 fps .ani + Install.inf
               (17 scheme slots incl. the Windows 10/11 Pin and Person)
@@ -15,6 +15,7 @@ Every build prints superiority metrics against the original frames and warns
 when anything drifts out of tolerance.
 """
 import os, io, struct, gzip, tarfile, hashlib, time, shutil, sys, zipfile
+import concurrent.futures as cf
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -33,7 +34,11 @@ SIZES = [32, 48, 64, 96, 128, 256]      # static .cur sizes (256 is the .cur cei
 # classic .cur format cannot express (its ICONDIRENTRY width/height is a single
 # byte, 256 encoded as 0 - 384/512 are simply not representable there).
 LINUX_SIZES = SIZES + [384, 512]        # static Xcursor sizes
-ANI_SIZES = [32, 48, 64, 96, 128, 256]  # animated Xcursor sizes
+# animated Xcursor sizes: up to 384 for HiDPI (4K + large pointer). 512 is left
+# to the static cursors - a 27-frame animation at native 512 is ~1 MB/frame of
+# raw ARGB and roughly tripled the installed theme for the rarest case (an
+# animated cursor at 8K + max pointer).
+ANI_SIZES = [32, 48, 64, 96, 128, 256, 384]
 # sizes inside each .ani frame, largest first; Windows refuses animated
 # frames holding a 128px image (verified empirically), 96 is the ceiling
 ANI_SIZES_WIN = [96, 64, 48, 32]
@@ -87,6 +92,68 @@ def hotspot(name):
 
 def static_image(name, size):
     return G.frame(name, size) if is_glyph(name) else H.frame_image(name, 0, size)
+
+
+# ----------------------------------------------------------------------------- parallel warm-up
+# Every frame the build emits comes from H.frame_image, which is pure and
+# lru-cached but single-threaded - and a native 512px vector-mask render is the
+# expensive part (~seconds each). One machine core did all of it. This renders
+# every frame the build will ask for across all CPU cores up front, then feeds
+# the results back into H.frame_image's cache, so the sequential build code
+# below just reads warm values. Torch/GPU do not enter here: the cost is polygon
+# rasterisation and numpy, not tensor math, so cores are the lever.
+#
+# The unit of work is one (name, idx) frame rendered at ALL sizes, not one
+# (name, idx, size). Within a frame the sizes share the expensive _master and
+# _base128 (an AI-colour + Reinhard pass, seconds each) through hybrid's own
+# lru_cache; splitting sizes across workers instead threw that sharing away and
+# ran slower than single-core. Keeping a whole frame on one worker preserves it.
+_WARM_SIZES = ()
+
+def _init_worker(sizes):
+    global _WARM_SIZES                                  # spawned workers re-import
+    _WARM_SIZES = sizes                                 # this module, so seed it here
+
+
+def _gen_frame(job):
+    name, idx = job
+    return [((name, idx, s), H.frame_image(name, idx, s)) for s in _WARM_SIZES]
+
+
+def _warm_frames():
+    sizes = tuple(sorted(set(LINUX_SIZES) | set(ANI_SIZES) | set(ANI_SIZES_WIN)
+                         | {ANI_SIZE, 512}, reverse=True))
+    jobs = [(name, 0) for name in H.STATIC]
+    for name in ANIM:
+        jobs += [(name, idx) for idx in range(len(H.BY_NAME[name]["frames"]))]
+    workers = min(os.cpu_count() or 1, len(jobs))
+    t0 = time.time()
+    cache = {}
+    # numpy/PIL already thread internally via BLAS; 12 processes each spawning
+    # 12 BLAS threads oversubscribes the 12 cores and cancels the win. Pin each
+    # spawned worker to a single BLAS thread (env is inherited by spawn before
+    # its numpy import) so the process pool is the only parallelism.
+    prev_env = {v: os.environ.get(v) for v in
+                ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")}
+    os.environ.update({v: "1" for v in prev_env})
+    try:
+        with cf.ProcessPoolExecutor(max_workers=workers, initializer=_init_worker,
+                                    initargs=(sizes,)) as ex:
+            for pairs in ex.map(_gen_frame, jobs):
+                cache.update(pairs)
+    finally:
+        for v, old in prev_env.items():
+            if old is None:
+                os.environ.pop(v, None)
+            else:
+                os.environ[v] = old
+    inner = H.frame_image
+    def cached(name, idx, size):
+        hit = cache.get((name, idx, size))
+        return hit if hit is not None else inner(name, idx, size)
+    H.frame_image = cached
+    print("  warm-up: %d frames x %d sizes on %d cores in %.1fs"
+          % (len(jobs), len(sizes), workers, time.time() - t0))
 
 
 def _scale_hot(name, size):
@@ -300,7 +367,7 @@ def build_deb(linux_dir, aliases, packages):
                f"Maintainer: {THEME} <noreply@localhost>\nInstalled-Size: {max(1,total//1024)}\n"
                f"Section: x11\nPriority: optional\n"
                f"Description: {THEME} cursor theme\n"
-               f" Chrome Glass remaster: original pixels, crisp edges, 32-256px, 60 fps.\n")
+               f" Chrome Glass remaster: original pixels, crisp edges, 32-512px, 60 fps.\n")
     postinst = ("#!/bin/sh\nset -e\ncommand -v update-icon-caches >/dev/null 2>&1 && "
                 "update-icon-caches /usr/share/icons/'%s' || true\nexit 0\n" % THEME)
     ctl = _tar_gz([("control", control.encode(), 0o644, None),
@@ -400,9 +467,13 @@ def _onbg(im, light=(244, 244, 246), dark=(222, 222, 226)):
 
 
 def build_preview():
-    order = ["Arrow", "Hand", "Help", "IBeam", "Cross", "SizeAll", "SizeNS", "SizeWE",
+    # Hand and Handwriting are skipped here: in the 2006 original they're the
+    # same arrow silhouette as Arrow with only a per-frame shimmer, so a single
+    # still frame just duplicates the Arrow tile. They're still built and
+    # shipped - only this showcase grid leaves them out.
+    order = ["Arrow", "Help", "IBeam", "Cross", "SizeAll", "SizeNS", "SizeWE",
              "SizeNWSE", "SizeNESW", "UpArrow", "Arrow_Down", "Pin", "Person",
-             "Handwriting", "NO", "Wait", "AppStarting"]
+             "NO", "Wait", "AppStarting"]
     cell, pad, cols, lab = 192, 22, 6, 26
     rows = (len(order) + cols - 1) // cols
     # the cursors are pale translucent glass, invisible on white - use a dark
@@ -486,7 +557,7 @@ def build_comparison(assets):
     bitmap stretched by the OS vs the remaster's native detail. Dark sheet so
     the pale translucent glass reads."""
     cell, pad, top = 512, 32, 84
-    pairs = [("Arrow", 0), ("UpArrow", 0), ("Wait", 2)]
+    pairs = [("Arrow", 0), ("AppStarting", 2), ("Wait", 2)]
     W = pad + len(pairs) * 2 * (cell + pad) + pad
     sheet = Image.new("RGBA", (W, top + cell + pad + 18), (43, 45, 51, 255))
     d = ImageDraw.Draw(sheet)
@@ -532,23 +603,29 @@ def _sat(img):
 
 
 def check_metrics():
-    """Superiority metrics vs the original frames; drift prints a WARN."""
+    """Superiority metrics vs the original frames; drift prints a WARN.
+
+    Checked at 128px (the tuning anchor) and at each cursor's native shipped
+    anchor (256 or 512, see hybrid._master) - a regression only visible in the
+    native master would otherwise pass silently at 128."""
     warns = 0
     for name in H.STATIC + ANIM:
         n = len(H.BY_NAME[name]["frames"])
         for idx in range(n):
             o = H.original(name, idx)
-            h = H.frame_image(name, idx, 128)
-            da = (_med_alpha(h) - _med_alpha(o)) / max(_med_alpha(o), 1e-6) * 100
-            so, sh = _sat(o), _sat(h)
-            sat_ok = (so <= 1e-6 or -2 <= (sh - so) / max(so, 1e-6) * 100 <= 12
-                      or abs(sh - so) <= 0.02)
-            if abs(da) > 8:
-                print(f"  WARN {name}[{idx}]: median alpha drift {da:+.1f}% (>8%)")
-                warns += 1
-            if not sat_ok:
-                print(f"  WARN {name}[{idx}]: saturation {so:.3f} -> {sh:.3f}")
-                warns += 1
+            _, native = H._master(name, idx)
+            for size in sorted({128, native}):
+                h = H.frame_image(name, idx, size)
+                da = (_med_alpha(h) - _med_alpha(o)) / max(_med_alpha(o), 1e-6) * 100
+                so, sh = _sat(o), _sat(h)
+                sat_ok = (so <= 1e-6 or -2 <= (sh - so) / max(so, 1e-6) * 100 <= 12
+                          or abs(sh - so) <= 0.02)
+                if abs(da) > 8:
+                    print(f"  WARN {name}[{idx}]@{size}: median alpha drift {da:+.1f}% (>8%)")
+                    warns += 1
+                if not sat_ok:
+                    print(f"  WARN {name}[{idx}]@{size}: saturation {so:.3f} -> {sh:.3f}")
+                    warns += 1
     return warns
 
 
@@ -585,6 +662,8 @@ def check_packages(win):
 def main():
     dist = os.path.join(HERE, "dist")
     if os.path.exists(dist): shutil.rmtree(dist)
+    if os.environ.get("BUILD_SERIAL") != "1":           # escape hatch: BUILD_SERIAL=1
+        _warm_frames()                                   # renders single-core instead
     win = build_windows(dist)
     check_inf(win)
     orig_theme = build_original(dist)
@@ -608,6 +687,9 @@ def main():
     check_packages(win)
     warns = check_metrics()
     print("  metrics: %s" % ("all within tolerance" if not warns else f"{warns} warning(s)"))
+    if warns and os.environ.get("ALLOW_METRIC_WARN") != "1":
+        raise SystemExit(f"check_metrics: {warns} warning(s) out of tolerance "
+                          "(set ALLOW_METRIC_WARN=1 to ship anyway)")
 
 
 if __name__ == "__main__":

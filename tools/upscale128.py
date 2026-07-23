@@ -49,9 +49,16 @@ def main():
             clean_rgb = U.bleed_extend(rgba)
             im = Image.fromarray(clean_rgb, "RGB")
             big = model.predict(im)                            # 128px (32*4)
-            out = Image.new("RGBA", big.size, (0, 0, 0, 0))
-            out.paste(big, (0, 0))
-            out.putalpha(255)                                  # hybrid.py masks alpha itself
+            if big.size != (128, 128):
+                big = big.resize((128, 128), Image.LANCZOS)
+            # keep the real silhouette alpha (Lanczos of the 32px original alpha):
+            # trace.py reads the shape from src/ai's alpha, and _base128's Reinhard
+            # measures the cursor rather than the bleed-filled background. A flat
+            # 255 here traced every frame as a full square and skewed the colour
+            # stats over the whole tile.
+            a = Image.fromarray(rgba[..., 3].astype(np.uint8)).resize((128, 128), Image.LANCZOS)
+            out = big.convert("RGBA")
+            out.putalpha(a)
             out.save(os.path.join(OUT, key + ".png"))
             print("ai128", key)
 

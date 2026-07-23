@@ -1,0 +1,7 @@
+# Only needed to regenerate the AI masters from scratch (tools/upscale*.py).
+# A normal build (build.py) never imports these - see requirements.txt.
+-r requirements.txt
+py-real-esrgan>=0.3
+opencv-python>=4.8
+torch>=2.0
+huggingface_hub>=0.20

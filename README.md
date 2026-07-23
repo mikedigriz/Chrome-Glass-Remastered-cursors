@@ -15,7 +15,9 @@
 
 </div>
 
-In 2006 a cursor set called "Chrome Glass" appeared on DeviantArt - translucent, shimmering, alive. On modern screens its 32-pixel art turned into blurry blobs, so I brought it back to life. **This is the exact same set, not a lookalike**: the authentic 2006 art is included untouched as its own ready-to-install *Chrome Glass (2006)* theme, and the remaster rebuilds every cursor from it - crisp from 32 all the way to 512 px.
+In 2006 a cursor set called "Chrome Glass" appeared on DeviantArt - translucent, shimmering, alive. It was made for 32-pixel screens, so on a 4K display it just turns into a blurry blob. I rebuilt it to stay crisp on any screen, without losing the original charm.
+
+**This is the same set, not a copy.** The 2006 art ships untouched too, as its own *Chrome Glass (2006)* theme (also built to `dist/original/` from source) - so you can always compare the two side by side.
 
 ![original vs remastered on HiDPI](assets/comparison.png)
 
@@ -25,8 +27,6 @@ In 2006 a cursor set called "Chrome Glass" appeared on DeviantArt - translucent,
 | Animation | 9 frames at ~20 fps | **27 frames at 60 fps**, original rhythm preserved |
 | Cursor roles | 15 Windows slots | plus **Pin** and **Person** in the set's own style |
 | Platforms | Windows | Windows, Linux (Xcursor, deb, PKGBUILD), macOS (Mousecape) |
-
-The untouched 2006 set is built alongside the remaster (`dist/original/`), so the reference is always one build away.
 
 ## Install
 
@@ -44,7 +44,7 @@ Everything you need is in the [latest release](../../releases/latest).
 |---|---|
 | Debian / Ubuntu / Mint | `sudo dpkg -i chrome-glass-remastered-cursors_1.0.0_all.deb` |
 | Arch / Manjaro | `cd packaging && makepkg -si` ([PKGBUILD](packaging/PKGBUILD)) |
-| Any, no root | `tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.local/share/icons/` |
+| Any, no root | `mkdir -p ~/.local/share/icons/ && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.local/share/icons/` |
 
 Then switch the theme:
 
@@ -65,26 +65,57 @@ Cursor themes on macOS are applied by the free [Mousecape](https://github.com/al
 
 The cape replaces the core cursors (arrow, text, crosshair, hand, move, wait); the rest stay default.
 
+> **Heads up:** each macOS release locks cursor theming down further. Mousecape needs SIP partially disabled and may not work at all on Apple Silicon. If `Apply` does nothing, that's a Mousecape/macOS limitation - check its [issue tracker](https://github.com/alexzielenski/Mousecape/issues) before filing a bug here.
+
 ## See it move
 
 ![animated cursors](assets/animations.webp)
 
-| Busy (watch) | App starting (progress) |
-|:---:|:---:|
-| ![](assets/Wait.webp) | ![](assets/AppStarting.webp) |
-
 ## How it works
 
-Every cursor is a hybrid of three sources: the original 32 px frames (`src/orig/`) provide the authentic glass translucency, an AI upscale keeps the inner sheen (a Reinhard colour transfer restores the washed-out saturation), and vector-traced silhouettes (`traced.json`) give a crisp edge at every size. A committed native 256 px Real-ESRGAN master (`src/ai256/`, static and animated) is the colour source for the whole set - every size, 32 px included, is supersampled down from it or sharpened up from it, so nothing is anchored at a soft 128 px any more. The masters are committed, so the build doesn't need torch. Pale near-grey cursors (IBeam, Cross, the resize arrows) deliberately skip the AI, which invents cross-hatch noise on transparent glass.
+Each cursor is a mix of three things: **the original 32 px art**, for authenticity; **an AI-upscaled version**, rebuilt once at 512 px and saved in the repo, that supplies color and shine at every smaller size (shrinking down looks far cleaner than stretching up); and **a vector outline**, so edges stay sharp at any scale. Even the pale, almost-grey cursors (Help, IBeam, Cross, the resize arrows) get the AI color now - an illustration-tuned upscaler keeps flat grey glass smooth instead of speckling it with invented color, and a separate sharpening pass adds crispness without inventing texture.
+
+Transparency is upscaled the same way, but kept separate from color - stretched straight from 32 px it turns to mush and the glassy glow disappears with it. It has no color to get wrong, so every cursor, pale ones included, uses the upscaled version.
 
 ## Build from source
 
+All AI masters are already committed to the repo, so a normal build needs no GPU and no torch.
+
 ```sh
-pip install pillow numpy
+pip install -r requirements.txt
 python3 build.py
 ```
 
-The script rebuilds `dist/`, `packages/` and the previews, then checks the result against the original frames (alpha, saturation, timing) and warns if anything drifts. Pipeline map: `src/` -> `trace.py` -> `traced.json` -> `hybrid.py` + `glyphs.py` -> `build.py` -> `curlib.py` / `vectorlib.py`.
+That rebuilds `dist/`, `packages/` and the previews, then checks the result against the original frames (alpha, saturation, timing) and warns if anything drifts.
+
+### Where each file fits in
+
+| Folder / file | What's in it |
+|---|---|
+| `src/orig/` | the untouched 2006 art, 32 px - the source of truth |
+| `src/ai/` | a 128 px AI upscale, a stepping stone to the bigger versions |
+| `src/ai512/`, `src/ai256/` | AI color masters - the build takes 512 px if it's there, else 256 px, else a plain resize |
+| `src/aialpha/` | the AI upscale of transparency, kept crisp at large sizes |
+| `traced.json` | vector outlines, generated from the art by `trace.py` |
+
+Build order: `src/` -> `trace.py` -> `traced.json` -> `hybrid.py` + `glyphs.py` -> `build.py` -> `curlib.py` / `vectorlib.py`.
+
+A couple of details are drawn by hand in `cursors.py` instead of traced automatically - like the small dot under the Help cursor's `?`, which sits outside the arrow shape and gets missed by the auto-tracer.
+
+### Rebuilding the AI files yourself (optional)
+
+You only need this if you want to recompute the upscales from scratch instead of using the ones already in the repo. It's the only step that needs a GPU and pulls in torch (PyTorch, a large machine-learning library):
+
+```sh
+pip install -r requirements-ai.txt
+
+python3 tools/upscale128.py     # src/orig -> src/ai       (128 px base)
+python3 tools/upscale512.py     # src/ai   -> src/ai512    (main colour master)
+python3 tools/upscale256.py     # src/ai   -> src/ai256    (fallback colour master)
+python3 tools/upscale_alpha.py  # src/orig -> src/aialpha  (alpha master)
+```
+
+Run them in that order: the colour masters build from the 128 px base, the alpha master from the original alpha. The only weights file you need is `RealESRGAN_x4plus_anime_6B.pth` (~18 MB, illustration-tuned) - place it in `weights/` yourself (`upscale_lib.load_model` loads it locally, no auto-download). The results are committed, which is why everyone else can build without any of this.
 
 ## License
 
