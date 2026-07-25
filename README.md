@@ -40,7 +40,7 @@ Everything's in the [latest release](../../releases/latest).
 
 | Distro | Command |
 |---|---|
-| Debian / Ubuntu / Mint | `sudo dpkg -i chrome-glass-remastered-cursors_1.0.0_all.deb` |
+| Debian / Ubuntu / Mint | `sudo dpkg -i chrome-glass-remastered-cursors_*_all.deb` |
 | Arch / Manjaro | `cd packaging && makepkg -si` ([PKGBUILD](packaging/PKGBUILD)) |
 | No root | `mkdir -p ~/.local/share/icons/ && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.local/share/icons/` |
 
@@ -75,9 +75,9 @@ The cape replaces the core cursors (arrow, text, crosshair, hand, move, wait); e
 
 ## How it works
 
-Each cursor is three layers stacked: **the original 32 px art**, for authenticity; **an AI upscale to 512 px**, computed once and committed to the repo, supplying color and shine at every size (shrinking down looks cleaner than stretching up); and **a vector outline**, keeping edges sharp at any scale. Even the pale, near-grey cursors (Help, IBeam, Cross, the resize arrows) get AI color now - the upscaler is tuned for clean illustration and won't speckle flat grey glass with invented noise, and a separate sharpening pass adds crisp edges without inventing texture.
+Each cursor is three layers: **the original 32 px art** for authenticity, **an AI upscale to 512 px** for color and shine (computed once, committed to the repo - shrinking down looks cleaner than stretching up), and **a vector outline** for sharp edges at any scale. The upscaler is tuned for illustration, so even the pale, near-grey cursors (Help, IBeam, Cross, the resize arrows) get even color with no noise, and a separate sharpening pass crisps up the edges.
 
-Transparency gets upscaled the same way but kept separate from color - stretch it straight from 32 px and the glassy glow turns to mush. There's no color in an alpha channel to get wrong, so every cursor, pale ones included, uses the upscaled version.
+Transparency is upscaled separately from color: stretched straight from 32 px, it loses the glassy glow. There's no color in an alpha channel to get wrong, so every cursor, pale ones included, uses the upscaled version.
 
 ## Build from source
 
@@ -102,7 +102,7 @@ This rebuilds `dist/`, `packages/` and the previews, then checks the result agai
 
 Build order: `src/` -> `trace.py` -> `traced.json` -> `hybrid.py` + `glyphs.py` -> `build.py` -> `curlib.py` / `vectorlib.py`.
 
-A couple of details are hand-drawn in `cursors.py` instead of auto-traced - like the dot under Help's `?`, which sits apart from the arrow and the tracer just misses it.
+A couple of details are hand-drawn in `cursors.py` instead of auto-traced - like the dot under the question mark on Help, which sits apart from the arrow and the tracer just misses it.
 
 ### Rebuilding the AI files yourself (optional)
 
@@ -117,13 +117,13 @@ python3 tools/upscale256.py     # src/ai   -> src/ai256    (fallback color maste
 python3 tools/upscale_alpha.py  # src/orig -> src/aialpha  (alpha master)
 ```
 
-Run in that order: color masters build from the 128 px base, the alpha master from the original alpha. You need one weights file, `RealESRGAN_x4plus_anime_6B.pth` (~18 MB, illustration-tuned) - drop it in `weights/` yourself (`upscale_lib.load_model` loads it locally, no auto-download). Results are already committed, so nobody else has to do this.
+You need one weights file, `RealESRGAN_x4plus_anime_6B.pth` (~18 MB, illustration-tuned) - drop it in `weights/` yourself (`upscale_lib.load_model` loads it locally, no auto-download). Results are already committed, so nobody else has to do this.
 
 ## License
 
 Original artwork: ["Chrome Glass" by yoyos, DeviantArt, 2006](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748) (see [`NOTICE`](NOTICE)). Code is **MIT** ([`LICENSE`](LICENSE)).
 
-Chrome Glass has been my favorite cursor set for years - thanks, yoyos. This repo is an attempt to breathe new life into it.
+Chrome Glass has been my favorite cursor set for years - thanks, yoyos.
 
 ---
 
