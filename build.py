@@ -68,7 +68,7 @@ XROLES = {
     "UpArrow":   ["up_arrow", "center_ptr", "sb_up_arrow"],
     "Hand":      ["pointer", "hand", "hand1", "hand2", "pointing_hand",
                   "openhand", "grab", "dnd-copy", "copy", "alias"],
-    "Arrow_Down": ["link"],
+    "Hand_Blue": ["link"],
 }
 
 # Windows scheme slots in registry order (17 on Windows 10/11: pin and person
@@ -78,7 +78,7 @@ WIN_SLOTS = [
     ("busy", "Wait.ani"), ("cross", "Cross.cur"), ("text", "IBeam.cur"),
     ("hand", "Handwriting.ani"), ("unavailable", "NO.ani"), ("vert", "SizeNS.cur"),
     ("horz", "SizeWE.cur"), ("dgn1", "SizeNWSE.cur"), ("dgn2", "SizeNESW.cur"),
-    ("move", "SizeAll.cur"), ("alternate", "UpArrow.cur"), ("link", "Hand.ani"),
+    ("move", "SizeAll.cur"), ("alternate", "UpArrow.cur"), ("link", "Hand_Blue.ani"),
     ("pin", "Pin.cur"), ("person", "Person.cur"),
 ]
 
@@ -96,6 +96,35 @@ def hotspot(name):
 
 def static_image(name, size):
     return G.frame(name, size) if is_glyph(name) else H.frame_image(name, 0, size)
+
+
+# Arrow_Down's own hue/sat (measured from its rendered frame, visible-zone
+# mean via colorsys) - reused here so the link cursor's blue matches the
+# blue already established elsewhere in the set instead of inventing a new one.
+_LINK_HUE, _LINK_SAT = 190.0 / 360.0, 0.47
+
+
+def _colorize(img, hue=_LINK_HUE, sat=_LINK_SAT):
+    """Recolour an RGBA frame to a fixed hue/saturation, keeping each pixel's
+    own luminance untouched - the sheen/highlight motion is luminance, so it
+    survives; hue and saturation become the new fill colour."""
+    arr = np.asarray(img.convert("RGBA"), dtype=np.float64)
+    rgb, a = arr[..., :3] / 255.0, arr[..., 3]
+    l = (rgb.max(axis=-1) + rgb.min(axis=-1)) / 2.0
+    c = (1 - np.abs(2 * l - 1)) * sat
+    x = c * (1 - abs((hue * 6) % 2 - 1))
+    sector = int(hue * 6) % 6
+    r1, g1, b1 = [(c, x, 0.0), (x, c, 0.0), (0.0, c, x),
+                  (0.0, x, c), (x, 0.0, c), (c, 0.0, x)][sector]
+    m = l - c / 2
+    out = np.dstack([r1 + m, g1 + m, b1 + m]) * 255.0
+    return Image.fromarray(np.dstack([np.clip(out, 0, 255), a])
+                           .round().astype(np.uint8), "RGBA")
+
+
+def _hand_blue_anim(size, interp):
+    frames, rates = H.anim_frames("Hand", size, interp=interp)
+    return [_colorize(f) for f in frames], rates
 
 
 # ----------------------------------------------------------------------------- parallel warm-up
@@ -179,16 +208,23 @@ def build_windows(dist):
             hx, hy = _scale_hot(name, s)
             frames.append({"img": static_image(name, s), "hx": hx, "hy": hy})
         open(os.path.join(out, name + ".cur"), "wb").write(curlib.write_cur(frames))
-    for name in ANIM:
+    for name in ANIM + ["Hand_Blue"]:
         # stock aero .ani ships every frame as a multi-size .cur and no rate
         # chunk when the timing is uniform - mirror that so the Pointers-tab
-        # preview animates and Windows picks a native size at any DPI
-        per_size = {s: H.anim_frames(name, s)[0] for s in ANI_SIZES_WIN}
-        rates = H.anim_frames(name, ANI_SIZE)[1]
+        # preview animates and Windows picks a native size at any DPI.
+        # Hand_Blue is Hand's own shape/shading recoloured (see _colorize) for
+        # the link role - it shares Hand's hotspot, not a slot of its own.
+        hot_name = "Hand" if name == "Hand_Blue" else name
+        if name == "Hand_Blue":
+            per_size = {s: _hand_blue_anim(s, True)[0] for s in ANI_SIZES_WIN}
+            rates = _hand_blue_anim(ANI_SIZE, True)[1]
+        else:
+            per_size = {s: H.anim_frames(name, s)[0] for s in ANI_SIZES_WIN}
+            rates = H.anim_frames(name, ANI_SIZE)[1]
         blobs = []
         for i in range(len(rates)):
-            entries = [{"img": per_size[s][i], "hx": _scale_hot(name, s)[0],
-                        "hy": _scale_hot(name, s)[1]} for s in ANI_SIZES_WIN]
+            entries = [{"img": per_size[s][i], "hx": _scale_hot(hot_name, s)[0],
+                        "hy": _scale_hot(hot_name, s)[1]} for s in ANI_SIZES_WIN]
             blobs.append(curlib.write_cur(entries))
         uniform = len(set(rates)) == 1
         ani = {"anih": _make_anih(len(rates), rates[0] if uniform else 1),
@@ -226,7 +262,7 @@ def write_inf(out):
     strings = 'CUR_DIR      = "%s"\nSCHEME_NAME  = "%s"' % (THEME, THEME)
     slot_strings = "\n".join('%-12s = "%s"' % (role, fn) for role, fn in WIN_SLOTS)
     reg_val = ",".join("%%10%%\\%%CUR_DIR%%\\%%%s%%" % role for role, _ in WIN_SLOTS)
-    copy = "\n".join('"%s"' % fn for _, fn in WIN_SLOTS) + '\n"Arrow_Down.cur"'
+    copy = "\n".join('"%s"' % fn for _, fn in WIN_SLOTS) + '\n"Arrow_Down.cur"\n"Hand.ani"'
     inf = f""";  {THEME} - cursor scheme installer
 ;  Right-click this file, choose "Install", then pick "{THEME}" in
 ;  Settings > Bluetooth & devices > Mouse > Additional mouse settings > Pointers.
@@ -288,7 +324,8 @@ def build_linux(dist):
     aliases = {}
     for role, names in XROLES.items():
         imgs = []
-        if role in ANIM:
+        hot_role = "Hand" if role == "Hand_Blue" else role
+        if role in ANIM or role == "Hand_Blue":
             for size in ANI_SIZES:
                 # interp=False: Xcursor animated cursors (GNOME/Mutter) flicker
                 # at the interpolated 60 fps cadence on at least one hybrid
@@ -297,8 +334,11 @@ def build_linux(dist):
                 # phase with the refresh. The author's native ~20 fps cadence
                 # (same as Handwriting/NO) doesn't reproduce it. Windows .ani
                 # keeps the interpolated 60 fps - untested there, no reports.
-                frames, rates = H.anim_frames(role, size, interp=False)
-                hx, hy = _scale_hot(role, size)
+                if role == "Hand_Blue":
+                    frames, rates = _hand_blue_anim(size, False)
+                else:
+                    frames, rates = H.anim_frames(role, size, interp=False)
+                hx, hy = _scale_hot(hot_role, size)
                 for img, rate in zip(frames, rates):
                     imgs.append(_pack_ximage(size, img, hx, hy, _jiffies_ms(rate)))
         else:
