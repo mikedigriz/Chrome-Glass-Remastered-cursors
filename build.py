@@ -67,7 +67,8 @@ XROLES = {
     "SizeAll":   ["size_all", "move", "fleur", "all-scroll", "closedhand", "grabbing", "dnd-move"],
     "UpArrow":   ["up_arrow", "center_ptr", "sb_up_arrow"],
     "Hand":      ["pointer", "hand", "hand1", "hand2", "pointing_hand",
-                  "openhand", "grab", "dnd-copy", "copy", "alias", "link"],
+                  "openhand", "grab", "dnd-copy", "copy", "alias"],
+    "Arrow_Down": ["link"],
 }
 
 # Windows scheme slots in registry order (17 on Windows 10/11: pin and person
