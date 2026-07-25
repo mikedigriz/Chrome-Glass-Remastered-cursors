@@ -64,44 +64,61 @@ html,body{{margin:0;padding:0;width:1280px;height:640px;overflow:hidden;font-fam
     radial-gradient(900px 500px at 10% 100%, rgba(30,58,138,0.35), transparent 55%),
     linear-gradient(160deg,#0a1224 0%,#0b1530 45%,#060a16 100%);
 }}
-.badges{{position:absolute;left:84px;top:474px;display:flex;gap:14px;}}
-.badge{{
-  padding:8px 22px;border-radius:999px;border:1px solid rgba(148,180,230,0.55);
-  color:#dbe6fb;font-size:19px;font-weight:600;letter-spacing:.2px;
-  background:rgba(255,255,255,0.03);
+/* GitHub's own repo page renders this social preview as a wide header banner,
+   not at its native 2:1 ratio - it shows roughly the middle 65% of the height
+   and crops the rest top/bottom. Keep every readable element inside that
+   safe vertical band instead of spreading across the full 640px height. */
+.safe{{
+  position:absolute;left:0;top:130px;width:1280px;height:380px;
+  box-sizing:border-box;padding:0 90px;
+  display:flex;align-items:center;justify-content:space-between;
 }}
-.title{{position:absolute;left:82px;top:56px;font-size:70px;font-weight:800;color:#f3f6fc;line-height:1.03;letter-spacing:-1px;}}
+.left{{display:flex;flex-direction:column;gap:22px;}}
+.right{{display:flex;flex-direction:column;align-items:center;gap:18px;}}
+.title{{font-size:78px;font-weight:800;color:#f3f6fc;line-height:1.05;letter-spacing:-1px;}}
 .title .sub{{color:#9db8ee;font-weight:600;display:block;}}
-.tagline{{position:absolute;left:84px;top:328px;font-size:26px;color:#c7d2e8;font-weight:400;}}
+.tagline{{font-size:28px;color:#c7d2e8;font-weight:400;}}
+.badges{{display:flex;gap:12px;}}
+.badge{{
+  padding:8px 20px;border-radius:999px;border:1px solid rgba(148,180,230,0.55);
+  color:#dbe6fb;font-size:18px;font-weight:600;letter-spacing:.2px;
+  background:rgba(255,255,255,0.03);white-space:nowrap;
+}}
 .tile{{
-  position:absolute;border-radius:30px;
+  border-radius:26px;
   background:linear-gradient(160deg,#eef1f7,#dde3ee);
-  box-shadow:0 18px 40px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.7);
+  box-shadow:0 14px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.7);
   display:flex;align-items:center;justify-content:center;
 }}
 .tile img{{filter:drop-shadow(0 6px 10px rgba(0,0,0,0.3)) saturate(1.15) contrast(1.05);}}
-.tile-main{{left:820px;width:376px;height:340px;top:64px;}}
-.tile-main img{{width:250px;}}
-.tile-small{{width:110px;height:110px;top:464px;}}
-.tile-small img{{width:74px;}}
-.t1{{left:820px;}}
-.t2{{left:953px;}}
-.t3{{left:1086px;}}
+.tile-main{{width:220px;height:220px;}}
+.tile-main img{{width:148px;}}
+.mini-row{{display:flex;gap:14px;}}
+.tile-small{{width:74px;height:74px;}}
+.tile-small img{{width:50px;}}
 </style></head><body>
 <div class=cover>
-  <div class=title>Chrome Glass<span class=sub>Remastered</span></div>
-  <div class=tagline>The 2006 glass cursors, reborn for 4K</div>
-  <div class=badges>
-    <div class=badge>32-256 px</div>
-    <div class=badge>60 fps</div>
-    <div class=badge>Windows</div>
-    <div class=badge>Linux</div>
-    <div class=badge>macOS</div>
+  <div class=safe>
+    <div class=left>
+      <div class=title>Chrome Glass<span class=sub>Remastered</span></div>
+      <div class=tagline>The 2006 glass cursors, reborn for 4K</div>
+      <div class=badges>
+        <div class=badge>32-256 px</div>
+        <div class=badge>60 fps</div>
+        <div class=badge>Windows</div>
+        <div class=badge>Linux</div>
+        <div class=badge>macOS</div>
+      </div>
+    </div>
+    <div class=right>
+      <div class="tile tile-main"><img src="data:image/png;base64,{images['main']}"></div>
+      <div class=mini-row>
+        <div class="tile tile-small"><img src="data:image/png;base64,{images['t1']}"></div>
+        <div class="tile tile-small"><img src="data:image/png;base64,{images['t2']}"></div>
+        <div class="tile tile-small"><img src="data:image/png;base64,{images['t3']}"></div>
+      </div>
+    </div>
   </div>
-  <div class="tile tile-main"><img src="data:image/png;base64,{images['main']}"></div>
-  <div class="tile tile-small t1"><img src="data:image/png;base64,{images['t1']}"></div>
-  <div class="tile tile-small t2"><img src="data:image/png;base64,{images['t2']}"></div>
-  <div class="tile tile-small t3"><img src="data:image/png;base64,{images['t3']}"></div>
 </div>
 </body></html>"""
 
