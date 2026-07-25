@@ -64,6 +64,23 @@ def _poly_px(points, scale):
     return [(x * scale, y * scale) for x, y in points]
 
 
+CORNER_DEG = 55          # matches cursors.SMOOTH_KEEP_DEG
+
+
+def _is_corner(pts, i):
+    """Does the closed polyline turn sharply at vertex i? Polygons arrive here
+    as plain (x, y) pairs (the traced corner flags are gone by then), so the
+    turn is measured locally with the same threshold the tracer used."""
+    n = len(pts)
+    if n < 3:
+        return False
+    p0, p, p1 = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+    a1 = math.atan2(p[1] - p0[1], p[0] - p0[0])
+    a2 = math.atan2(p1[1] - p[1], p1[0] - p[0])
+    turn = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
+    return turn > math.radians(CORNER_DEG)
+
+
 def _composite_linear(base, layer):
     """Alpha-composite layer over base in linear light instead of sRGB-encoded
     space - blending translucent edges in gamma space makes them read dark/
@@ -139,7 +156,13 @@ def render(primitives, size=256, ss=None):
                 col, w = p["stroke"]
                 d.line(pts + [pts[0]], fill=col, width=max(1, round(w * scale)), joint="curve")
                 r = max(1, round(w * scale)) / 2.0
-                for (px_, py_) in pts:                      # round the joints
+                # a disc at every vertex rounds off the sharp ones too - the Pin's
+                # tip lost its point to it. joint="curve" already closes the smooth
+                # joints, so only those need the disc; a genuine corner is left to
+                # meet as a miter.
+                for k, (px_, py_) in enumerate(pts):
+                    if _is_corner(pts, k):
+                        continue
                     d.ellipse([px_ - r, py_ - r, px_ + r, py_ + r], fill=col)
         if p.get("blur"):
             layer = layer.filter(ImageFilter.GaussianBlur(p["blur"] * scale))

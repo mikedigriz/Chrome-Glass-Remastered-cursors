@@ -263,8 +263,77 @@ def _declutter_engraved_detail(name, idx, rgb, size):
     return rgb * (1 - strength)[..., None] + blurred * strength[..., None]
 
 
+_SHEEN_SMOOTH = (1.0, 2.0, 1.0)   # circular temporal kernel over an animation's colour
+_STILL_TIP_R = 4.0                # logical units around a corner whose shading is frozen
+_STILL_TIP_FEATHER = 2.0          # logical units of blend back into the moving body
+
+
+@functools.lru_cache(maxsize=None)
+def _tip_still(name, idx, size):
+    """Weight map, 1 where an animation's shading is held still.
+
+    AppStarting, Hand and Wait animate nothing but the sheen: their silhouette
+    is one static arrow (identical 51-point polygon in every frame) and the
+    author sweeps a highlight through the glass inside it. Near a tip the wedge
+    is only a couple of units wide, so as the sweep passes it the fold line
+    crosses the whole width and the point reads as leaning left, then right -
+    the tip appears to wobble even though its outline never moves. Freezing the
+    shading in a disc around every corner keeps the points dead still and
+    leaves the sweep to the body, where it is meant to be seen."""
+    pts = [(v[0], v[1]) for poly in C.TRACED[name]["frames"][idx]["polys"]
+           for v in poly if v[2]]
+    if not pts:
+        return None
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    d = np.full((size, size), np.inf)
+    for x, y in pts:
+        d = np.minimum(d, np.hypot(xs - x * s, ys - y * s) / s)
+    return np.clip((_STILL_TIP_R - d) / _STILL_TIP_FEATHER, 0.0, 1.0)
+
+
 @functools.lru_cache(maxsize=None)
 def _master(name, idx):
+    """Colour master with the animation's shading damped along time.
+
+    The author's sheen sweeps unevenly: on AppStarting the colour moves 6.6x
+    faster at mid-cycle than at its start, so between two keyframes near the
+    peak it jumps a long way. At 20 fps that passed unnoticed; interpolated to
+    60 fps against a silhouette that now holds a still, sharp tip, the shading
+    inside the tip reads as a stutter. Since a cross-fade cannot invent the
+    motion between two distant keyframes (and 27 frames at rate 1 is already
+    the cycle's 60 fps ceiling - see anim_frames), the pace is evened out at
+    the source instead, with a small circular kernel over the neighbouring
+    keyframes' colour.
+
+    Around the tips the sweep is frozen outright (see _tip_still), to the
+    cycle's own mean so no single frame's look is privileged.
+
+    Colour only, in linear light: alpha stays the vector silhouette exactly,
+    and the static cursors plus the two non-looping animations (Handwriting,
+    NO, whose content appears and freezes rather than cycling) are untouched -
+    averaging a frame with a neighbour that holds different content would
+    ghost it."""
+    rgb, anchor = _master_raw(name, idx)
+    if name not in INTERP:
+        return rgb, anchor
+    n = len(BY_NAME[name]["frames"])
+
+    def lin(i):
+        return V.srgb_to_linear(np.clip(_master_raw(name, i % n)[0], 0, 255)
+                                .astype(np.uint8))
+
+    w = _SHEEN_SMOOTH
+    out = sum(lin(idx + d) * wt for d, wt in zip((-1, 0, 1), w)) / sum(w)
+    still = _tip_still(name, idx, anchor)
+    if still is not None:
+        mean = sum(lin(i) for i in range(n)) / n
+        out = mean * still[..., None] + out * (1.0 - still[..., None])
+    return V.linear_to_srgb(out).astype(np.float64), anchor
+
+
+@functools.lru_cache(maxsize=None)
+def _master_raw(name, idx):
     """Colour master -> (rgb HxWx3 float, anchor px), sharpened once at the anchor.
 
     Every cursor now anchors on the native anime src/ai512 (grey/pale included -
@@ -332,6 +401,20 @@ def original(name, idx):
 
 
 @functools.lru_cache(maxsize=None)
+def _sat_anchor(name, idx):
+    """Saturation level to match, read off the author's own frames.
+
+    Per frame for everything except the sheen-only animations: there the level
+    drifts a little from frame to frame (AppStarting 0.664..0.674) and the
+    per-frame chroma rescale would put that drift back into every pixel,
+    including the tips whose shading is deliberately frozen. One level for the
+    whole cycle keeps them frozen; the spread is 1.6%, far inside tolerance."""
+    idxs = range(len(BY_NAME[name]["frames"])) if name in INTERP else (idx,)
+    return float(np.mean([_mean_sat(_orig(_key(name, i))[..., :3],
+                                    _orig(_key(name, i))[..., 3]) for i in idxs]))
+
+
+@functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
     from the sharpened AI master (_master, native up to 512px) inside a
@@ -354,27 +437,39 @@ def frame_image(name, idx, size):
     # (the 512-anchored match drifted +12% by 128), so matching here to the 32px
     # original's level lands every size on target. Grey glass (sat below the
     # floor) is left alone - scaling its near-zero chroma only invents colour.
-    orig_sat = _mean_sat(orig[..., :3], orig[..., 3])
+    orig_sat = _sat_anchor(name, idx)
     if orig_sat >= 0.035:
         rgb = _sat_match(rgb, alpha, orig_sat * 1.05)
     return _compose(rgb, alpha)
 
 
+def _premult(im):
+    """RGBA image -> premultiplied linear-light array, the space every temporal
+    blend happens in (no dark fringes, no gamma-space midpoint dimming)."""
+    a = np.asarray(im, dtype=np.float64)
+    al = a[..., 3:4] / 255.0
+    lin = V.srgb_to_linear(np.clip(a[..., :3], 0, 255).astype(np.uint8))
+    return np.dstack([lin * al, al[..., 0]])
+
+
+def _unpremult(m):
+    al = np.clip(m[..., 3], 0.0, 1.0)
+    rgb_lin = np.clip(m[..., :3], 0.0, None) / np.maximum(al, 1e-6)[..., None]
+    return _compose(V.linear_to_srgb(rgb_lin).astype(np.float64), al * 255.0)
+
+
 def _lerp(im_a, im_b, t):
     """Cross-fade in premultiplied linear-light space - no dark fringes and no
-    gamma-space midpoint dimming."""
-    a = np.asarray(im_a, dtype=np.float64)
-    b = np.asarray(im_b, dtype=np.float64)
-    aa, ba = a[..., 3:4] / 255.0, b[..., 3:4] / 255.0
-    a_lin = V.srgb_to_linear(np.clip(a[..., :3], 0, 255).astype(np.uint8))
-    b_lin = V.srgb_to_linear(np.clip(b[..., :3], 0, 255).astype(np.uint8))
-    pa = np.dstack([a_lin * aa, aa[..., 0]])
-    pb = np.dstack([b_lin * ba, ba[..., 0]])
-    m = pa + (pb - pa) * t
-    al = m[..., 3]
-    rgb_lin = m[..., :3] / np.maximum(al, 1e-6)[..., None]
-    rgb = V.linear_to_srgb(rgb_lin).astype(np.float64)
-    return _compose(rgb, al * 255.0)
+    gamma-space midpoint dimming.
+
+    Deliberately linear: a cubic (Catmull-Rom, monotone Hermite) makes the
+    velocity continuous across keyframes but a cross-fade is a dissolve, not
+    motion, so its apparent speed then oscillates *inside* each interval -
+    measured on AppStarting's tip the peak-to-mean speed went 1.69 -> 2.02 and
+    the frame-to-frame jerk doubled. The sheen's uneven pace belongs to the
+    author's keyframes and is damped there instead (see _SHEEN_SMOOTH)."""
+    pa, pb = _premult(im_a), _premult(im_b)
+    return _unpremult(pa + (pb - pa) * t)
 
 
 def anim_frames(name, size, interp=True):

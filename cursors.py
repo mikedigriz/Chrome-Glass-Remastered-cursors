@@ -10,6 +10,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TRACED = json.load(open(os.path.join(HERE, "traced.json")))
 
 SMOOTH_KEEP_DEG = 55     # corners turning more than this stay sharp when smoothing
+CORNER_HOLD = 2          # vertices either side of a corner held on its edge ray
+
+
+def _corner_anchors(pts, corners, n):
+    """For every vertex within CORNER_HOLD steps of a corner: (corner index,
+    unit direction from that corner to the vertex), taken from the polygon
+    before any smoothing so the ray cannot drift over the iterations."""
+    anchors = {}
+    for c in corners:
+        for step in range(1, CORNER_HOLD + 1):
+            for i in ((c + step) % n, (c - step) % n):
+                if i in corners or i in anchors:
+                    continue
+                dx, dy = pts[i][0] - pts[c][0], pts[i][1] - pts[c][1]
+                d = math.hypot(dx, dy)
+                if d > 1e-9:
+                    anchors[i] = (c, dx / d, dy / d)
+    return anchors
 
 
 def smooth(poly, iters=2):
@@ -20,28 +38,45 @@ def smooth(poly, iters=2):
     was computed from the dense pre-simplification boundary chain, which is
     far less noise-prone than a single 3-point angle on an already-simplified
     polygon. Legacy 2-tuples (e.g. HELP_EXTRA's hand-authored polyline) fall
-    back to the old local-angle threshold test."""
+    back to the old local-angle threshold test.
+
+    Keeping the corner itself crisp is not enough: averaging its neighbours
+    pulls them sideways off the edge, which dents the silhouette right behind
+    the point and blunts it again. The CORNER_HOLD vertices either side of a
+    corner are therefore projected back onto the corner's own edge ray after
+    each pass - they may still slide along the edge (which is what melts the
+    staircase) but can no longer leave it."""
     if len(poly) < 5:
         return [(p[0], p[1]) for p in poly]
     flagged = [len(p) > 2 for p in poly]
     pts = [(p[0], p[1]) for p in poly]
+    n = len(pts)
+    corner = []
+    for i in range(n):
+        if flagged[i]:
+            corner.append(bool(poly[i][2]))
+        else:
+            p0, p, p1 = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+            a1 = math.atan2(p[1] - p0[1], p[0] - p0[0])
+            a2 = math.atan2(p1[1] - p[1], p1[0] - p[0])
+            turn = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
+            corner.append(turn > math.radians(SMOOTH_KEEP_DEG))
+    anchors = _corner_anchors(pts, {i for i in range(n) if corner[i]}, n)
     for _ in range(iters):
-        n = len(pts)
         out = []
         for i in range(n):
             p0, p, p1 = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
-            if flagged[i]:
-                is_corner = poly[i][2]
-            else:
-                a1 = math.atan2(p[1] - p0[1], p[0] - p0[0])
-                a2 = math.atan2(p1[1] - p[1], p1[0] - p[0])
-                turn = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
-                is_corner = turn > math.radians(SMOOTH_KEEP_DEG)
-            if is_corner:
+            if corner[i]:
                 out.append(p)                      # real corner - keep it crisp
-            else:
-                out.append((0.5 * p[0] + 0.25 * p0[0] + 0.25 * p1[0],
-                            0.5 * p[1] + 0.25 * p0[1] + 0.25 * p1[1]))
+                continue
+            q = (0.5 * p[0] + 0.25 * p0[0] + 0.25 * p1[0],
+                 0.5 * p[1] + 0.25 * p0[1] + 0.25 * p1[1])
+            if i in anchors:
+                c, ux, uy = anchors[i]
+                ax, ay = pts[c]
+                t = (q[0] - ax) * ux + (q[1] - ay) * uy
+                q = (ax + t * ux, ay + t * uy)     # back onto the edge ray
+            out.append(q)
         pts = out
     return pts
 
