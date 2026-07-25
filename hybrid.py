@@ -364,6 +364,103 @@ def _master_raw(name, idx):
     return rgb, anchor
 
 
+def _ai_scale(ref, ai):
+    """Factor putting the AI alpha master's visible-zone median on the plain
+    Lanczos reference's, so the two are comparable level for level."""
+    rv, av = ref[ref > 32], ai[ai > 32]
+    if not av.size or not rv.size:
+        return 1.0
+    return float(np.median(rv)) / max(float(np.median(av)), 1e-6)
+
+
+_TONE_LO = 0.08          # mid-tone fraction of a master that kept no translucency
+_TONE_HI = 0.20          # ...and of one that did (measured: NO[8..10] 0.02..0.07,
+                         # every other master 0.29..0.99, so nothing sits between)
+_TONE_FLOOR = 0.90       # how far a master without mid-tones is still trusted
+
+
+@functools.lru_cache(maxsize=None)
+def _ai_tonality(key):
+    """How much of the AI alpha master's body carries mid-tones - 1 for a real
+    translucency map, near 0 for one the net collapsed to two levels.
+
+    Real-ESRGAN is run on the alpha channel alone, and on a frame whose
+    translucency spans a narrow band it can binarise it instead of upscaling
+    it: NO's last frames come back as a hard stencil, everything above ~170
+    kept and the rest zeroed. Such a master carries no gradient to contribute -
+    only a crisper outline - and its own median-matched level is a poor
+    estimate of the glass, so it is leaned back toward the Lanczos and its
+    dropouts are repaired (see _ai_dropout)."""
+    a = np.asarray(Image.open(os.path.join(HERE, "src", "aialpha", key + ".png"))
+                   .convert("L"), dtype=np.float64)
+    body = (a > 10).sum()
+    if not body:
+        return 1.0
+    mid = ((a > 0.15 * a.max()) & (a < 0.85 * a.max())).sum()
+    return float(np.clip((mid / body - _TONE_LO) / (_TONE_HI - _TONE_LO), 0, 1))
+
+
+_CRACK_UNIT = 32.0       # closing kernel: one logical unit wide at native scale
+_CRACK_LO = 40.0         # alpha the closing must recover before it counts
+_CRACK_HI = 120.0        # ...and where the crack scores in full
+_CRACK_REF_LO = 64.0     # below this the Lanczos reference is edge or background
+_CRACK_REF_HI = 128.0    # at and above it the reference says solid glass
+
+
+@functools.lru_cache(maxsize=None)
+def _ai_dropout(key, size):
+    """Per-pixel weight, 1 where the AI alpha master deleted interior coverage.
+
+    The masters are Real-ESRGAN run on the alpha channel alone, and on a frame
+    whose translucency spans a narrow band the net can binarise it instead of
+    upscaling it: NO's alpha master keeps everything above ~170 and zeroes the
+    rest, so the arrow's own glass (137..190 in the 2006 frame) is cut in half
+    by a hard hole. Blended in at _BLEND_AI that hole survives as a black
+    V-notch straight through the arrow, which at 512px reads as two forked
+    spikes instead of one wedge sliding behind the ring.
+
+    What separates such a deletion from an edge the net legitimately sharpened
+    is its width, not its depth: a dropout is a thin crack with the master's
+    own content on both sides, while a real edge borders open space. A
+    morphological closing one logical unit wide fills the first and leaves the
+    second alone, so the alpha the closing recovers - where the reference still
+    reads as solid glass - is exactly the deleted part, and it is handed back
+    to the Lanczos.
+
+    The reference is measured the same way and subtracted: a thin gap the 2006
+    author actually drew shows up as a crack in both, and only what the master
+    invented on top of it is corrected. The whole test is scaled by how far the
+    master lost its mid-tones (_ai_tonality): a faithful upscale sharpens the
+    author's own thin dark seams - Handwriting's pencil folds are exactly that -
+    and must keep them, so only a binarised master is repaired here.
+
+    Measured once at the master's native resolution and resampled, because the
+    crack is a native-resolution artifact: detecting it after a downsample
+    would reinstate it at full strength on a size that cannot resolve it
+    anyway, where the right answer is the blurred fraction this resample
+    gives."""
+    ai = np.asarray(Image.open(os.path.join(HERE, "src", "aialpha", key + ".png"))
+                    .convert("L"), dtype=np.float64)
+    native = ai.shape[0]
+    _, ref = _resize(_orig(key), native)
+    ai = ai * _ai_scale(ref, ai)
+    k = max(3, int(native / _CRACK_UNIT) | 1)
+
+    def crack(a):
+        a = np.clip(a, 0, 255)
+        im = Image.fromarray(a.astype(np.uint8), "L")
+        closed = np.asarray(im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k)),
+                            dtype=np.float64)
+        return np.clip((closed - a - _CRACK_LO) / (_CRACK_HI - _CRACK_LO), 0, 1)
+
+    solid = np.clip((ref - _CRACK_REF_LO) / (_CRACK_REF_HI - _CRACK_REF_LO), 0, 1)
+    d = np.clip(crack(ai) - crack(ref), 0, 1) * solid * (1.0 - _ai_tonality(key))
+    if native != size:
+        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
+                       .resize((size, size), Image.LANCZOS), dtype=np.float64)
+    return np.clip(d, 0, 1)
+
+
 @functools.lru_cache(maxsize=None)
 def _up_alpha(name, idx, size):
     """Silhouette translucency at `size`. The vector mask already gives a crisp
@@ -377,8 +474,16 @@ def _up_alpha(name, idx, size):
     the drift metric in tolerance (the full-strength AI shifts the visible-zone
     median -8..-11% on the thin NO/Handwriting frames once the vector mask
     multiplies in) without the faint horizontal banding a rank-for-rank
-    histogram match leaves in the flat glass. Falls back to the plain Lanczos
-    when no master is present, so a torch-free build is identical to before."""
+    histogram match leaves in the flat glass.
+
+    A master that binarised the frame instead of upscaling it (_ai_tonality)
+    is trusted a shade less, since a two-level stencil has no gradient to
+    contribute and its median-matched level is a guess, and the coverage it
+    deleted outright is put back (_ai_dropout). Trusting such a master at zero
+    was tried and is worse than the artefact it removes: the AI alpha is what
+    holds the glass opaque up to the traced edge, and without it every one of
+    those frames goes soft all round. Falls back to the plain Lanczos when no
+    master is present, so a torch-free build is identical to before."""
     key = _key(name, idx)
     _, ref = _resize(_orig(key), size)
     path = os.path.join(HERE, "src", "aialpha", key + ".png")
@@ -388,10 +493,10 @@ def _up_alpha(name, idx, size):
     if ai.shape[0] != size:
         ai = np.asarray(Image.fromarray(ai.astype(np.float32), mode="F")
                         .resize((size, size), Image.LANCZOS), dtype=np.float64)
-    rv, av = ref[ref > 32], ai[ai > 32]
-    if av.size and rv.size:
-        ai = ai * (np.median(rv) / max(np.median(av), 1e-6))
-    return np.clip((1.0 - _BLEND_AI) * ref + _BLEND_AI * ai, 0, 255)
+    ai = ai * _ai_scale(ref, ai)
+    t = _ai_tonality(key)
+    w = (_BLEND_AI * (t + (1.0 - t) * _TONE_FLOOR)) * (1.0 - _ai_dropout(key, size))
+    return np.clip((1.0 - w) * ref + w * ai, 0, 255)
 
 
 def original(name, idx):
