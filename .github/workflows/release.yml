@@ -27,6 +27,8 @@ jobs:
         run: git diff --exit-code traced.json
 
       - name: Build cursor themes and packages
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
         run: python build.py
 
       - name: Attach artifacts to the release

@@ -27,7 +27,7 @@ import curlib
 
 THEME = "Chrome Glass Remastered"
 PKG = "chrome-glass-remastered-cursors"
-VERSION = "1.0.0"
+VERSION = os.environ.get("RELEASE_VERSION", "1.0.0").lstrip("v")
 
 SIZES = [32, 48, 64, 96, 128, 256]      # static .cur sizes (256 is the .cur ceiling)
 # Xcursor has no per-image size cap, so Linux ships the extra HiDPI sizes the
