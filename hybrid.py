@@ -377,15 +377,23 @@ def _lerp(im_a, im_b, t):
     return _compose(rgb, al * 255.0)
 
 
-def anim_frames(name, size):
+def anim_frames(name, size, interp=True):
     """(frames, rates_jiffies) for an animated cursor at the given size.
 
-    AppStarting/Hand/Wait: 27 cross-faded frames at rate 1 (60 fps).
+    AppStarting/Hand/Wait: 27 cross-faded frames at rate 1 (60 fps) when
+    interp is True - used for Windows .ani and the preview assets.
     Handwriting/NO: the author's frames and rate chunk verbatim
-    (rate 1 with a freeze on the last frame)."""
+    (rate 1 with a freeze on the last frame), regardless of interp.
+
+    interp=False returns the author's native ~20 fps cadence uninterpolated
+    for AppStarting/Hand/Wait too - Xcursor (GNOME/Mutter) redraws the
+    pointer on every frame swap with no compositor-side frame sync, and at
+    a true 60 fps cadence that lands the swap out of phase with a 60 Hz
+    panel's own refresh often enough to read as a visible flicker on the
+    animated cursors; static ones never change so there's nothing to tear."""
     n = len(BY_NAME[name]["frames"])
     base = [frame_image(name, i, size) for i in range(n)]
-    if name not in INTERP:
+    if name not in INTERP or not interp:
         return base, list(BY_NAME[name]["rates"])
     out = []
     for i in range(n):

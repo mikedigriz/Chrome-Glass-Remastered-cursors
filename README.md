@@ -24,7 +24,7 @@ In 2006 a cursor set called "Chrome Glass" appeared on DeviantArt - translucent,
 | | Chrome Glass (2006) | Chrome Glass Remastered |
 |---|---|---|
 | Resolution | 32 px | **up to 256 px** (Windows) / **512 px** (Linux), vector edges with no bitmap blur |
-| Animation | 9 frames at ~20 fps | **27 frames at 60 fps**, original rhythm preserved |
+| Animation | 9 frames at ~20 fps | **27 frames at 60 fps** (Windows/macOS) / native ~20 fps (Linux), original rhythm preserved |
 | Cursor roles | 15 Windows slots | plus **Pin** and **Person** in the set's own style |
 | Platforms | Windows | Windows, Linux (Xcursor, deb, PKGBUILD), macOS (Mousecape) |
 
@@ -56,6 +56,10 @@ plasma-apply-cursortheme "Chrome Glass Remastered"                              
 Or pick it in GNOME Tweaks / KDE System Settings. On bare X11/Wayland compositors set `XCURSOR_THEME="Chrome Glass Remastered"`.
 
 > **Cursor not changing?** If your file manager's archive tool extracts into an extra wrapper folder (some do when you right-click -> "Extract to..."), make sure the actual theme folder ends up directly at `~/.icons/Chrome Glass Remastered/` or `~/.local/share/icons/Chrome Glass Remastered/`, not nested one level deeper. After switching the theme, GNOME on X11 needs a Shell restart to pick it up (`killall -3 gnome-shell`); on Wayland or KDE, log out and back in.
+
+> **Cursor flickering?** Should be gone as of the ~20 fps Linux animations - the busy/wait spinner and the hand/link pointer are animated, and Xcursor's animated-cursor redraw isn't synced to the display's refresh, so the old 60 fps cadence periodically landed out of phase with a 60 Hz panel and read as a flicker. Static cursors never change, so they were always steady. If it looked like a browser-only bug, that's because a browser is where you sit on the animated hand cursor all day; a file manager mostly shows the static arrow.
+>
+> Still flickering after updating the theme? **Restart the app first.** Apps cache cursors at startup, so a browser left running from before the update keeps serving the old ones.
 
 ### 🍎 macOS
 

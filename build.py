@@ -34,10 +34,13 @@ SIZES = [32, 48, 64, 96, 128, 256]      # static .cur sizes (256 is the .cur cei
 # classic .cur format cannot express (its ICONDIRENTRY width/height is a single
 # byte, 256 encoded as 0 - 384/512 are simply not representable there).
 LINUX_SIZES = SIZES + [384, 512]        # static Xcursor sizes
-# animated Xcursor sizes: up to 384 for HiDPI (4K + large pointer). 512 is left
-# to the static cursors - a 27-frame animation at native 512 is ~1 MB/frame of
-# raw ARGB and roughly tripled the installed theme for the rarest case (an
-# animated cursor at 8K + max pointer).
+# animated Xcursor sizes: up to 384 for HiDPI (4K + large pointer), matching
+# the static cursors bar 512. These were once capped at 128 to chase a flicker
+# blamed on the ~26 MB files GTK/Mutter had to re-parse, but the flicker was
+# really the 60 fps cadence (see anim_frames' interp arg) and the cap did not
+# fix it. At the author's ~20 fps these files are a third the size, so the
+# HiDPI sizes are affordable again. 512 stays static-only: a 9-frame animation
+# at native 512 is ~1 MB/frame of raw ARGB, for the rarest case there is.
 ANI_SIZES = [32, 48, 64, 96, 128, 256, 384]
 # sizes inside each .ani frame, largest first; Windows refuses animated
 # frames holding a 128px image (verified empirically), 96 is the ceiling
@@ -286,7 +289,14 @@ def build_linux(dist):
         imgs = []
         if role in ANIM:
             for size in ANI_SIZES:
-                frames, rates = H.anim_frames(role, size)
+                # interp=False: Xcursor animated cursors (GNOME/Mutter) flicker
+                # at the interpolated 60 fps cadence on at least one hybrid
+                # Intel+NVIDIA X11 setup - the swap has no compositor-side
+                # frame sync, so on a 60 Hz panel it periodically lands out of
+                # phase with the refresh. The author's native ~20 fps cadence
+                # (same as Handwriting/NO) doesn't reproduce it. Windows .ani
+                # keeps the interpolated 60 fps - untested there, no reports.
+                frames, rates = H.anim_frames(role, size, interp=False)
                 hx, hy = _scale_hot(role, size)
                 for img, rate in zip(frames, rates):
                     imgs.append(_pack_ximage(size, img, hx, hy, _jiffies_ms(rate)))
@@ -302,7 +312,7 @@ def build_linux(dist):
         aliases[names[0]] = names[1:]
     open(os.path.join(out, "index.theme"), "w", newline="\n").write(
         "[Icon Theme]\nName=%s\nComment=Chrome Glass remaster - original pixels, "
-        "crisp at 32-512px, 60 fps\nInherits=Adwaita\n" % THEME)
+        "crisp at 32-512px\nInherits=Adwaita\n" % THEME)
     open(os.path.join(out, "cursor.theme"), "w", newline="\n").write(
         "[Icon Theme]\nName=%s\nInherits=%s\n" % (THEME, THEME))
     return out, aliases
@@ -367,7 +377,7 @@ def build_deb(linux_dir, aliases, packages):
                f"Maintainer: {THEME} <noreply@localhost>\nInstalled-Size: {max(1,total//1024)}\n"
                f"Section: x11\nPriority: optional\n"
                f"Description: {THEME} cursor theme\n"
-               f" Chrome Glass remaster: original pixels, crisp edges, 32-512px, 60 fps.\n")
+               f" Chrome Glass remaster: original pixels, crisp edges, 32-512px.\n")
     postinst = ("#!/bin/sh\nset -e\ncommand -v update-icon-caches >/dev/null 2>&1 && "
                 "update-icon-caches /usr/share/icons/'%s' || true\nexit 0\n" % THEME)
     ctl = _tar_gz([("control", control.encode(), 0o644, None),
