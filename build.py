@@ -439,6 +439,29 @@ def _linux_entries(linux_dir, aliases, root):
     return entries
 
 
+MAINTAINER = "mikedigriz <mikedigriz@users.noreply.github.com>"
+HOMEPAGE = "https://github.com/mikedigriz/" + PKG
+
+
+def _deb_changelog(mtime):
+    """gzipped Debian changelog - Policy 12.7 makes it mandatory, and lintian
+    fails the package without it.
+
+    Generated rather than kept in the repository: the only fact it can state is
+    which version this is, and that already lives in the git tag. gzip mtime is
+    pinned to 0 so the member is byte-stable across builds."""
+    import email.utils, datetime
+    when = email.utils.format_datetime(
+        datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc))
+    text = ("%s (%s) unstable; urgency=medium\n\n"
+            "  * Release %s. Release notes: %s/releases\n\n"
+            " -- %s  %s\n" % (PKG, VERSION, VERSION, HOMEPAGE, MAINTAINER, when))
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=9, mtime=0) as g:
+        g.write(text.encode())
+    return buf.getvalue()
+
+
 def build_deb(linux_dir, aliases, packages):
     os.makedirs(packages, exist_ok=True)
     mtime = int(time.time())
@@ -448,15 +471,16 @@ def build_deb(linux_dir, aliases, packages):
     # code, NOTICE the artwork, and both matter here.
     copyright_txt = b"\n\n".join(open(os.path.join(HERE, fn), "rb").read() for fn in LEGAL)
     entries.append(("usr/share/doc/%s/copyright" % PKG, copyright_txt, 0o644, None))
+    entries.append(("usr/share/doc/%s/changelog.gz" % PKG, _deb_changelog(mtime), 0o644, None))
     total = sum(len(d) for _, d, _, _ in entries if d)
     md5 = ["%s  %s" % (hashlib.md5(d).hexdigest(), arc)
            for arc, d, _, link in entries if link is None]
     data_tar = _tar_gz(entries, mtime)
     control = (f"Package: {PKG}\nVersion: {VERSION}\nArchitecture: all\n"
-               f"Maintainer: mikedigriz <mikedigriz@users.noreply.github.com>\n"
+               f"Maintainer: {MAINTAINER}\n"
                f"Installed-Size: {max(1,total//1024)}\n"
                f"Section: x11\nPriority: optional\n"
-               f"Homepage: https://github.com/mikedigriz/{PKG}\n"
+               f"Homepage: {HOMEPAGE}\n"
                f"Description: {THEME} cursor theme\n"
                f" Chrome Glass remaster: original pixels, crisp edges, 32-512px.\n")
     # Without the alternatives entry the theme installs but never becomes the

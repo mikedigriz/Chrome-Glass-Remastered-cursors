@@ -79,7 +79,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends lintian
-          lintian --fail-on error --no-tag-display-limit packages/*.deb
+          lintian --fail-on error --tag-display-limit 0 packages/*.deb
 
   arch:
     needs: build
