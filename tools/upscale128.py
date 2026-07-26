@@ -9,8 +9,9 @@ inpaints the transparent margin with the nearest visible colour first so
 the network never sees that edge.
 
 Needs `pip install py-real-esrgan opencv-python` (pulls torch). Results are
-committed; hybrid.py falls back to a plain Lanczos upscale if src/ai is
-missing, so the normal build never needs torch.
+committed, so the normal build never needs torch. Note there is no fallback:
+hybrid._base128 and trace.py both open src/ai unconditionally, so a missing
+src/ai is a FileNotFoundError, not a graceful degradation.
 """
 import os, sys
 

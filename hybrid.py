@@ -199,7 +199,7 @@ def _dominant_hue_dir(rgb, a):
     return mean_dir / n if n > 1e-6 else None
 
 
-def _declutter_hue_outliers(name, idx, rgb, size):
+def _declutter_hue_outliers(name, idx, rgb):
     """Real-ESRGAN is blind to alpha, and can invent a stray colour cast right
     at a high-contrast silhouette edge - Arrow_Down (blue glass) got a thin
     orange fringe tracing its whole outline, baked into the raw src/ai512
@@ -318,18 +318,31 @@ def _master(name, idx):
     if name not in INTERP:
         return rgb, anchor
     n = len(BY_NAME[name]["frames"])
-
-    def lin(i):
-        return V.srgb_to_linear(np.clip(_master_raw(name, i % n)[0], 0, 255)
-                                .astype(np.uint8))
-
     w = _SHEEN_SMOOTH
-    out = sum(lin(idx + d) * wt for d, wt in zip((-1, 0, 1), w)) / sum(w)
+    out = sum(_lin_master(name, (idx + d) % n) * wt
+              for d, wt in zip((-1, 0, 1), w)) / sum(w)
     still = _tip_still(name, idx, anchor)
     if still is not None:
-        mean = sum(lin(i) for i in range(n)) / n
+        mean = _cycle_mean(name)
         out = mean * still[..., None] + out * (1.0 - still[..., None])
     return V.linear_to_srgb(out).astype(np.float64), anchor
+
+
+@functools.lru_cache(maxsize=None)
+def _lin_master(name, idx):
+    return V.srgb_to_linear(np.clip(_master_raw(name, idx)[0], 0, 255).astype(np.uint8))
+
+
+@functools.lru_cache(maxsize=None)
+def _cycle_mean(name):
+    """Mean colour over the whole cycle, in linear light.
+
+    Cached per cursor, not recomputed per frame: _master used to rebuild this
+    inside every frame it rendered, so a 9-frame cycle ran the 512px
+    srgb_to_linear 81 times where 9 would do. Same summation order, so the
+    result is bit-for-bit what the inline version produced."""
+    n = len(BY_NAME[name]["frames"])
+    return sum(_lin_master(name, i) for i in range(n)) / n
 
 
 @functools.lru_cache(maxsize=None)
@@ -339,7 +352,13 @@ def _master_raw(name, idx):
     Every cursor now anchors on the native anime src/ai512 (grey/pale included -
     the anime_6B model invents no colour on flat glass, so the old honest-Lanczos
     bypass is gone and the pale Size*/IBeam/Cross cursors finally carry real
-    network detail). Falls back to src/ai256, then a Lanczos of the 128 base.
+    network detail).
+
+    There used to be a src/ai256 level and a plain-Lanczos level under this one.
+    Neither could ever fire: src/ai512 is committed and complete, so the fallback
+    chain only cost 3.9 MB of unreachable masters in the repository. A missing
+    master is now a hard error instead of a silent quality drop nobody would
+    notice until the cursors shipped soft.
 
     Crispness is a single deterministic unsharp at the anchor rather than a
     sharper (noisier) network: on this clean source it sharpens the luminance
@@ -347,19 +366,14 @@ def _master_raw(name, idx):
     master keeps every smaller size crisp too. Saturation is anchored later, in
     frame_image, at the shipped size (see there)."""
     key = _key(name, idx)
-    rgb, anchor = None, 256
-    for a in (512, 256):
-        path = os.path.join(HERE, "src", f"ai{a}", key + ".png")
-        if os.path.exists(path):
-            rgb = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64)
-            anchor = a
-            break
-    if rgb is None:
-        rgb128, a128 = _base128(name, idx)
-        rgb, _ = _resize(np.dstack([rgb128, a128]), 256)
-        anchor = 256
+    anchor = 512
+    path = os.path.join(HERE, "src", f"ai{anchor}", key + ".png")
+    if not os.path.exists(path):
+        raise SystemExit("missing colour master %s - regenerate with "
+                         "tools/upscale512.py" % path)
+    rgb = np.asarray(Image.open(path).convert("RGB"), dtype=np.float64)
     rgb = _unsharp(rgb, radius=2.2 * anchor / 512.0, percent=90, dark=0.45)
-    rgb = _declutter_hue_outliers(name, idx, rgb, anchor)
+    rgb = _declutter_hue_outliers(name, idx, rgb)
     rgb = _declutter_engraved_detail(name, idx, rgb, anchor)
     return rgb, anchor
 

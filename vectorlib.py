@@ -5,7 +5,8 @@ rendered to a crisp anti-aliased RGBA bitmap (PIL, supersampled) at any size.
 
 Primitive dict keys:
   poly   : [(x,y), ...]           polygon points (logical units, 0..32)
-  path   : "M .. L .. Z"          raw SVG path (alternative to poly)
+  line   : [(x,y), ...]           open polyline, stroked rather than filled
+  dot    : (x, y, r)              filled circle (what cursors.HELP_EXTRA uses)
   grad   : (c1, c2, (x1,y1,x2,y2)) linear gradient in logical coords
   fill   : (r,g,b,a)              solid fill (if no grad)
   stroke : ((r,g,b,a), width)     outline
@@ -13,12 +14,9 @@ Primitive dict keys:
   offset : (dx, dy)               translate (for shadows)
   opacity: float                  0..1 layer opacity
 """
-import struct, math
+import math
+import numpy as _np
 from PIL import Image, ImageDraw, ImageFilter
-try:
-    import numpy as _np
-except ImportError:
-    _np = None
 
 LOGICAL = 32
 
@@ -43,21 +41,12 @@ def _grad_image(size, c1, c2, vec):
     x1, y1, x2, y2 = vec
     dx, dy = x2 - x1, y2 - y1
     denom = dx * dx + dy * dy or 1.0
-    if _np is not None:
-        ys, xs = _np.mgrid[0:size, 0:size]
-        t = _np.clip(((xs - x1) * dx + (ys - y1) * dy) / denom, 0.0, 1.0)
-        a = _np.array(c1, dtype=_np.float32)
-        b = _np.array(c2, dtype=_np.float32)
-        arr = (a + (b - a) * t[..., None]).round().astype(_np.uint8)
-        return Image.fromarray(arr, "RGBA")
-    img = Image.new("RGBA", (size, size))
-    px = img.load()
-    for y in range(size):
-        for x in range(size):
-            t = ((x - x1) * dx + (y - y1) * dy) / denom
-            t = 0.0 if t < 0 else 1.0 if t > 1 else t
-            px[x, y] = tuple(round(a + (b - a) * t) for a, b in zip(c1, c2))
-    return img
+    ys, xs = _np.mgrid[0:size, 0:size]
+    t = _np.clip(((xs - x1) * dx + (ys - y1) * dy) / denom, 0.0, 1.0)
+    a = _np.array(c1, dtype=_np.float32)
+    b = _np.array(c2, dtype=_np.float32)
+    arr = (a + (b - a) * t[..., None]).round().astype(_np.uint8)
+    return Image.fromarray(arr, "RGBA")
 
 
 def _poly_px(points, scale):

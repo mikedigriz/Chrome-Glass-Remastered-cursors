@@ -1,6 +1,9 @@
 # Keep shell scripts LF so they run on Linux even when cloned on Windows.
 *.sh            text eol=lf
 *.py            text eol=lf
+# Extensionless, so it would otherwise inherit the platform default: cloned on
+# Windows with core.autocrlf=true it gets CRLF and makepkg chokes on package().
+PKGBUILD        text eol=lf
 # Windows INF expects CRLF.
 *.inf           text eol=crlf
 # Binary assets - never touch line endings.
@@ -10,3 +13,9 @@
 *.cur           binary
 *.ani           binary
 *.deb           binary
+# Generated, not written by hand - keep it out of GitHub's language stats and
+# collapsed in diffs.
+traced.json     linguist-generated=true
+src/ai/**       linguist-generated=true
+src/ai512/**    linguist-generated=true
+src/aialpha/**  linguist-generated=true

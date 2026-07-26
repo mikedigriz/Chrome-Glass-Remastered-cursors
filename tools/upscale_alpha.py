@@ -9,10 +9,11 @@ that inner structure. Alpha is monochrome, so - unlike the colour pass - the
 network cannot invent the cross-hatch chroma noise that keeps AI off the pale
 glass cursors; this is why an alpha master is safe for the whole set.
 
-hybrid._up_alpha histogram-matches each level to the plain Lanczos, so the two
-share an identical value distribution - the overall translucency (and the
-build's alpha-drift metric) is unchanged, only the sharpness of the inner
-gradient improves.
+hybrid._up_alpha puts the AI master's visible-zone median onto the plain
+Lanczos reference and then blends the two at _BLEND_AI. (It is not a histogram
+match - see _up_alpha's own docstring for why a rank-for-rank match was tried
+and rejected.) That blend is a deliberate trade against the build's alpha-drift
+metric, tuned to the bracket recorded at hybrid._BLEND_AI.
 
 Same deps/caveats as upscale512 (py-real-esrgan, opencv, torch). Results are
 committed; the build falls back to plain Lanczos when src/aialpha is absent.

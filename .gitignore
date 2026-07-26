@@ -5,3 +5,9 @@ Thumbs.db
 dist/
 packages/
 weights/
+.venv/
+venv/
+.idea/
+.vscode/
+.claude/
+tools/_social_preview.html

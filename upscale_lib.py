@@ -1,4 +1,7 @@
-"""Shared RGBA-safe upscale helpers for tools/upscale256.py and hybrid.py.
+"""Shared RGBA-safe upscale helpers for the tools/upscale*.py regeneration scripts.
+
+(hybrid.py does not import this - it reads the committed masters and never
+touches torch or cv2, which is the whole point of committing them.)
 
 Real-ESRGAN (and any RGB-only super-res net) has no notion of alpha: fed a
 straight RGBA PNG it sees the transparent zone as solid black and "learns"

@@ -3,6 +3,7 @@
 Frames are represented as dicts: {"img": PIL.Image RGBA, "hx": int, "hy": int}.
 """
 import struct, io
+import numpy as np
 from PIL import Image
 
 
@@ -84,38 +85,15 @@ def read_cur(data):
 def _encode_dib(img):
     """RGBA Image -> DIB blob (BITMAPINFOHEADER + 32bpp BGRA XOR + AND mask)."""
     w, h = img.size
-    try:
-        import numpy as np
-        arr = np.asarray(img.convert("RGBA"), dtype=np.uint8)[::-1]  # bottom-up
-        xor_b = arr[..., [2, 1, 0, 3]].tobytes()
-        and_row = ((w + 31) // 32) * 4
-        bits = np.zeros((h, and_row * 8), dtype=np.uint8)
-        bits[:, :w] = arr[..., 3] == 0
-        and_b = np.packbits(bits, axis=1).tobytes()
-        hdr = struct.pack("<IiiHHIIiiII", 40, w, h * 2, 1, 32, 0,
-                          len(xor_b) + len(and_b), 0, 0, 0, 0)
-        return hdr + xor_b + and_b
-    except ImportError:
-        pass
-    px = img.load()
-    row_xor = w * 4
-    xor = bytearray()
-    for y in range(h - 1, -1, -1):
-        for x in range(w):
-            r, g, b, a = px[x, y]
-            xor += bytes((b, g, r, a))
+    arr = np.asarray(img.convert("RGBA"), dtype=np.uint8)[::-1]  # bottom-up
+    xor_b = arr[..., [2, 1, 0, 3]].tobytes()
     and_row = ((w + 31) // 32) * 4
-    andmask = bytearray()
-    for y in range(h - 1, -1, -1):
-        rowbits = bytearray(and_row)
-        for x in range(w):
-            a = px[x, y][3]
-            if a == 0:
-                rowbits[x // 8] |= (1 << (7 - x % 8))
-        andmask += rowbits
+    bits = np.zeros((h, and_row * 8), dtype=np.uint8)
+    bits[:, :w] = arr[..., 3] == 0
+    and_b = np.packbits(bits, axis=1).tobytes()
     hdr = struct.pack("<IiiHHIIiiII", 40, w, h * 2, 1, 32, 0,
-                      len(xor) + len(andmask), 0, 0, 0, 0)
-    return bytes(hdr) + bytes(xor) + bytes(andmask)
+                      len(xor_b) + len(and_b), 0, 0, 0, 0)
+    return hdr + xor_b + and_b
 
 
 def write_cur(frames):
@@ -126,6 +104,12 @@ def write_cur(frames):
     offset = 6 + n * 16
     for f, blob in zip(frames, blobs):
         w, h = f["img"].size
+        # ICONDIRENTRY width/height are single bytes with 256 encoded as 0, so
+        # anything larger would silently be read back as 256. Xcursor has no
+        # such cap and LINUX_SIZES goes to 512, so this is one bump of SIZES
+        # away from writing corrupt .cur files.
+        if w > 256 or h > 256:
+            raise ValueError(".cur cannot hold a %dx%d image (256 is the ceiling)" % (w, h))
         out += bytes((w if w < 256 else 0, h if h < 256 else 0, 0, 0))
         out += struct.pack("<HHII", f["hx"], f["hy"], len(blob), offset)
         offset += len(blob)
@@ -136,7 +120,10 @@ def write_cur(frames):
 
 def read_ani(data):
     """Parse .ani -> dict with header fields, rates, seqs, and per-frame .cur bytes."""
-    assert data[:4] == b"RIFF" and data[8:12] == b"ACON"
+    # not an assert: under python -O the whole check would vanish and arbitrary
+    # bytes would be parsed as an animation
+    if data[:4] != b"RIFF" or data[8:12] != b"ACON":
+        raise ValueError("not a RIFF/ACON animated cursor")
     pos = 12
     anih = None
     rates = None
@@ -172,12 +159,19 @@ def _chunk(cid, body):
     return out
 
 
-def write_ani(ani, new_frames_bytes, new_w, new_h):
-    """Rebuild .ani with new frame .cur bytes and updated width/height in anih."""
-    anih = bytearray(ani["anih"])
+def write_ani(ani, new_frames_bytes):
+    """Rebuild an .ani around new per-frame .cur bytes.
+
+    The caller owns the anih: its nFrames/nSteps must already match
+    len(new_frames_bytes), because nothing here reconciles them. (There used to
+    be new_w/new_h parameters that patched iWidth/iHeight, but every caller
+    passed 0, 0 - which is what the anih already held - so they only advertised
+    a behaviour that never happened.)"""
     # anih layout: cbSize,nFrames,nSteps,iWidth,iHeight,iBitCount,nPlanes,iDispRate,bfAttributes
-    struct.pack_into("<ii", anih, 12, new_w, new_h)
-    body = _chunk(b"anih", bytes(anih))
+    nframes = struct.unpack_from("<I", ani["anih"], 4)[0]
+    if nframes != len(new_frames_bytes):
+        raise ValueError("anih claims %d frames, got %d" % (nframes, len(new_frames_bytes)))
+    body = _chunk(b"anih", bytes(ani["anih"]))
     if ani["rates"] is not None:
         body += _chunk(b"rate", struct.pack("<%dI" % len(ani["rates"]), *ani["rates"]))
     if ani["seqs"] is not None:

@@ -27,7 +27,10 @@ import curlib
 
 THEME = "Chrome Glass Remastered"
 PKG = "chrome-glass-remastered-cursors"
-VERSION = os.environ.get("RELEASE_VERSION", "1.0.0").lstrip("v")
+# CI passes the tag. The local fallback is deliberately lower than any release
+# so a dev build can never masquerade as one: dpkg used to happily see a
+# hand-built 1.0.0 as newer-or-equal to nothing and refuse the real package.
+VERSION = os.environ.get("RELEASE_VERSION", "0.0.0+local").lstrip("v")
 
 SIZES = [32, 48, 64, 96, 128, 256]      # static .cur sizes (256 is the .cur ceiling)
 # Xcursor has no per-image size cap, so Linux ships the extra HiDPI sizes the
@@ -47,27 +50,84 @@ ANI_SIZES = [32, 48, 64, 96, 128, 256, 384]
 ANI_SIZES_WIN = [96, 64, 48, 32]
 ANI_SIZE = 128                          # reference size for timing
 
+# Built into dist/ but kept out of the shipped archive. No scheme slot has
+# pointed at Arrow_Down since the link-hover experiment was reverted, and
+# tools/gen_social_preview.py reads it straight out of dist/, so shipping it
+# only cost every user 407 KB in %SystemRoot%.
+WIN_UNSHIPPED = {"Arrow_Down.cur"}
+
+# NOTICE asks that the acknowledgement travels with the artwork, so both
+# archives carry it next to the cursors rather than only in the repo.
+LEGAL = ("LICENSE", "NOTICE")
+
+# Xcursor role -> every name that should resolve to it. The first entry is the
+# real file, the rest become symlinks in the tar/deb, so length here is free.
+#
+# The hex names are the legacy MD5 aliases. Firefox, Chromium/Electron, Java and
+# older GTK2 request cursors by those and by nothing else; without them the
+# pointer silently reverts to the fallback theme mid-drag or on link hover,
+# which is the most visible way this theme can look unfinished on X11.
+#
+# Each hex below is placed by the canonical name Bibata's configs/normal/x.build.toml
+# links it to, not from memory - a hex under the wrong role is worse than no hex
+# at all, because the fallback theme would at least have shown the right shape.
 XROLES = {
-    "Arrow":     ["left_ptr", "default", "arrow", "top_left_arrow", "context-menu"],
-    "Help":      ["help", "question_arrow", "left_ptr_help", "whats_this", "dnd-ask"],
-    "AppStarting": ["progress", "left_ptr_watch", "half-busy"],
+    "Arrow":     ["left_ptr", "default", "arrow", "top_left_arrow", "right_ptr",
+                  "context-menu"],
+    "Help":      ["help", "question_arrow", "left_ptr_help", "whats_this", "dnd-ask",
+                  "5c6cd98b3f3ebcb1f9c7f1c204630408",
+                  "d9ce0ab605698f320427677b458ad60b"],
+    "AppStarting": ["progress", "left_ptr_watch", "half-busy",
+                    "00000000000000020006000e7e9ffc3f",
+                    "08e8e1c95fe2fc01f976f1e063a24ccd",
+                    "3ecb610c1bf2410f44200f48c40d3599"],
     "Wait":      ["watch", "wait"],
-    "Cross":     ["cross", "crosshair", "tcross", "cross_reverse", "diamond_cross"],
+    # `cell` is a plus/crosshair in spreadsheets, so it belongs here rather than
+    # falling through to another theme.
+    "Cross":     ["cross", "crosshair", "tcross", "cross_reverse", "diamond_cross",
+                  "cell", "plus", "X_cursor"],
     "IBeam":     ["xterm", "text", "ibeam", "vertical-text"],
     "Handwriting": ["pencil", "draft"],
-    "NO":        ["not-allowed", "crossed_circle", "forbidden", "no-drop", "dnd-none", "circle"],
+    # `circle` stays on NO. It is a literal circle outline in X11 rather than a
+    # forbidden sign, but a near-miss glyph from this theme beats the jarring
+    # jump to whatever the fallback theme draws - the same call made for
+    # `cell`/`plus` above.
+    "NO":        ["not-allowed", "crossed_circle", "forbidden", "no-drop", "dnd-none",
+                  "circle", "03b6e0fcb3499374a867c041f52298f0"],
     "SizeNS":    ["size_ver", "ns-resize", "sb_v_double_arrow", "v_double_arrow",
-                  "n-resize", "s-resize", "double_arrow", "row-resize", "top_side", "bottom_side"],
+                  "n-resize", "s-resize", "double_arrow", "row-resize", "top_side",
+                  "bottom_side", "00008160000006810000408080010102",
+                  "2870a09082c103050810ffdffffe0204"],
     "SizeWE":    ["size_hor", "ew-resize", "sb_h_double_arrow", "h_double_arrow",
-                  "e-resize", "w-resize", "col-resize", "left_side", "right_side"],
+                  "e-resize", "w-resize", "col-resize", "left_side", "right_side",
+                  "028006030e0e7ebffc7f7070c0600140"],
+    # bd_double_arrow is the NW-SE diagonal (it links to nwse-resize/size_fdiag),
+    # so it belongs here. It sat under SizeNESW and drew the wrong diagonal.
     "SizeNWSE":  ["size_fdiag", "nwse-resize", "nw-resize", "se-resize",
-                  "top_left_corner", "bottom_right_corner"],
+                  "top_left_corner", "bottom_right_corner", "bd_double_arrow",
+                  "c7088f0f3e6c8088236ef8e1e3e70000"],
     "SizeNESW":  ["size_bdiag", "nesw-resize", "ne-resize", "sw-resize",
-                  "top_right_corner", "bottom_left_corner", "fd_double_arrow", "bd_double_arrow"],
-    "SizeAll":   ["size_all", "move", "fleur", "all-scroll", "closedhand", "grabbing", "dnd-move"],
-    "UpArrow":   ["up_arrow", "center_ptr", "sb_up_arrow"],
+                  "top_right_corner", "bottom_left_corner", "fd_double_arrow",
+                  "fcf1c3c7cd4491d801f1e1c78f100000"],
+    "SizeAll":   ["size_all", "move", "fleur", "all-scroll", "dnd-move",
+                  "4498f0e0c1937ffe01fd06f973665830",
+                  "9081237383d90e509aa00f00170e968f"],
+    "UpArrow":   ["up_arrow", "up-arrow", "center_ptr", "sb_up_arrow"],
+    # openhand/grab and closedhand/grabbing are one pair: sending the closed half
+    # to SizeAll turned a hand into a four-way arrow mid-drag. The grabbing hex
+    # follows them here for the same reason.
     "Hand":      ["pointer", "hand", "hand1", "hand2", "pointing_hand",
-                  "openhand", "grab", "dnd-copy", "copy", "alias", "link"],
+                  "openhand", "grab", "closedhand", "grabbing",
+                  "dnd-copy", "copy", "alias", "link", "dnd-link",
+                  "9d800788f1b08800ae810202380a0822",
+                  "e29285e634086352946a0e7090d73106",
+                  "1081e37283d90000800003c07f3ef6bf",
+                  "6407b0e94181790501fd1e167b474872",
+                  "b66166c04f8c3109214a4fbd64a50fc8",
+                  "3085a0e285430894940527032f8b26df",
+                  "640fb0e74195791501fd1ed57b41487f",
+                  "a2a266d0498c3104214a47bd64ab0fc8",
+                  "fcf21c00b30f7e3f83fe0dfd12e71cff"],
 }
 
 # Windows scheme slots in registry order (17 on Windows 10/11: pin and person
@@ -193,7 +253,7 @@ def build_windows(dist):
         ani = {"anih": _make_anih(len(rates), rates[0] if uniform else 1),
                "rates": None if uniform else rates, "seqs": None}
         open(os.path.join(out, name + ".ani"), "wb").write(
-            curlib.write_ani(ani, blobs, 0, 0))
+            curlib.write_ani(ani, blobs))
     write_inf(out)
     return out
 
@@ -201,7 +261,11 @@ def build_windows(dist):
 def build_original(dist):
     """The authentic 2006 set, byte for byte at its native 32px - a reference
     baseline next to the remaster (and a fallback to generate from). No Pin or
-    Person: those slots did not exist in the original."""
+    Person: those slots did not exist in the original.
+
+    Deliberately a local artefact only: it is not packaged into packages/ and
+    not attached to releases. It exists to diff the remaster against, not to
+    install - so it ships no Install.inf either."""
     out = os.path.join(dist, "original", "Chrome Glass (2006)")
     os.makedirs(out, exist_ok=True)
     for name in H.STATIC:
@@ -217,7 +281,7 @@ def build_original(dist):
         ani = {"anih": _make_anih(len(rates), rates[0] if uniform else 1),
                "rates": None if uniform else rates, "seqs": None}
         open(os.path.join(out, name + ".ani"), "wb").write(
-            curlib.write_ani(ani, blobs, 0, 0))
+            curlib.write_ani(ani, blobs))
     return out
 
 
@@ -225,10 +289,11 @@ def write_inf(out):
     strings = 'CUR_DIR      = "%s"\nSCHEME_NAME  = "%s"' % (THEME, THEME)
     slot_strings = "\n".join('%-12s = "%s"' % (role, fn) for role, fn in WIN_SLOTS)
     reg_val = ",".join("%%10%%\\%%CUR_DIR%%\\%%%s%%" % role for role, _ in WIN_SLOTS)
-    copy = "\n".join('"%s"' % fn for _, fn in WIN_SLOTS) + '\n"Arrow_Down.cur"'
+    copy = "\n".join('"%s"' % fn for _, fn in WIN_SLOTS)
     inf = f""";  {THEME} - cursor scheme installer
 ;  Right-click this file, choose "Install", then pick "{THEME}" in
 ;  Settings > Bluetooth & devices > Mouse > Additional mouse settings > Pointers.
+;  Right-click > "Uninstall" removes the scheme and the copied cursors again.
 
 [Version]
 signature="$CHICAGO$"
@@ -237,9 +302,19 @@ signature="$CHICAGO$"
 CopyFiles = Scheme.Cur
 AddReg    = Scheme.Reg
 
+[DefaultUninstall]
+DelFiles = Scheme.Cur
+DelReg   = Scheme.Reg
+
 [DestinationDirs]
 Scheme.Cur = 10,"%CUR_DIR%"
 
+; HKCU only. Writing the same scheme name to the machine-wide hive as well
+; (HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Control Panel\\Cursors\\Schemes)
+; would fix the rare case where the elevating admin is not the logged-in user,
+; but the Pointers tab merges both hives, so the common case would get the
+; scheme listed twice. Not worth the trade until it can be checked on a real
+; machine.
 [Scheme.Reg]
 HKCU,"Control Panel\\Cursors\\Schemes","%SCHEME_NAME%",,"{reg_val}"
 
@@ -251,7 +326,7 @@ HKCU,"Control Panel\\Cursors\\Schemes","%SCHEME_NAME%",,"{reg_val}"
 
 {slot_strings}
 """
-    open(os.path.join(out, "Install.inf"), "w", newline="\r\n").write(inf)
+    open(os.path.join(out, "Install.inf"), "w", newline="\r\n", encoding="utf-8").write(inf)
 
 
 # ----------------------------------------------------------------------------- Linux
@@ -369,20 +444,47 @@ def build_deb(linux_dir, aliases, packages):
     mtime = int(time.time())
     root = "usr/share/icons/" + THEME
     entries = _linux_entries(linux_dir, aliases, root)
+    # Policy 12.5: every package needs a copyright file. LICENSE covers the
+    # code, NOTICE the artwork, and both matter here.
+    copyright_txt = b"\n\n".join(open(os.path.join(HERE, fn), "rb").read() for fn in LEGAL)
+    entries.append(("usr/share/doc/%s/copyright" % PKG, copyright_txt, 0o644, None))
     total = sum(len(d) for _, d, _, _ in entries if d)
     md5 = ["%s  %s" % (hashlib.md5(d).hexdigest(), arc)
            for arc, d, _, link in entries if link is None]
     data_tar = _tar_gz(entries, mtime)
     control = (f"Package: {PKG}\nVersion: {VERSION}\nArchitecture: all\n"
-               f"Maintainer: {THEME} <noreply@localhost>\nInstalled-Size: {max(1,total//1024)}\n"
+               f"Maintainer: mikedigriz <mikedigriz@users.noreply.github.com>\n"
+               f"Installed-Size: {max(1,total//1024)}\n"
                f"Section: x11\nPriority: optional\n"
+               f"Homepage: https://github.com/mikedigriz/{PKG}\n"
                f"Description: {THEME} cursor theme\n"
                f" Chrome Glass remaster: original pixels, crisp edges, 32-512px.\n")
-    postinst = ("#!/bin/sh\nset -e\ncommand -v update-icon-caches >/dev/null 2>&1 && "
-                "update-icon-caches /usr/share/icons/'%s' || true\nexit 0\n" % THEME)
+    # Without the alternatives entry the theme installs but never becomes the
+    # system X cursor theme, so the user has to go hunting for it in a settings
+    # panel - the single most common "the deb did nothing" report for cursor
+    # packages. Priority 20 stays below a user's deliberate pick.
+    index = "/usr/share/icons/%s/index.theme" % THEME
+    postinst = (
+        "#!/bin/sh\nset -e\n"
+        "if command -v update-alternatives >/dev/null 2>&1; then\n"
+        # /usr/share/icons/default is normally provided by another package;
+        # on a bare system it does not exist and update-alternatives refuses
+        # to create the link, which under `set -e` fails the whole install.
+        "    mkdir -p /usr/share/icons/default\n"
+        "    update-alternatives --install /usr/share/icons/default/index.theme "
+        "x-cursor-theme '%s' 20\nfi\n"
+        "exit 0\n" % index)
+    prerm = (
+        "#!/bin/sh\nset -e\n"
+        'if [ "$1" = remove ] || [ "$1" = deconfigure ]; then\n'
+        "    if command -v update-alternatives >/dev/null 2>&1; then\n"
+        "        update-alternatives --remove x-cursor-theme '%s'\n"
+        "    fi\nfi\n"
+        "exit 0\n" % index)
     ctl = _tar_gz([("control", control.encode(), 0o644, None),
                    ("md5sums", ("\n".join(md5) + "\n").encode(), 0o644, None),
-                   ("postinst", postinst.encode(), 0o755, None)], mtime)
+                   ("postinst", postinst.encode(), 0o755, None),
+                   ("prerm", prerm.encode(), 0o755, None)], mtime)
     def ar(name, dd):
         h = "%-16s%-12d%-6d%-6d%-8o%-10d`\n" % (name, mtime, 0, 0, 0o100644, len(dd))
         return h.encode() + dd + (b"\n" if len(dd) % 2 else b"")
@@ -396,13 +498,23 @@ def build_deb(linux_dir, aliases, packages):
 # macOS has no system cursor themes; Mousecape applies "capes". Only cursor
 # identifiers with a confident mapping are included - Mousecape leaves the
 # rest at the system default.
+# Identifiers checked against cursorMap() in Mousecape's mousecloak/MCDefs.m.
+# com.apple.cursor.3 is "Forbidden", NOT the crosshair it was mapped to here -
+# the cape was replacing the no-entry cursor with a plus sign. The crosshair is
+# com.apple.cursor.7. com.apple.cursor.13 ("Pointing") was already right.
 MAC_CURSORS = [
     ("com.apple.coregraphics.Arrow", "Arrow", False),
     ("com.apple.coregraphics.IBeam", "IBeam", False),
     ("com.apple.coregraphics.Move", "SizeAll", False),
     ("com.apple.coregraphics.Wait", "Wait", True),
-    ("com.apple.cursor.3", "Cross", False),        # crosshair
-    ("com.apple.cursor.13", "Hand", False),        # pointing hand
+    ("com.apple.cursor.7", "Cross", False),        # Crosshair
+    ("com.apple.cursor.13", "Hand", False),        # Pointing
+    ("com.apple.cursor.3", "NO", False),           # Forbidden
+    ("com.apple.cursor.40", "Help", False),        # Help
+    ("com.apple.cursor.23", "SizeNS", False),      # Resize N-S
+    ("com.apple.cursor.28", "SizeWE", False),      # Resize E-W
+    ("com.apple.cursor.30", "SizeNESW", False),    # Resize NE-SW
+    ("com.apple.cursor.34", "SizeNWSE", False),    # Resize NW-SE
 ]
 MAC_SCALES = [1, 2, 5]                             # points x scale = pixels
 
@@ -412,14 +524,26 @@ def _cape_strip(name, animated, scale):
     size = 32 * scale
     if animated:
         frames, _ = H.anim_frames(name, size)
+    elif name in ANIM:
+        # A cape has one FrameDuration, so it cannot express the author's
+        # "play once, then hold" rate chunk. Ship the settled last frame
+        # instead of frame 0, which is the start of the draw-on.
+        frames = [H.frame_image(name, len(H.BY_NAME[name]["frames"]) - 1, size)]
     else:
-        frames = [H.frame_image(name, 0, size)]
+        frames = [static_image(name, size)]
     strip = Image.new("RGBA", (size, size * len(frames)), (0, 0, 0, 0))
     for i, f in enumerate(frames):
         strip.alpha_composite(f, (0, i * size))
     buf = io.BytesIO()
     strip.save(buf, "PNG")
     return buf.getvalue(), len(frames)
+
+
+def _cape_version(ver):
+    """'1.2.5' -> 1.0205: monotonic in a single float, two digits per component."""
+    parts = [int(p) for p in ver.split(".")[:3] if p.isdigit()]
+    parts += [0] * (3 - len(parts))
+    return parts[0] + parts[1] / 100.0 + parts[2] / 10000.0
 
 
 def build_mac(packages):
@@ -441,7 +565,10 @@ def build_mac(packages):
     cape = {
         "Author": "Chrome Glass Remastered",
         "CapeName": THEME,
-        "CapeVersion": float(VERSION.rsplit(".", 1)[0]),
+        # Mousecape wants a number, so fold the patch component in rather than
+        # dropping it - "1.0.5" used to become 1.0 and no patch release ever
+        # looked newer than the one before it.
+        "CapeVersion": _cape_version(VERSION),
         "Cloud": False,
         "HiDPI": True,
         "Identifier": "com.github.chrome-glass-remastered",
@@ -460,9 +587,14 @@ def build_artifacts(win_dir, linux_dir, aliases, packages):
     zpath = os.path.join(packages, "ChromeGlassRemastered-windows.zip")
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for fn in sorted(os.listdir(win_dir)):
-            z.write(os.path.join(win_dir, fn), THEME + "/" + fn)
+            if fn not in WIN_UNSHIPPED:
+                z.write(os.path.join(win_dir, fn), THEME + "/" + fn)
+        for fn in LEGAL:
+            z.write(os.path.join(HERE, fn), THEME + "/" + fn)
     tpath = os.path.join(packages, "ChromeGlassRemastered-linux.tar.gz")
     entries = _linux_entries(linux_dir, aliases, THEME)
+    entries += [(THEME + "/" + fn, open(os.path.join(HERE, fn), "rb").read(), 0o644, None)
+                for fn in LEGAL]
     open(tpath, "wb").write(_tar_gz(entries, int(time.time())))
     return zpath, tpath
 
@@ -516,8 +648,16 @@ def _gif_frame(rgba, bg=(248, 248, 250)):
 
 def build_animations():
     assets = os.path.join(HERE, "assets")
-    if os.path.exists(assets): shutil.rmtree(assets)
-    os.makedirs(assets)
+    os.makedirs(assets, exist_ok=True)
+    # Only clear what this function rewrites. Wiping the whole directory also
+    # took assets/social-preview.png with it - that one is committed and comes
+    # from tools/gen_social_preview.py, which the build never calls, so every
+    # build silently deleted the repo's cover image.
+    stale = [n + ext for n in ANIM for ext in (".webp", ".gif")]
+    stale += ["animations.webp", "animations.gif"]
+    for fn in stale:
+        p = os.path.join(assets, fn)
+        if os.path.exists(p): os.remove(p)
     disp = 128
     for name in ANIM:
         frames, rates = H.anim_frames(name, disp)
@@ -596,9 +736,14 @@ def check_inf(win):
     missing = [f for f in referenced if not os.path.exists(os.path.join(win, f))]
     if missing:
         raise SystemExit("Install.inf references missing files: %s" % ", ".join(missing))
-    for must in ("Pin.cur", "Person.cur"):
-        if must not in referenced:
-            raise SystemExit("Install.inf lost the %s slot" % must)
+    # every slot, not just the two newest - a slot silently dropping out of
+    # WIN_SLOTS used to be invisible until someone installed the scheme
+    lost = [fn for _, fn in WIN_SLOTS if fn not in referenced]
+    if lost:
+        raise SystemExit("Install.inf lost slots: %s" % ", ".join(lost))
+    for section in ("[DefaultInstall]", "[DefaultUninstall]"):
+        if section not in inf:
+            raise SystemExit("Install.inf lost %s" % section)
 
 
 def _med_alpha(img):

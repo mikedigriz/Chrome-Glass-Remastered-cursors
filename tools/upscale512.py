@@ -1,17 +1,14 @@
-"""Regenerate src/ai512: the same Real-ESRGAN x4 pass as upscale256, but the
-512px network output is kept native instead of being downsampled to 256.
+"""Regenerate src/ai512: a Real-ESRGAN x4 pass over the 128px hybrid base, with
+the 512px network output kept native instead of downsampled.
 
-The x4 model turns the processed 128px hybrid frame straight into 512px, so
-upscale256 was throwing that resolution away on its final resize. hybrid._master
-prefers src/ai512 when present (anchoring the whole set at 512): 384/512 then
-carry real network detail instead of a Lanczos stretch of the 256 master, and
-the smaller sizes downsample from a genuinely higher-resolution source.
+The x4 model turns the processed 128px hybrid frame straight into 512px, and
+hybrid._master anchors the whole set there: 384/512 carry real network detail
+instead of a Lanczos stretch, and the smaller sizes downsample from a genuinely
+higher-resolution source.
 
-Same dependencies and caveats as upscale256 (py-real-esrgan, opencv, torch;
-bleed_extend fills the transparent margin so the RGB-only net grows no edge
-halo). Results are committed, so the normal build never needs torch - hybrid.py
-falls back to src/ai256, then Lanczos, when a level is absent. Runs on the first
-CUDA device if present.
+Needs py-real-esrgan, opencv and torch; bleed_extend fills the transparent
+margin so the RGB-only net grows no edge halo. Results are committed, so the
+normal build never needs torch. Runs on the first CUDA device if present.
 """
 import os, sys
 

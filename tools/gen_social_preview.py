@@ -125,7 +125,9 @@ html,body{{margin:0;padding:0;width:1280px;height:640px;overflow:hidden;font-fam
 
 def find_browser():
     override = os.environ.get("EDGE_PATH")
-    if override and os.path.exists(override):
+    if override:
+        if not os.path.exists(override):
+            sys.exit(f"EDGE_PATH points at {override!r}, which does not exist.")
         return override
     candidates = [
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -133,6 +135,9 @@ def find_browser():
         "/usr/bin/google-chrome",
         "/usr/bin/chromium-browser",
         "/usr/bin/chromium",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
     ]
     for c in candidates:
         if os.path.exists(c):
@@ -163,11 +168,11 @@ def main():
     # Render from a real local temp dir - headless Chromium/Edge can't load
     # file:// URIs from network/SMB shares or subst/mapped drives, and on
     # this machine TEMP itself points at one, so pick the real profile temp.
-    local_temp = os.path.join(
-        os.path.expanduser("~"), "AppData", "Local", "Temp"
-    )
-    if not os.path.isdir(local_temp):
-        local_temp = None  # fall back to tempfile default
+    local_temp = None
+    if sys.platform == "win32":
+        cand = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Temp")
+        if os.path.isdir(cand):
+            local_temp = cand
     # --headless=new returns control before the screenshot file is actually
     # flushed to disk in some Edge builds, so clean the temp dir up only
     # after the PNG has shown up (avoids deleting the HTML out from under
@@ -177,23 +182,36 @@ def main():
         tmp_html = os.path.join(tmp, "social_preview.html")
         with open(tmp_html, "w", encoding="utf-8") as f:
             f.write(html)
-        if os.path.exists(OUT_PNG):
-            os.remove(OUT_PNG)
+        # Render beside the target and move it into place only once it is
+        # there. Screenshotting straight onto OUT_PNG meant a browser that
+        # failed, hung or wrote nothing left the committed cover deleted -
+        # and the old code still printed "Wrote ..." and exited 0.
+        staged = os.path.join(tmp, "social_preview.png")
         subprocess.run(
             [
                 browser,
                 "--headless=new",
                 "--disable-gpu",
-                f"--screenshot={OUT_PNG}",
+                f"--screenshot={staged}",
                 "--window-size=1280,640",
                 pathlib.Path(tmp_html).as_uri(),
             ],
             check=True,
+            timeout=120,
         )
         for _ in range(50):
-            if os.path.exists(OUT_PNG) and os.path.getsize(OUT_PNG) > 0:
+            if os.path.exists(staged) and os.path.getsize(staged) > 0:
                 break
             time.sleep(0.1)
+        else:
+            sys.exit(f"{browser} exited cleanly but produced no screenshot "
+                     f"after 5s - {OUT_PNG} left untouched.")
+        # The temp dir is deliberately on a local drive while the repo may sit
+        # on a mapped/network one, so cross-device: copy next to the target
+        # first, then swap within the same filesystem to keep it atomic.
+        near = OUT_PNG + ".new"
+        shutil.copyfile(staged, near)
+        os.replace(near, OUT_PNG)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"Wrote {OUT_PNG}")

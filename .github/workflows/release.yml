@@ -3,6 +3,11 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to rebuild and re-upload (e.g. v1.0.5)"
+        required: true
 
 permissions:
   contents: write
@@ -10,15 +15,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install build dependencies
-        run: pip install pillow numpy
+        run: pip install -r requirements.txt
 
       - name: Regenerate traced silhouettes
         run: python trace.py
@@ -28,14 +38,35 @@ jobs:
 
       - name: Build cursor themes and packages
         env:
-          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
         run: python build.py
+
+      - name: Checksums
+        working-directory: packages
+        run: sha256sum ChromeGlassRemastered-windows.zip ChromeGlassRemastered-linux.tar.gz ChromeGlassRemastered.cape *_all.deb > SHA256SUMS
+
+      # The PKGBUILD in the repo carries the previous tag and sha256sums=SKIP so
+      # that a plain clone still builds. The copy attached to the release gets
+      # this tag and the real checksum.
+      - name: Pin the PKGBUILD to this release
+        run: |
+          set -eu
+          ver="${TAG#v}"
+          sum=$(sha256sum packages/ChromeGlassRemastered-linux.tar.gz | cut -d' ' -f1)
+          sed -e "s/^pkgver=.*/pkgver=$ver/" \
+              -e "s/^sha256sums=.*/sha256sums=('$sum')/" \
+              packaging/PKGBUILD > packages/PKGBUILD
+          grep -q "^pkgver=$ver$" packages/PKGBUILD
+          grep -q "^sha256sums=('$sum')$" packages/PKGBUILD
 
       - name: Attach artifacts to the release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG }}
           files: |
             packages/ChromeGlassRemastered-windows.zip
             packages/ChromeGlassRemastered-linux.tar.gz
             packages/ChromeGlassRemastered.cape
             packages/chrome-glass-remastered-cursors_*_all.deb
+            packages/PKGBUILD
+            packages/SHA256SUMS

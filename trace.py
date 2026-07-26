@@ -1,16 +1,21 @@
-"""Trace vector silhouettes and glass shading straight from the original
-Chrome Glass frames, so the vector edition keeps the authentic shapes.
+"""Trace vector silhouettes straight from the original Chrome Glass frames, so
+the vector edition keeps the authentic shapes.
 
-Outputs, per cursor frame: a simplified polygon (32-logical coords), a fitted
-linear RGBA gradient, and a highlight polygon derived from the residual bright
-region. Used by cursors.py at build time (results are cached to traced.json).
+Output, per cursor frame: a simplified polygon in 32-logical coordinates, with
+a per-vertex corner flag. Cached to traced.json and read by hybrid._mask at
+build time. (Earlier revisions also fitted a linear gradient and a highlight
+polygon here; nothing ever consumed them, so both are gone.)
 """
-import json, math, os, statistics, sys
+import json, math, os, statistics
 import numpy as np
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Every logical<->raw conversion below hardcodes the 4x of a 128px source
+# (128 / 32 logical). Pointing this at another level silently scales the whole
+# geometry, so the size is asserted per frame in trace_frame.
 SRC = os.environ.get("LG_FRAMES", os.path.join(HERE, "src", "ai"))
+SRC_PX = 128
 
 
 def _erode(m):
@@ -50,9 +55,9 @@ def simplify(points, eps):
         if dist > dmax:
             dmax, idx = dist, i
     if dmax > eps:
-        l = simplify(points[:idx + 1], eps)
-        r = simplify(points[idx:], eps)
-        return l[:-1] + r
+        left = simplify(points[:idx + 1], eps)
+        right = simplify(points[idx:], eps)
+        return left[:-1] + right
     return [points[0], points[-1]]
 
 
@@ -318,7 +323,7 @@ def sharpen_corners(poly, chain, flags, eps):
     return out, out_flags, apexes
 
 
-def _components(mask, min_px=60):
+def _components(mask, min_px):
     """Label 4-connected components, return list of sub-masks, largest first."""
     lab = np.zeros(mask.shape, dtype=np.int32)
     cur = 0
@@ -344,9 +349,12 @@ def _components(mask, min_px=60):
     return out
 
 
-def trace_frame(key, thresh=60, eps=0.7):
-    """key like 'cur__Arrow__0' -> dict with polys / gradient / highlight."""
+def trace_frame(key, eps=0.7):
+    """key like 'cur__Arrow__0' -> {"polys": [...], "_apex": [...]}."""
     im = Image.open(os.path.join(SRC, key + ".png")).convert("RGBA")
+    if im.size != (SRC_PX, SRC_PX):
+        raise SystemExit("%s is %dx%d, expected %dx%d - the logical scale below "
+                         "is hardcoded to that size" % ((key,) + im.size + (SRC_PX, SRC_PX)))
     arr = np.array(im, dtype=np.float64)
     a = arr[:, :, 3]
     # perceptual silhouette: threshold relative to this cursor's own peak alpha,
@@ -372,55 +380,9 @@ def trace_frame(key, thresh=60, eps=0.7):
             corner_flags.append(flags)
             apex_idx.append(apexes)
 
-    # gradient: least-squares for the DIRECTION, percentile colours for the
-    # ENDPOINTS (linear endpoints average away the glass saturation)
-    ys, xs = np.nonzero(a > thresh)
-    A = np.c_[xs / 4.0, ys / 4.0, np.ones(len(xs))]
-    sol, *_ = np.linalg.lstsq(A, arr[ys, xs, :], rcond=None)
-    gx, gy, c0 = sol[0], sol[1], sol[2]
-    dirv = np.array([gx[:3].mean(), gy[:3].mean()])
-    n = np.linalg.norm(dirv) or 1e-9
-    u = dirv / n
-    t = (xs / 4.0) * u[0] + (ys / 4.0) * u[1]
-    t0, t1 = t.min(), t.max()
-    p0 = (u[0] * t0, u[1] * t0)
-    p1 = (u[0] * t1, u[1] * t1)
-    lo = t <= np.quantile(t, 0.15)
-    hi = t >= np.quantile(t, 0.85)
-    cols = arr[ys, xs, :]
-
-    def avg_col(sel):
-        return [int(min(255, max(0, round(c)))) for c in cols[sel].mean(axis=0)]
-
-    col_p0, col_p1 = avg_col(lo), avg_col(hi)
-
-    def col_at(x, y):        # kept for highlight residual prediction below
-        v = c0 + gx * x + gy * y
-        return [int(min(255, max(0, round(c)))) for c in v]
-
-    # highlight: pixels notably brighter than the gradient prediction
-    pred = c0[None, :] + np.outer(xs / 4.0, gx) + np.outer(ys / 4.0, gy)
-    lum = arr[ys, xs, :3].mean(axis=1)
-    plum = pred[:, :3].mean(axis=1)
-    bright = lum - plum > 18
-    hl = None
-    if bright.sum() > 30:
-        hxs, hys = xs[bright], ys[bright]
-        hmask = np.zeros_like(mask)
-        hmask[hys, hxs] = True
-        hchain = boundary_chain(hmask)
-        if len(hchain) > 8:
-            hp = [(x / 4.0, y / 4.0) for x, y in hchain]
-            hp = simplify(hp, 0.5)
-            if len(hp) >= 3:
-                hl = [[round(x, 2), round(y, 2)] for x, y in hp]
-
     return {
         "polys": [[[round(x, 2), round(y, 2), bool(c)] for (x, y), c in zip(poly, flags)]
                   for poly, flags in zip(polys, corner_flags)],
-        "grad": [col_p0, col_p1,
-                 [round(p0[0], 2), round(p0[1], 2), round(p1[0], 2), round(p1[1], 2)]],
-        "highlight": hl,
         "_apex": apex_idx,          # per component: output indices of reconstructed
                                     # apexes; consumed by snap_corners, never written
     }
@@ -487,7 +449,8 @@ def main():
         out[name] = {"frames": [trace_frame(f"ani__{name}__{i}") for i in range(n)]}
         snap_corners(out[name]["frames"])
         print("traced", name, "x", n)
-    json.dump(out, open(os.path.join(HERE, "traced.json"), "w"))
+    with open(os.path.join(HERE, "traced.json"), "w", encoding="utf-8") as f:
+        json.dump(out, f)
     print("wrote traced.json")
 
 

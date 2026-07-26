@@ -1,0 +1,124 @@
+name: ci
+
+# The release workflow only fires on tags, so without this a build-breaking
+# commit stays invisible until release day.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: pip install -r requirements.txt
+
+      - name: Regenerate traced silhouettes
+        run: python trace.py
+
+      - name: Traced silhouettes must match the committed ones
+        run: git diff --exit-code traced.json
+
+      - name: Build cursor themes and packages
+        run: python build.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: packages/
+          retention-days: 7
+
+  # Everything below exercises the install paths a byte-comparison cannot see:
+  # maintainer scripts, alternatives registration, symlink resolution, makepkg.
+  deb:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: packages
+
+      - name: Install
+        run: sudo dpkg -i packages/chrome-glass-remastered-cursors_*_all.deb
+
+      - name: Theme registers itself as the x-cursor-theme alternative
+        run: update-alternatives --display x-cursor-theme | grep -F "Chrome Glass Remastered"
+
+      - name: Real cursor files and alias symlinks both landed
+        run: |
+          set -eux
+          d="/usr/share/icons/Chrome Glass Remastered/cursors"
+          test -f "$d/left_ptr"
+          test -f "$d/pointer"
+          # a legacy hex alias must be a symlink, and must point at the hand
+          test -L "$d/9d800788f1b08800ae810202380a0822"
+          test "$(readlink "$d/9d800788f1b08800ae810202380a0822")" = pointer
+          # Policy 12.5
+          test -f /usr/share/doc/chrome-glass-remastered-cursors/copyright
+
+      - name: Remove
+        run: sudo dpkg -r chrome-glass-remastered-cursors
+
+      - name: Alternative is gone again
+        run: |
+          if update-alternatives --display x-cursor-theme 2>/dev/null | grep -qF "Chrome Glass Remastered"; then
+            echo "prerm left the alternative behind"; exit 1
+          fi
+
+      - name: lintian
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends lintian
+          lintian --fail-on error --no-tag-display-limit packages/*.deb
+
+  arch:
+    needs: build
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Container prerequisites
+        run: pacman -Sy --noconfirm --needed git namcap
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: packages
+
+      - name: namcap on the committed PKGBUILD
+        run: namcap packaging/PKGBUILD
+
+      - name: makepkg against the tarball this run produced
+        run: |
+          set -eux
+          useradd -m builder
+          install -o builder -g builder packaging/PKGBUILD /home/builder/PKGBUILD
+          install -o builder -g builder packages/ChromeGlassRemastered-linux.tar.gz /home/builder/
+          cd /home/builder
+          # Point the source at the local tarball instead of a release that does
+          # not exist yet on a PR, and pin its real checksum.
+          sum=$(sha256sum ChromeGlassRemastered-linux.tar.gz | cut -d' ' -f1)
+          sed -i -e "s#^source=.*#source=('ChromeGlassRemastered-linux.tar.gz')#" \
+                 -e "s#^sha256sums=.*#sha256sums=('$sum')#" PKGBUILD
+          chown builder:builder PKGBUILD
+          su builder -c 'cd /home/builder && makepkg -f'
+          pkg=$(ls /home/builder/*.pkg.tar.*)
+          # package() must place the theme and both legal files where Arch wants
+          bsdtar -tf "$pkg" | grep -q "usr/share/icons/Chrome Glass Remastered/cursors/left_ptr"
+          bsdtar -tf "$pkg" | grep -q "usr/share/licenses/chrome-glass-remastered-cursors/LICENSE"
+          bsdtar -tf "$pkg" | grep -q "usr/share/licenses/chrome-glass-remastered-cursors/NOTICE"
+          # ...and must not leave them inside the icon theme
+          if bsdtar -tf "$pkg" | grep -q "usr/share/icons/Chrome Glass Remastered/LICENSE"; then
+            echo "LICENSE left inside the icon theme"; exit 1
+          fi
