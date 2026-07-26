@@ -1,3 +1,9 @@
+# Default for everything git detects as text. Without it, whether a file is
+# stored with LF or CRLF depends on the core.autocrlf of whoever added it, and
+# LICENSE, NOTICE and the requirements files ended up with CRLF that way - they
+# then read as modified on any machine configured differently. Later rules below
+# override this one; in gitattributes the last match wins.
+* text=auto eol=lf
 # Keep shell scripts LF so they run on Linux even when cloned on Windows.
 *.sh            text eol=lf
 *.py            text eol=lf
