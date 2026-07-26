@@ -296,7 +296,14 @@ def write_inf(out):
     inf = f""";  {THEME} - cursor scheme installer
 ;  Right-click this file, choose "Install", then pick "{THEME}" in
 ;  Settings > Bluetooth & devices > Mouse > Additional mouse settings > Pointers.
-;  Right-click > "Uninstall" removes the scheme and the copied cursors again.
+;
+;  To remove it again, switch the Pointers tab back to a system scheme first, then
+;  run the [DefaultUninstall] section below by hand, with the full path:
+;    rundll32.exe setupapi,InstallHinfSection DefaultUninstall 132 "<path>\Install.inf"
+;  There is no Uninstall item in the right-click menu: Windows 10/11 register a
+;  single verb for .inf, Install, under
+;  HKLM\SOFTWARE\Classes\SystemFileAssociations\.inf\shell, and it runs
+;  InfDefaultInstall.exe, which only ever executes [DefaultInstall].
 
 [Version]
 signature="$CHICAGO$"

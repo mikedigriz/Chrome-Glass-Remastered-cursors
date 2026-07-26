@@ -12,6 +12,8 @@
 
 Windows · Linux · macOS · 17 cursors · free
 
+#TODO: fix cursor vobling, join the ends 
+
 <img src="preview.png" alt="The set as still images: Arrow, Help, IBeam, Cross, SizeAll, the four resize arrows, UpArrow, Pin, Person, NO, Wait and AppStarting">
 
 </div>
@@ -47,7 +49,16 @@ Everything is in the [latest release](../../releases/latest). Pick your system:
 3. Settings -> Mouse -> *Additional mouse settings* -> **Pointers** tab -> pick **Chrome Glass Remastered** -> Apply.
 4. **Turn the pointer size up.** Settings -> Accessibility -> Mouse pointer. Windows ships at the smallest of 15 sizes, which is the one place this set looks the same as any other. Everything above is what it was rebuilt for.
 
-**Uninstall:** right-click the same `Install.inf` -> **Uninstall**. That drops the scheme and deletes the cursors it copied.
+**Uninstall.** There is no *Uninstall* item in the right-click menu - Windows registers exactly one verb for `.inf`, and it is *Install*. So it takes two steps:
+
+1. Switch the **Pointers** tab back to *Windows Default (system scheme)*. Do this first: step 2 deletes the cursor files, and if the scheme is still applied you are left pointing at files that no longer exist.
+2. Run the `[DefaultUninstall]` section the installer already carries, with the full path to `Install.inf`:
+
+```
+rundll32.exe setupapi,InstallHinfSection DefaultUninstall 132 "C:\path\to\Install.inf"
+```
+
+That drops the scheme from the registry and deletes the cursors it copied into `%WINDIR%\Chrome Glass Remastered`. The folder itself is left behind empty; delete it by hand if you mind.
 
 </details>
 
