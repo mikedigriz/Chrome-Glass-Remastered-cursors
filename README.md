@@ -6,47 +6,61 @@
 
 [![Русская версия](https://img.shields.io/badge/README-на%20русском-0B67A0?style=flat-square)](README.ru.md)
 [![Release](https://img.shields.io/github/v/release/mikedigriz/chrome-glass-remastered-cursors?style=flat-square&color=1E3A8A)](../../releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-2496ED?style=flat-square&logo=windows&logoColor=white)](#-windows-10--11)
-[![Linux](https://img.shields.io/badge/Linux-Xcursor-FCC624?style=flat-square&logo=linux&logoColor=black)](#-linux)
-[![macOS](https://img.shields.io/badge/macOS-Mousecape-000000?style=flat-square&logo=apple&logoColor=white)](#-macos)
 [![License](https://img.shields.io/badge/code-MIT-green?style=flat-square)](LICENSE)
 
-<img src="preview.png" alt="preview" width="640">
+[![Download the latest release](https://img.shields.io/badge/%E2%AC%87%20Download%20the%20latest%20release-1E3A8A?style=for-the-badge)](../../releases/latest)
+
+Windows · Linux · macOS · 17 cursors · free
+
+<img src="preview.png" alt="The set as still images: Arrow, Help, IBeam, Cross, SizeAll, the four resize arrows, UpArrow, Pin, Person, NO, Wait and AppStarting">
 
 </div>
 
-In 2006, a cursor set called "Chrome Glass" showed up on DeviantArt - glassy, alive, but drawn for 32 px, so on 4K it turns to mush. I rebuilt it for big screens without losing the charm.
+In 2006 a cursor set called "Chrome Glass" showed up on DeviantArt - glassy, alive, but drawn for 32 px, so on 4K it turns to mush. I rebuilt it for big screens without losing the charm.
 
-![original vs remastered on HiDPI](assets/comparison.png)
+## The difference
+
+The same two cursors as a 4K screen shows them: on the left the 2006 original at 32 px, stretched by the OS. On the right the remaster, drawn natively at 512.
+
+![The 2006 original stretched to 512 px next to the remaster rendered natively at 512 px, for the Arrow and Wait cursors](assets/comparison.png)
 
 | | Chrome Glass (2006) | Chrome Glass Remastered |
 |---|---|---|
-| Resolution | 32 px | **up to 256 px** (Windows) / **512 px** (Linux), vector edges, no bitmap mush. Animated ones cap at 96 px on Windows and 384 px on Linux |
-| Animation | 9 frames (11 for NO), ~20 fps | **27 frames, 60 fps** for wait, app-starting and the link hand on Windows/macOS, ~20 fps on Linux. Handwriting and NO keep the author's own timing everywhere |
-| Cursors | 15 stock Windows slots | plus its own **Pin** and **Person** (Windows only) |
-| Platforms | Windows | Windows, Linux (Xcursor, deb, PKGBUILD), macOS (Mousecape) |
+| Resolution | 32 px | **256 px** on Windows, **512 px** on Linux [^1] |
+| Edges | bitmap, mush when scaled | vector, sharp at any size |
+| Animation | 9 frames, ~20 fps | **27 frames, 60 fps** [^2] |
+| Cursors | 15 slots | **17** - adds Windows 10/11's Pin and Person, which didn't exist in 2006 |
+| Platforms | Windows | Windows, Linux, macOS |
+
+[^1]: Animated cursors cap lower: 96 px on Windows, 384 px on Linux. Windows refuses animated frames larger than that, and a 512 px animation would be ~1 MB per frame.
+[^2]: On Windows and macOS, for wait, app-starting and the link hand. Linux runs those at ~20 fps like the original, which is what stops them flickering. Handwriting and NO keep the author's own timing everywhere.
 
 ## Install
 
-Everything's in the [latest release](../../releases/latest).
+Everything is in the [latest release](../../releases/latest). Pick your system:
 
-### 🪟 Windows 10 / 11
+<details open>
+<summary><b>🪟 &nbsp;Windows 10 / 11</b></summary>
 
 1. Download and unpack `ChromeGlassRemastered-windows.zip`.
 2. Right-click `Install.inf` -> **Install**.
 3. Settings -> Mouse -> *Additional mouse settings* -> **Pointers** tab -> pick **Chrome Glass Remastered** -> Apply.
+4. **Turn the pointer size up.** Settings -> Accessibility -> Mouse pointer. Windows ships at the smallest of 15 sizes, which is the one place this set looks the same as any other. Everything above is what it was rebuilt for.
 
-To remove it later: right-click the same `Install.inf` -> **Uninstall**. That drops the scheme and deletes the cursors it copied.
+**Uninstall:** right-click the same `Install.inf` -> **Uninstall**. That drops the scheme and deletes the cursors it copied.
 
-### 🐧 Linux
+</details>
 
-| Distro | Command |
-|---|---|
-| Debian / Ubuntu / Mint | `sudo dpkg -i chrome-glass-remastered-cursors_*_all.deb` |
-| Arch / Manjaro | `cd packaging && makepkg -si` ([PKGBUILD](packaging/PKGBUILD)) - the copy attached to the release has the checksum filled in |
-| No root | `mkdir -p ~/.icons/ && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.icons/` |
+<details>
+<summary><b>🐧 &nbsp;Linux (Xcursor)</b></summary>
 
-The `.deb` also registers the theme with `update-alternatives`, so it can become the system cursor theme; `sudo dpkg -r chrome-glass-remastered-cursors` undoes that cleanly.
+| Distro | Install | Uninstall |
+|---|---|---|
+| Debian / Ubuntu / Mint | `sudo dpkg -i chrome-glass-remastered-cursors_*_all.deb` | `sudo dpkg -r chrome-glass-remastered-cursors` |
+| Arch / Manjaro | `cd packaging && makepkg -si` | `sudo pacman -R chrome-glass-remastered-cursors` |
+| No root | `mkdir -p ~/.icons/ && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.icons/` | `rm -rf ~/.icons/"Chrome Glass Remastered"` |
+
+The `.deb` also registers the theme with `update-alternatives`, so it can become the system cursor theme; removing the package undoes that cleanly. The [PKGBUILD](packaging/PKGBUILD) attached to the release has its checksum filled in.
 
 Then switch the theme:
 
@@ -57,11 +71,14 @@ plasma-apply-cursortheme "Chrome Glass Remastered"                              
 
 Or pick it in GNOME Tweaks / KDE System Settings. On bare X11/Wayland set `XCURSOR_THEME="Chrome Glass Remastered"`.
 
-> **Cursor not changing?** Some archive tools extract into an extra wrapper folder. Make sure the theme folder ends up directly at `~/.icons/Chrome Glass Remastered/`, not one level deeper. After switching, GNOME on X11 needs a Shell restart (`killall -3 gnome-shell`); Wayland and KDE need a re-login.
+**Cursor not changing?** Some archive tools extract into an extra wrapper folder. Make sure the theme lands directly at `~/.icons/Chrome Glass Remastered/`, not one level deeper. After switching, GNOME on X11 needs a Shell restart (`killall -3 gnome-shell`); Wayland and KDE need a re-login.
 
-> **Cursor flickering?** The old 60 fps animation would drift out of sync with a 60 Hz screen, causing the wait/app-starting/link cursors to flicker. Those three now run at ~20 fps on Linux, like the original, so there's nothing left to flicker. Handwriting and NO keep the author's faster cadence because they play once and stop rather than loop. Still happens after a theme update? Restart the app - cursors get cached at startup.
+**Cursor flickering?** The old 60 fps animation drifted out of sync with a 60 Hz screen. Wait, app-starting and the link hand now run at ~20 fps on Linux, like the original, so there is nothing left to flicker. Still happens after a theme update? Restart the app - cursors get cached at startup.
 
-### 🍎 macOS
+</details>
+
+<details>
+<summary><b>🍎 &nbsp;macOS (Mousecape)</b></summary>
 
 Cursor themes on macOS are applied by the free [Mousecape](https://github.com/alexzielenski/Mousecape):
 
@@ -71,11 +88,19 @@ Cursor themes on macOS are applied by the free [Mousecape](https://github.com/al
 
 The cape replaces twelve cursors: arrow, text, pointing hand, crosshair, move, wait, forbidden, help and the four resize arrows. Everything else stays default.
 
-> **Heads up:** every macOS release locks cursor theming down further. Mousecape needs SIP partially disabled and may not work at all on Apple Silicon. If `Apply` does nothing, that's a Mousecape/macOS limitation, not a bug here. Check [Mousecape's issues](https://github.com/alexzielenski/Mousecape/issues) before filing one.
+**Uninstall:** right-click the cape in Mousecape -> **Restore**, then delete it from the library.
+
+**Heads up:** every macOS release locks cursor theming down further. Mousecape needs SIP partially disabled and may not work at all on Apple Silicon. If `Apply` does nothing, that's a Mousecape/macOS limitation, not a bug here. Check [Mousecape's issues](https://github.com/alexzielenski/Mousecape/issues) before filing one.
+
+</details>
+
+Every release also ships `SHA256SUMS`, if you'd rather check what you downloaded before running an installer: `sha256sum -c SHA256SUMS`.
 
 ## See it move
 
-![animated cursors](assets/animations.webp)
+Five of the cursors are animated. Left to right: **AppStarting**, **Hand** (link hover), **Handwriting**, **NO**, **Wait**.
+
+![The five animated cursors playing side by side](assets/animations.webp)
 
 ## How it works
 
@@ -83,52 +108,24 @@ Each cursor is three layers: **the original 32 px art** for authenticity, **an A
 
 Transparency is upscaled separately from color: stretched straight from 32 px, it loses the glassy glow. There's no color in an alpha channel to get wrong, so every cursor, pale ones included, uses the upscaled version.
 
-## Build from source
+## Build it yourself
 
-All AI masters are already in the repo, so a normal build needs no GPU and no torch.
+All AI masters are already in the repo, so a normal build needs no GPU and no torch:
 
 ```sh
 pip install -r requirements.txt
 python3 build.py
 ```
 
-This rebuilds `dist/`, `packages/` and the previews, then checks the result against the original (alpha, saturation, timing) and warns if anything drifted. Two escape hatches: `BUILD_SERIAL=1` renders single-core instead of across every core, and `ALLOW_METRIC_WARN=1` ships despite a drift warning.
-
-`dist/original/Chrome Glass (2006)/` is the untouched 2006 set rebuilt as a reference to diff against. It is deliberately local only - not packaged, not released.
-
-### Where each file fits in
-
-| Folder / file | What's in it |
-|---|---|
-| `src/orig/` | untouched 2006 art, 32 px - the source of truth |
-| `src/ai/` | a 128 px AI upscale, the input `trace.py` reads shapes from |
-| `src/ai512/` | the AI color master, native resolution |
-| `src/aialpha/` | AI upscale of transparency, kept separate from color |
-| `traced.json` | vector outlines from `trace.py` |
-
-Build order: `src/` -> `trace.py` -> `traced.json` -> `hybrid.py` + `glyphs.py` -> `build.py` -> `curlib.py` / `vectorlib.py`.
-
-A couple of details are hand-drawn in `cursors.py` instead of auto-traced - like the dot under the question mark on Help, which sits apart from the arrow and the tracer just misses it.
-
-### Rebuilding the AI files yourself (optional)
-
-Only needed if you want to recompute the upscales instead of using what's already in the repo. The one step that needs a GPU and torch (PyTorch):
-
-```sh
-pip install -r requirements-ai.txt
-
-python3 tools/upscale128.py     # src/orig -> src/ai       (128 px base)
-python3 tools/upscale512.py     # src/ai   -> src/ai512    (color master)
-python3 tools/upscale_alpha.py  # src/orig -> src/aialpha  (alpha master)
-```
-
-You need one weights file, `RealESRGAN_x4plus_anime_6B.pth` (~18 MB, illustration-tuned) - drop it in `weights/` yourself (`upscale_lib.load_model` loads it locally, no auto-download). Results are already committed, so nobody else has to do this.
+That rebuilds `dist/`, `packages/` and the previews, then diffs the result against the original and warns if anything drifted. Full details - repo layout, build order, recomputing the AI upscales - are in **[docs/BUILD.md](docs/BUILD.md)**.
 
 ## License
 
 Original artwork: ["Chrome Glass" by yoyos, DeviantArt, 2006](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748) (see [`NOTICE`](NOTICE)). Code is **MIT** ([`LICENSE`](LICENSE)).
 
 Chrome Glass has been my favorite cursor set for years - thanks, yoyos.
+
+Something broken? Open an issue with your OS, the release version and your pointer size - those three answer most of it.
 
 ---
 

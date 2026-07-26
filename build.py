@@ -9,7 +9,10 @@ for:
   * Linux   - native Xcursor theme (multi-size + animated) with name aliases
   * Debian  - installable .deb (aliases as symlinks)
   * packages/ - release artifacts: windows .zip, linux .tar.gz, .deb
-  * preview.png + animated assets/*.webp (+ .gif fallback)
+  * preview.png + animated assets/*.webp (the READMEs embed these) and a .gif
+    of each, for the places that still refuse animated webp - forum posts,
+    DeviantArt, Reddit. Nothing in the repo links the gifs; they exist to be
+    uploaded by hand.
 
 Every build prints superiority metrics against the original frames and warns
 when anything drifts out of tolerance.
@@ -636,21 +639,34 @@ def build_preview():
     # Hand and Handwriting are skipped here: in the 2006 original they're the
     # same arrow silhouette as Arrow with only a per-frame shimmer, so a single
     # still frame just duplicates the Arrow tile. They're still built and
-    # shipped - only this showcase grid leaves them out.
+    # shipped - only this showcase grid leaves them out, and assets/animations
+    # shows them moving, which is the only way they read as distinct anyway.
+    # Arrow_Down is left out for the opposite reason: WIN_UNSHIPPED keeps it out
+    # of the archive, so putting it in the showcase advertises a cursor nobody
+    # who downloads the release actually gets.
     order = ["Arrow", "Help", "IBeam", "Cross", "SizeAll", "SizeNS", "SizeWE",
-             "SizeNWSE", "SizeNESW", "UpArrow", "Arrow_Down", "Pin", "Person",
+             "SizeNWSE", "SizeNESW", "UpArrow", "Pin", "Person",
              "NO", "Wait", "AppStarting"]
-    cell, pad, cols, lab = 192, 22, 6, 26
+    # 5 columns divides the 15 tiles evenly, and the labels are sized for what
+    # a README actually shows: GitHub caps the content column near 880 px, so
+    # a 1092 px sheet lands close to 1:1 instead of shrinking the text to mush.
+    cell, pad, cols, lab = 192, 22, 5, 34
     rows = (len(order) + cols - 1) // cols
     # the cursors are pale translucent glass, invisible on white - use a dark
     # sheet with a subtle checkerboard so every one of them reads. Render each
     # at 192px (native from the 256 master) so nothing looks soft.
     sheet = Image.new("RGBA", (pad + cols * (cell + pad), pad + rows * (cell + pad + lab)), (43, 45, 51, 255))
     d = ImageDraw.Draw(sheet)
-    f = _font(20)
+    f = _font(26)
+    # Frame 2 reads fine for the cursors that only shimmer, but NO animates a
+    # red forbidden sign growing from nothing, and frame 2 catches it as a red
+    # smear across the arrow. 7 of its 11 is the last frame where the sign is
+    # complete and still fits the cell - past that it outgrows the frame and
+    # clips, and it also hides the arrow underneath.
+    still = {"NO": 7}
     for i, name in enumerate(order):
         if name in ANIM:
-            img = H.frame_image(name, 2, cell)
+            img = H.frame_image(name, still.get(name, 2), cell)
         else:
             img = static_image(name, cell)
         r, c = divmod(i, cols); x = pad + c * (cell + pad); y = pad + r * (cell + pad + lab)
@@ -668,6 +684,13 @@ def _pad(img, box):
 def _gif_frame(rgba, bg=(248, 248, 250)):
     flat = Image.new("RGB", rgba.size, bg); flat.paste(rgba, (0, 0), rgba)
     return flat.quantize(colors=256, method=Image.MEDIANCUT, dither=Image.NONE)
+
+
+# Lossless webp on a 27-frame animation is what made assets/animations.webp
+# 914 KB - a README-only asset heavier than any release artifact, re-fetched on
+# every page view. These are translucent glass gradients viewed at a couple of
+# hundred pixels; q=90 is indistinguishable and roughly a tenth the bytes.
+_WEBP = dict(lossless=False, quality=90, method=6)
 
 
 def build_animations():
@@ -689,12 +712,22 @@ def build_animations():
         durs = [min(_jiffies_ms(r), 2000) for r in rates]
         rgba = [_pad(f, disp + 32) for f in frames]
         rgba[0].save(os.path.join(assets, name + ".webp"), save_all=True,
-                     append_images=rgba[1:], duration=durs, loop=0, lossless=True, method=6)
+                     append_images=rgba[1:], duration=durs, loop=0, **_WEBP)
         gif = [_gif_frame(f) for f in rgba]
         gif[0].save(os.path.join(assets, name + ".gif"), save_all=True,
                     append_images=gif[1:], duration=durs, loop=0, disposal=2, optimize=True)
-    # combined strip at 60 fps
-    box, gap = 128, 12
+    # Combined strip at 60 fps, and the heaviest asset in the repo: 27 frames of
+    # the full width, re-fetched on every README view. 128 px cells made a 712 px
+    # sheet that every README then stretched to its ~880 px content column, so it
+    # showed blurry as well. 160 px puts the sheet at 884 px, near enough 1:1 that
+    # nothing is resampled either way - and since weight here scales with pixels
+    # rather than with quality (dropping q from 90 to 70 buys ~11%, visibly),
+    # sizing the sheet to the column is the whole optimisation.
+    # The cells stay unlabelled and the sheet stays transparent on purpose: text
+    # baked in here would be one language only, and a fill light enough to read
+    # on GitHub's dark theme disappears on the light one. The READMEs name the
+    # five in order in their own prose.
+    box, gap = 160, 14
     per = {n: H.anim_frames(n, box)[0] for n in ANIM}
     n = max(len(f) for f in per.values())
     W = len(ANIM) * (box + gap) + gap
@@ -706,7 +739,7 @@ def build_animations():
             canvas.alpha_composite(fr, (gap + j * (box + gap), gap))
         strip.append(canvas)
     strip[0].save(os.path.join(assets, "animations.webp"), save_all=True,
-                  append_images=strip[1:], duration=17, loop=0, lossless=True, method=6)
+                  append_images=strip[1:], duration=17, loop=0, **_WEBP)
     sg = [_gif_frame(f) for f in strip]
     sg[0].save(os.path.join(assets, "animations.gif"), save_all=True,
                append_images=sg[1:], duration=20, loop=0, disposal=2, optimize=True)
@@ -729,26 +762,37 @@ def _font(size):
 def build_comparison(assets):
     """assets/comparison.png: what a 4K/HiDPI screen actually shows - the 2006
     bitmap stretched by the OS vs the remaster's native detail. Dark sheet so
-    the pale translucent glass reads."""
-    cell, pad, top = 512, 32, 84
-    pairs = [("Arrow", 0), ("AppStarting", 2), ("Wait", 2)]
-    W = pad + len(pairs) * 2 * (cell + pad) + pad
-    sheet = Image.new("RGBA", (W, top + cell + pad + 18), (43, 45, 51, 255))
+    the pale translucent glass reads.
+
+    Stacked in pairs rather than laid out in one row. Six 512 px cells side by
+    side came to 3328 px, and a README scales that to its ~880 px column: a 3.8x
+    downscale, which resamples away the exact stair-stepping the picture exists
+    to prove. Two pairs deep is 1120 px wide, near 1:1, and the aliasing
+    survives. Arrow and Wait carry it - the pointer you look at all day, plus a
+    saturated animated one - so the third pair only added width.
+
+    Labels are bare pixel counts, and the explanatory sentence that used to be
+    drawn across the top is gone: it was English baked into a file README.ru.md
+    embeds too, so half of the Russian page's headline visual was untranslated.
+    Numbers need no translation; each README captions the picture in its own
+    language."""
+    cell, pad, lab = 512, 32, 40
+    pairs = [("Arrow", 0), ("Wait", 2)]
+    W = pad + 2 * (cell + pad)
+    height = pad + len(pairs) * (cell + lab + pad)
+    sheet = Image.new("RGBA", (W, height), (43, 45, 51, 255))
     d = ImageDraw.Draw(sheet)
-    f_big, f_small = _font(32), _font(22)
-    d.text((pad, 24), "Same cursor on a HiDPI / 4K display (large pointer size):",
-           fill=(228, 230, 236), font=f_big)
+    f = _font(28)
     onbg = lambda im: _onbg(im, light=(84, 87, 96), dark=(66, 69, 77))
     for i, (name, idx) in enumerate(pairs):
-        x0 = pad + i * 2 * (cell + pad)
+        y = pad + i * (cell + lab + pad)
         orig = H.original(name, idx).resize((cell, cell), Image.NEAREST)
-        new = H.frame_image(name, idx, 512)
-        sheet.alpha_composite(onbg(orig), (x0, top))
-        sheet.alpha_composite(onbg(new), (x0 + cell + pad, top))
-        d.text((x0 + 4, top + cell + 8), "Original 2006: 32 px stretched",
-               fill=(232, 150, 150), font=f_small)
-        d.text((x0 + cell + pad + 4, top + cell + 8), "Remastered: native 512 px",
-               fill=(150, 224, 165), font=f_small)
+        new = H.frame_image(name, idx, cell)
+        sheet.alpha_composite(onbg(orig), (pad, y))
+        sheet.alpha_composite(onbg(new), (pad + cell + pad, y))
+        d.text((pad + 4, y + cell + 8), "32 px", fill=(232, 150, 150), font=f)
+        d.text((pad + cell + pad + 4, y + cell + 8), "512 px",
+               fill=(150, 224, 165), font=f)
     sheet.convert("RGB").save(os.path.join(assets, "comparison.png"))
 
 
