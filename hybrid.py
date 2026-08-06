@@ -487,9 +487,17 @@ def _fold_chord(name, idx):
 def _fold_offsets(name, idx):
     """How far the fold actually sits from that line, in logical units.
 
-    Measured once at _FOLD_REF and kept in logical units, so every size and -
-    for the sheen-only animations, whose outline never moves - every frame gets
-    the identical correction and nothing can wobble because of it.
+    Measured at _FOLD_REF and kept in logical units, so every size gets the
+    same correction.
+
+    Every keyframe is measured on its own. The sheen animations hold one
+    outline and change only their colour, and each keyframe's colour comes from
+    its own upscale, which puts the fold somewhere slightly different: half a
+    logical unit apart between neighbouring keyframes on all three. Reusing
+    frame 0's measurement for the whole cycle - which is what this did - left
+    that difference in, and a fold sliding half a unit sideways and back is
+    exactly the wobble the eye picks up. Measured per keyframe against the one
+    shared chord, every frame lands the fold on the same line.
 
     An offset is only taken where the cross-section really dips: near the point
     the wedge is narrower than the search band, and the darkest sample there is
@@ -498,8 +506,8 @@ def _fold_offsets(name, idx):
     ch = _fold_chord(name, idx)
     if ch is None:
         return None
-    src = 0 if name in INTERP else idx           # one static outline, one measurement
-    ch = _fold_chord(name, src) or ch
+    src = idx
+    ch = _fold_chord(name, 0 if name in INTERP else idx) or ch
     size = _FOLD_REF
     s = size / V.LOGICAL
     p0 = np.array(ch[0]) * s
@@ -509,8 +517,16 @@ def _fold_offsets(name, idx):
     rgb, anchor = _master(name, src)
     _, m_a = _resize(_orig(_key(name, src)), anchor)
     rgb = rgb if anchor == size else _resize(np.dstack([rgb, m_a]), size)[0]
-    al = _mask(name, src, size) / 255.0 * _up_alpha(name, src, size)
-    solid = al > 0.8 * al.max()
+    # "inside the glass", which is a question about the outline, not about how
+    # opaque the glass is. Thresholding the alpha answered the second question:
+    # this glass peaks near 212 and sits at 165 over most of its area, so four
+    # fifths of the peak excluded the interior itself, every cross-section came
+    # back mostly empty, and the whole correction silently measured zero on
+    # every cursor in the set.
+    inset = np.asarray(Image.fromarray(_edge_distance(name, src).astype(np.float32),
+                                       mode="F").resize((size, size), Image.BILINEAR),
+                       dtype=np.float64)
+    solid = (_mask(name, src, size) > 250) & (inset > 0.4)
     lum = rgb @ _LUMA
     qs = np.arange(-_FOLD_BAND, _FOLD_BAND + 1e-9, 0.1)
     ts = np.linspace(0.05, 0.95, 25)
@@ -1247,6 +1263,110 @@ def _bevel_shading(name, idx, size):
 # price of not having them read as broken glass.
 _BROKEN_COLOUR = {("Handwriting", 3), ("Handwriting", 4), ("Handwriting", 5)}
 
+@functools.lru_cache(maxsize=None)
+def _master_rgb(name, idx, size):
+    """The sharpened master's colour at `size`, before any correction."""
+    m_rgb, anchor = _master(name, idx)
+    if size == anchor:
+        return m_rgb
+    _, m_a = _resize(_orig(_key(name, idx)), anchor)
+    rgb, _ = _resize(np.dstack([m_rgb, m_a]), size)
+    if size > anchor:                                  # only when past native detail
+        rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
+    return rgb
+
+
+_FLOOR_SHARE = 0.3       # of the author's own darkest glass, where ours may bottom out
+
+
+@functools.lru_cache(maxsize=None)
+def _dark_knee(name, idx):
+    """The darkest the author's own glass gets, in luma."""
+    o = _orig(_key(name, idx)).astype(np.float64)
+    ins = o[..., 3] > 200
+    if ins.sum() < 16:
+        return None
+    return float((o[..., :3] @ _LUMA)[ins].min())
+
+
+def _lift_blacks(rgb, name, idx, size):
+    """Stop the upscale inventing black inside the glass.
+
+    The author's glass never goes below about 106 luma on the grey cursors and
+    30 on the coloured ones. Ours reaches 0 over two to four percent of every
+    interior: the net, given a dark crease a pixel wide, resolves it into a
+    hard black gash, and the one beside the point is what makes a tip that
+    converges on the outline still read as split - the eye follows the gash,
+    not the outline.
+
+    Everything below the author's floor is compressed linearly into the top
+    part of that range, so the ordering of every crease survives and only the
+    invented black goes. The share is picked by eye against the alternative:
+    lifting all the way to his floor washes the top crease out to grey and the
+    glass reads as plastic, while a third of it takes the gash off and leaves
+    the crease as dark as it was drawn. A relative limit was tried before this and does flatten
+    the drawing, because it cannot tell a crease from a gash by depth alone -
+    but a floor can, since the drawing never reaches it."""
+    knee = _dark_knee(name, idx)
+    if knee is None:
+        return rgb
+    floor = knee * _FLOOR_SHARE
+    lum = rgb @ _LUMA
+    low = lum < knee
+    if not low.any():
+        return rgb
+    want = floor + (knee - floor) * (lum / max(knee, 1e-6))
+    # added, not scaled: a near-black pixel's channels are a handful of levels
+    # apart, and multiplying to reach the floor multiplies that gap too - the
+    # gash came back as red and blue confetti. Adding moves the luma and leaves
+    # the chroma the size it was.
+    return np.clip(rgb + np.where(low, want - lum, 0.0)[..., None], 0, 255)
+
+
+_FREEZE_UNIT = 0.6       # logical units below which detail counts as a line
+
+
+def _freeze_lines(rgb, name, idx, size):
+    """Hold every interior line still across a sheen animation's cycle.
+
+    Hand, Wait and AppStarting hold one outline for the whole loop and change
+    only their colour - the alpha is bit-identical from frame to frame. Each
+    keyframe's colour, though, is its own upscale, and the net puts the creases
+    in slightly different places each time: measured against the author's own
+    frames the average swing over the cycle matches him well (20.1 against
+    20.2 levels on Hand), but along two hairlines - the crease under the top
+    edge and the fold where it meets the tail junction - ours swings two and a
+    half times as far as anything he drew. A line a pixel wide moving a pixel
+    is what the eye calls jitter, and no amount of straightening a single fold
+    reaches it, because it is every line at once.
+
+    So the cycle keeps one keyframe's lines and every keyframe's light: detail
+    finer than _FREEZE_UNIT comes from the reference frame, everything coarser
+    - which is the whole of the sheen, it sweeps over a third of the cursor -
+    stays the frame's own.
+
+    That costs some of the measured swing - 14 levels against the author's 20
+    on Hand - and the loss is the point: what it removes is the creases
+    flickering, and the sheen sweeping the surface, which is what the author
+    actually animated, is a low frequency and comes through untouched. Letting
+    the frozen lines' contrast follow each frame's own was tried to win the
+    number back; it bought 0.4 of a level and put the jitter back on the top
+    crease, so the lines are held outright.
+
+    An earlier attempt took the high frequencies from the cycle's mean instead
+    of from one frame. The mean of a moving line is a smear, and substituting
+    it softened every crease it touched."""
+    if name not in INTERP or idx == 0:
+        return rgb
+    ref_rgb = _master_rgb(name, 0, size)
+    hi_ref = ref_rgb - _smooth3(ref_rgb, _FREEZE_UNIT, size)
+    return np.clip(_smooth3(rgb, _FREEZE_UNIT, size) + hi_ref, 0, 255)
+
+
+def _smooth3(rgb, unit, size):
+    """Blur an RGB float array by `unit` logical units."""
+    return np.dstack([_smooth1(rgb[..., c], unit, size) for c in range(3)])
+
 
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
@@ -1254,16 +1374,8 @@ def frame_image(name, idx, size):
     from the sharpened AI master (_master, native up to 512px) inside a
     vector-crisp silhouette; smaller sizes downsample the already-sharpened
     master, so the crispness carries down without a second sharpen pass."""
-    key = _key(name, idx)
-    orig = _orig(key)
-    m_rgb, anchor = _master(name, idx)
-    _, m_a = _resize(orig, anchor)
-    if size == anchor:
-        rgb = m_rgb
-    else:
-        rgb, _ = _resize(np.dstack([m_rgb, m_a]), size)
-        if size > anchor:                                  # only when past native detail
-            rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
+    orig = _orig(_key(name, idx))
+    rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
     if (name, idx) in _BROKEN_COLOUR:
         rgb = _resize(orig, size)[0]
     if name == "Help":
@@ -1272,6 +1384,7 @@ def frame_image(name, idx, size):
     if name in _SYNTH_BEVEL:
         rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
                       0, 255)
+    rgb = _lift_blacks(rgb, name, idx, size)
     rgb = _straighten_fold(rgb, name, idx, size)
     rgb = _tip_pinch(rgb, name, idx, size)
     up_a = _up_alpha(name, idx, size)
