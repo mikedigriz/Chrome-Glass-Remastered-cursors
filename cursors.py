@@ -37,7 +37,7 @@ def smooth(poly, iters=2):
     Points traced with a corner flag (x, y, is_corner) trust that flag - it
     was computed from the dense pre-simplification boundary chain, which is
     far less noise-prone than a single 3-point angle on an already-simplified
-    polygon. Legacy 2-tuples (e.g. HELP_EXTRA's hand-authored polyline) fall
+    polygon. Legacy 2-tuples fall
     back to the old local-angle threshold test.
 
     Keeping the corner itself crisp is not enough: averaging its neighbours
@@ -92,6 +92,36 @@ def smooth(poly, iters=2):
 # where the 2006 frame is empty), so once the AI alpha master made the glass
 # crisp it read as a second, ghost "?" over the true one. The AI alpha now holds
 # the real curl on its own, so the line is gone and the ghost with it.
-HELP_EXTRA = [
-    {"dot": (19.0, 26.2, 1.1), "fill": (255, 255, 255, 255)},
-]
+def _round_island(poly):
+    """A traced island turned into the circle it is trying to be.
+
+    Help's "?" dot comes back from the trace as a nine-vertex island - at 32px
+    that is a circle, at 512 it is a visible octagon, and the hand-authored
+    circle that used to be added beside it only made the two shapes stack and
+    show each other's corners. Centre and area are the author's; only the
+    corners go."""
+    pts = [(float(q[0]), float(q[1])) for q in poly]
+    n = len(pts)
+    a = cx = cy = 0.0
+    for k in range(n):
+        x0, y0 = pts[k]
+        x1, y1 = pts[(k + 1) % n]
+        cr = x0 * y1 - x1 * y0
+        a += cr
+        cx += (x0 + x1) * cr
+        cy += (y0 + y1) * cr
+    a *= 0.5
+    if abs(a) < 1e-9:
+        return None
+    cx, cy = cx / (6.0 * a), cy / (6.0 * a)
+    return cx, cy, (abs(a) / math.pi) ** 0.5
+
+
+# The dot under Help's "?" is an island of its own in the trace, and _mask
+# renders it as a circle instead of as the polygon (see _round_island). The
+# curl itself is not drawn at all: it used to be a stroked polyline here, but
+# that line sat above and right of the real curl (its top ran through y=7..8
+# where the 2006 frame is empty), so once the AI alpha master made the glass
+# crisp it read as a second, ghost "?" over the true one. The AI alpha holds
+# the real curl on its own, so the line is gone and the ghost with it.
+HELP_ROUND_ISLANDS = {"Help"}

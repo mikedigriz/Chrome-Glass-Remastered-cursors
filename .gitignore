@@ -11,3 +11,4 @@ venv/
 .vscode/
 .claude/
 tools/_social_preview.html
+.metrics/

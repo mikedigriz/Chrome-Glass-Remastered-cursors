@@ -38,6 +38,8 @@ ANIM = [m["name"] for m in MANIFEST if m["kind"] == "ani"]
 # author's 50 ms/frame cursors, cross-faded x3 to 60 fps (same cycle length)
 INTERP = {"AppStarting", "Hand", "Wait"}
 INTERP_N = 3
+_PACE_SOLID = 0.85       # of peak alpha: the glass whose motion sets the pace
+_PACE_SAMPLES = 7        # points an interval is sampled at to invert its own pace
 
 _VIS = 0.25              # visible zone: alpha above this fraction of the peak
 _BLEND_AI = 0.73         # weight of the AI alpha master vs plain Lanczos (_up_alpha).
@@ -91,10 +93,17 @@ def _resize(arr, size):
 def _mask(name, idx, size):
     """Crisp silhouette from the traced outline, white on transparent."""
     fr = C.TRACED[name]["frames"][idx]
-    prims = [{"poly": C.smooth([tuple(p) for p in poly]),
-              "fill": (255, 255, 255, 255)} for poly in fr["polys"]]
-    if name == "Help":
-        prims += C.HELP_EXTRA
+    white = (255, 255, 255, 255)
+    prims = []
+    for poly in fr["polys"]:
+        # A small round island is rendered as the circle it is: nine traced
+        # vertices read as a circle at 32px and as an octagon at 512.
+        if name in C.HELP_ROUND_ISLANDS and len(poly) <= 12:
+            got = C._round_island(poly)
+            if got is not None:
+                prims.append({"dot": got, "fill": white})
+                continue
+        prims.append({"poly": C.smooth([tuple(p) for p in poly]), "fill": white})
     img = V.render(prims, size)
     return np.asarray(img, dtype=np.float64)[..., 3]
 
@@ -175,6 +184,77 @@ def _base128(name, idx):
 def _compose(rgb, alpha):
     out = np.dstack([np.clip(rgb, 0, 255), np.clip(alpha, 0, 255)])
     return Image.fromarray(out.round().astype(np.uint8), "RGBA")
+
+
+_GHOST_LO = 10.0         # at or below this alpha (4% coverage) a pixel's own colour
+_GHOST_HI = 24.0         # cannot be seen at all; it fades back in by here
+
+
+def _pushpull(values, weight):
+    """Fill every zero-weight pixel from the nearest weighted ones.
+
+    Push-pull over an image pyramid: the weighted values are averaged down to a
+    single pixel, then each level fills its own gaps from the level above it.
+    A gap ends up holding an average of what surrounded it, in a handful of
+    passes rather than hundreds of one-pixel steps."""
+
+    def scale(arr, n):
+        return np.asarray(Image.fromarray(arr.astype(np.float32), mode="F")
+                          .resize((n, n), Image.BOX if n < arr.shape[0] else Image.BILINEAR),
+                          dtype=np.float64)
+
+    ch = values.shape[2]
+    pyr = [(values * weight[..., None], weight)]
+    while pyr[-1][1].shape[0] > 1:                       # push
+        n = pyr[-1][1].shape[0] // 2
+        p, w = pyr[-1]
+        pyr.append((np.dstack([scale(p[..., c], n) for c in range(ch)]), scale(w, n)))
+    for lo in range(len(pyr) - 1, 0, -1):                # pull
+        p, w = pyr[lo]
+        tp, tw = pyr[lo - 1]
+        n = tw.shape[0]
+        up_p = np.dstack([scale(p[..., c], n) for c in range(ch)])
+        up_w = scale(w, n)
+        gap = (tw <= 1e-4)[..., None]
+        pyr[lo - 1] = (np.where(gap, up_p, tp),
+                       np.where(gap[..., 0], np.maximum(up_w, 1e-6), tw))
+    p, w = pyr[0]
+    return np.nan_to_num(p / np.maximum(w, 1e-9)[..., None])
+
+
+def _bleed(rgb, alpha):
+    """Colour carried outward from the silhouette into the transparent zone."""
+    return np.clip(_pushpull(np.clip(rgb, 0, 255),
+                             np.clip(alpha, 0, 255) / 255.0), 0, 255)
+
+
+@functools.lru_cache(maxsize=None)
+def _ghost(name, size):
+    """One colour field for everything the cursor does not cover, shared by
+    every frame of it.
+
+    Nothing composites it - alpha is zero there - but it is not free to be
+    anything. _lerp reconstructs colour by dividing premultiplied values by an
+    alpha of 1e-6, which turns whatever noise sits outside the silhouette into
+    a different arbitrary colour in every interpolated frame: measured on the
+    shipped animations, the keyframes and their tweens disagreed by 23..53
+    levels out there, while inside they differ by 3.7. Renderers that scale or
+    filter a frame before compositing it pull that colour back in as a fringe,
+    and it costs a real amount of DIB to store. Freezing it per cursor makes
+    those frames agree exactly."""
+    idx = 0
+    key = _key(name, idx)
+    m_rgb, anchor = _master(name, idx)
+    _, m_a = _resize(_orig(key), anchor)
+    rgb = m_rgb if size == anchor else _resize(np.dstack([m_rgb, m_a]), size)[0]
+    return _bleed(rgb, _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size))
+
+
+def _hide_ghost(im, name, size):
+    """Replace the unseeable colour with the cursor's frozen field."""
+    a = np.asarray(im, dtype=np.float64)
+    w = np.clip((a[..., 3] - _GHOST_LO) / (_GHOST_HI - _GHOST_LO), 0.0, 1.0)[..., None]
+    return _compose(a[..., :3] * w + _ghost(name, size) * (1.0 - w), a[..., 3])
 
 
 _LUMA = np.array([0.299, 0.587, 0.114])
@@ -264,7 +344,12 @@ def _declutter_engraved_detail(name, idx, rgb, size):
 
 
 _SHEEN_SMOOTH = (1.0, 2.0, 1.0)   # circular temporal kernel over an animation's colour
-_STILL_TIP_R = 4.0                # logical units around a corner whose shading is frozen
+_STILL_TIP_R = 6.0                # logical units around a corner whose shading is frozen.
+                                  # Wide enough to cover the whole neighbourhood
+                                  # _tip_pinch reads its edge colour from, or the pinch
+                                  # brings moving sheen into a point that is meant to
+                                  # stand still and the tip beats over the cycle:
+                                  # measured, its luma swung 8..12 levels at radius 4.
 _STILL_TIP_FEATHER = 2.0          # logical units of blend back into the moving body
 
 
@@ -290,6 +375,242 @@ def _tip_still(name, idx, size):
     for x, y in pts:
         d = np.minimum(d, np.hypot(xs - x * s, ys - y * s) / s)
     return np.clip((_STILL_TIP_R - d) / _STILL_TIP_FEATHER, 0.0, 1.0)
+
+
+_TIP_COS = -0.17         # cos of the widest interior angle (100 deg) still a point
+@functools.lru_cache(maxsize=None)
+def _sharp_corners(name, idx):
+    """Convex points of the traced outline, in logical units.
+
+    Convex and sharp only: a concave notch has no point to converge, and the
+    blunt vertices where two edges merely bend are not points either."""
+    out = []
+    for poly in C.TRACED[name]["frames"][idx]["polys"]:
+        pts = np.array([(p[0], p[1]) for p in poly], dtype=np.float64)
+        m = len(pts)
+        if m < 3:
+            continue
+        nxt = np.roll(pts, -1, axis=0)
+        area = float((pts[:, 0] * nxt[:, 1] - pts[:, 1] * nxt[:, 0]).sum())
+        for i, p in enumerate(poly):
+            if not p[2]:
+                continue
+            a, b = pts[(i - 1) % m] - pts[i], pts[(i + 1) % m] - pts[i]
+            na, nb = np.hypot(*a), np.hypot(*b)
+            if na < 1e-6 or nb < 1e-6:
+                continue
+            a, b = a / na, b / nb
+            if (a[0] * b[1] - a[1] * b[0]) * area > 0 or float(a @ b) < _TIP_COS:
+                continue
+            out.append((float(p[0]), float(p[1])))
+    return tuple(out)
+
+
+def _sample(rgb, sx, sy):
+    """Bilinear lookup of rgb at float coordinates, edge-clamped."""
+    n = rgb.shape[0]
+    sx = np.clip(sx, 0, n - 1.001)
+    sy = np.clip(sy, 0, n - 1.001)
+    x0, y0 = sx.astype(np.int32), sy.astype(np.int32)
+    fx, fy = (sx - x0)[..., None], (sy - y0)[..., None]
+    x1, y1 = np.minimum(x0 + 1, n - 1), np.minimum(y0 + 1, n - 1)
+    return ((rgb[y0, x0] * (1 - fx) + rgb[y0, x1] * fx) * (1 - fy)
+            + (rgb[y1, x0] * (1 - fx) + rgb[y1, x1] * fx) * fy)
+
+
+_FOLD_REF = 256          # size the fold's path is measured at, once
+_FOLD_BAND = 1.5         # logical units either side of the chord the fold is looked for in
+_FOLD_CAP = 1.2          # most it may be moved
+_FOLD_DIP = 8.0          # luma a dip must have to be the fold and not flat glass
+_FOLD_REACH = 2.5        # logical units over which the correction fades out
+_FOLD_MIN_DEPTH = 2.0    # concavity that counts as the tail junction
+_FOLD_MIN_SPAN = 8.0     # shortest chord worth straightening
+
+
+def _hull(pts):
+    pts = sorted(map(tuple, pts))
+
+    def half(ps):
+        h = []
+        for p in ps:
+            while len(h) > 1 and ((h[-1][0] - h[-2][0]) * (p[1] - h[-2][1])
+                                  - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0])) <= 0:
+                h.pop()
+            h.append(p)
+        return h
+
+    return half(pts)[:-1] + half(pts[::-1])[:-1]
+
+
+@functools.lru_cache(maxsize=None)
+def _fold_chord(name, idx):
+    """The line the cursor's main fold is supposed to lie on.
+
+    On the author's frames the fold that splits the glass runs dead straight
+    from the point to the notch between the tails, and both ends are in the
+    traced outline already: the point is a convex corner, the notch is the
+    outline's deepest departure from its own convex hull. Nothing is chosen by
+    hand."""
+    best = None
+    for poly in C.TRACED[name]["frames"][idx]["polys"]:
+        pts = np.array([(p[0], p[1]) for p in poly], dtype=np.float64)
+        if len(pts) < 8:
+            continue
+        hull = np.array(_hull(pts))
+        if len(hull) < 3:
+            continue
+        depth, notch = 0.0, None
+        for p in pts:
+            d = np.inf
+            for i in range(len(hull)):
+                a, b = hull[i], hull[(i + 1) % len(hull)]
+                ab = b - a
+                t = np.clip(float((p - a) @ ab) / max(float(ab @ ab), 1e-9), 0.0, 1.0)
+                d = min(d, float(np.hypot(*(p - (a + t * ab)))))
+            if d > depth:
+                depth, notch = d, p
+        if notch is None or depth < _FOLD_MIN_DEPTH:
+            continue
+        tips = _sharp_corners(name, idx)
+        if not tips:
+            continue
+        tip = max(tips, key=lambda q: np.hypot(q[0] - notch[0], q[1] - notch[1]))
+        span = float(np.hypot(tip[0] - notch[0], tip[1] - notch[1]))
+        if span < _FOLD_MIN_SPAN:
+            continue
+        if best is None or span > best[0]:
+            best = (span, (float(tip[0]), float(tip[1])), (float(notch[0]), float(notch[1])))
+    return None if best is None else (best[1], best[2])
+
+
+@functools.lru_cache(maxsize=None)
+def _fold_offsets(name, idx):
+    """How far the fold actually sits from that line, in logical units.
+
+    Measured once at _FOLD_REF and kept in logical units, so every size and -
+    for the sheen-only animations, whose outline never moves - every frame gets
+    the identical correction and nothing can wobble because of it.
+
+    An offset is only taken where the cross-section really dips: near the point
+    the wedge is narrower than the search band, and the darkest sample there is
+    the outer bevel, not the fold. Pulling on that dragged the whole top edge
+    into the middle of the glass."""
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return None
+    src = 0 if name in INTERP else idx           # one static outline, one measurement
+    ch = _fold_chord(name, src) or ch
+    size = _FOLD_REF
+    s = size / V.LOGICAL
+    p0 = np.array(ch[0]) * s
+    p1 = np.array(ch[1]) * s
+    d = p1 - p0
+    nv = np.array([-d[1], d[0]]) / np.hypot(*d)
+    rgb, anchor = _master(name, src)
+    _, m_a = _resize(_orig(_key(name, src)), anchor)
+    rgb = rgb if anchor == size else _resize(np.dstack([rgb, m_a]), size)[0]
+    al = _mask(name, src, size) / 255.0 * _up_alpha(name, src, size)
+    solid = al > 0.8 * al.max()
+    lum = rgb @ _LUMA
+    qs = np.arange(-_FOLD_BAND, _FOLD_BAND + 1e-9, 0.1)
+    ts = np.linspace(0.05, 0.95, 25)
+    offs = []
+    for t in ts:
+        c = p0 + d * t
+        vals = []
+        for q in qs:
+            x, y = c + nv * q * s
+            xi, yi = int(round(x)), int(round(y))
+            vals.append(lum[yi, xi] if (0 <= xi < size and 0 <= yi < size and solid[yi, xi])
+                        else np.nan)
+        v = np.array(vals)
+        if np.isnan(v).mean() > 0.3 or np.nanmax(v) - np.nanmin(v) < _FOLD_DIP:
+            offs.append(0.0)
+            continue
+        k = int(np.nanargmin(v))
+        offs.append(0.0 if k in (0, len(v) - 1)
+                    else float(np.clip(qs[k], -_FOLD_CAP, _FOLD_CAP)))
+    k = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    k /= k.sum()
+    offs = np.convolve(np.pad(np.array(offs), 2, mode="edge"), k, mode="valid")
+    offs = offs * np.clip(np.minimum(ts, 1.0 - ts) / 0.15, 0.0, 1.0)   # ends stay put
+    return ts, offs, ch
+
+
+def _straighten_fold(rgb, name, idx, size):
+    """Put the main fold back on its own straight line.
+
+    A Real-ESRGAN upscale keeps the fold dark but lets its path wander: on
+    Arrow it bows a unit and a half off the line between the point and the
+    notch, which reads as the divider sliding sideways and the two halves of
+    the glass coming out uneven. The measured offset is undone by displacing
+    the colour across the chord, tapering to nothing within a couple of units
+    of it, so the fold straightens and the rest of the glass stays where the
+    author put it. One sampling, so nothing is superimposed on itself."""
+    got = _fold_offsets(name, idx)
+    if got is None:
+        return rgb
+    ts, offs, ch = got
+    if not np.any(np.abs(offs) > 0.02):
+        return rgb
+    s = size / V.LOGICAL
+    p0 = np.array(ch[0]) * s
+    p1 = np.array(ch[1]) * s
+    d = p1 - p0
+    span = float(np.hypot(*d))
+    u = d / span
+    nv = np.array([-u[1], u[0]])
+    ys, xs = np.mgrid[0:size, 0:size]
+    rel = np.dstack([xs - p0[0], ys - p0[1]])
+    t = (rel @ u) / span
+    q = (rel @ nv) / s
+    off = np.interp(np.clip(t, 0.0, 1.0), ts, offs)
+    fall = np.clip(1.0 - np.abs(q) / _FOLD_REACH, 0.0, 1.0) ** 2
+    shift = off * fall * s * ((t > 0.0) & (t < 1.0))
+    return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
+
+
+_PINCH_R = 4.0           # logical units around a point over which the glass closes
+_PINCH_P = 0.7           # how sharply that closing ramps up toward the apex
+
+
+def _tip_pinch(rgb, name, idx, size):
+    """Close the glass at the points the way the outline closes.
+
+    The traced outline runs to a true point, and at that point the two dark
+    bevels bounding the wedge must meet - there is no room left between them.
+    The colour master does not know that: it carries a bright core down the
+    middle of the wedge at a width that never goes to zero, so the two bevels
+    arrive at the apex still held apart. That is what reads as the point being
+    split on the inside while sharp on the outside.
+
+    The fix is to let the cross-section close: near a point the colour is taken
+    to the wedge's own edge colour, weighted to full at the apex. The edge
+    colour is not invented - it is the master's own, read from the band just
+    inside the silhouette and carried inward. So the bevels meet, the core
+    pinches off, and nothing outside _PINCH_R of a point is touched.
+
+    A radial magnification about the apex was tried first (it pulled the fold
+    in but also dragged the highlight out past the point, which read as a
+    second, offset tip) and so was a local contrast boost (the fold is absent
+    there, not faint, so boosting only etched what little was present)."""
+    pts = _sharp_corners(name, idx)
+    if not pts:
+        return rgb
+    al = _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size)
+    peak = al.max()
+    band = ((al > 0.35 * peak) & (al < 0.85 * peak)).astype(np.float64)
+    if band.sum() < 32:
+        return rgb
+    edge = _pushpull(rgb, band)
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    out = rgb
+    for px, py in pts:
+        d = np.hypot(xs - px * s, ys - py * s) / s
+        w = np.clip(1.0 - d / _PINCH_R, 0.0, 1.0) ** _PINCH_P
+        out = out * (1.0 - w[..., None]) + edge * w[..., None]
+    return out
 
 
 @functools.lru_cache(maxsize=None)
@@ -321,11 +642,11 @@ def _master(name, idx):
     w = _SHEEN_SMOOTH
     out = sum(_lin_master(name, (idx + d) % n) * wt
               for d, wt in zip((-1, 0, 1), w)) / sum(w)
+    mean = _cycle_mean(name)
     still = _tip_still(name, idx, anchor)
     if still is not None:
-        mean = _cycle_mean(name)
         out = mean * still[..., None] + out * (1.0 - still[..., None])
-    return V.linear_to_srgb(out).astype(np.float64), anchor
+    return V.linear_to_srgb(np.clip(out, 0.0, None)).astype(np.float64), anchor
 
 
 @functools.lru_cache(maxsize=None)
@@ -476,6 +797,81 @@ def _ai_dropout(key, size):
 
 
 @functools.lru_cache(maxsize=None)
+def _up_alpha_native(key):
+    """The Lanczos/AI alpha blend, built once at the master's own resolution.
+
+    It used to be rebuilt from scratch at every requested size, and the two
+    ingredients do not survive resampling the same way: the Lanczos reference
+    is a 32px frame stretched to `size`, the AI master is a 512px frame
+    squeezed to it, so their ratio - and with it the blend's level and the
+    logical width of its falloff - came out different on every rung of the
+    ladder. Measured on the shipped frames that cost 8..19% of the glass's
+    opacity between 32 and 384 (the cursor visibly thinned out as it got
+    bigger) and 0.22..0.45 logical units of coverage, i.e. the silhouette's own
+    size drifted with the size it was drawn at.
+
+    Building it once and resampling the result keeps one alpha for the cursor,
+    scaled rather than re-derived.
+
+    Flattening this map's own edge falloff was tried too, so that the vector
+    mask would be the only thing drawing the edge - it does take the residual
+    drift to nothing, and it ruins the artwork: the colour the master keeps at
+    the rim is the author's thin dark outline, and standing it up at full
+    opacity draws a second bright ridge parallel to the whole contour. That is
+    a facet the cursor never had. Reverted; the drift left over without it is
+    a twentieth of a logical unit and invisible."""
+    path = os.path.join(HERE, "src", "aialpha", key + ".png")
+    ai = np.asarray(Image.open(path).convert("L"), dtype=np.float64)
+    native = ai.shape[0]
+    _, ref = _resize(_orig(key), native)
+    ai = ai * _ai_scale(ref, ai)
+    t = _ai_tonality(key)
+    w = (_BLEND_AI * (t + (1.0 - t) * _TONE_FLOOR)) * (1.0 - _ai_dropout(key, native))
+    a = np.clip((1.0 - w) * ref + w * ai, 0, 255)
+    # Level held to the author's own median, once, at native resolution: a
+    # scalar applied before any resampling cannot bring per-size drift back
+    # with it. Measured through the vector mask, the way the shipped frame is -
+    # on the thin frames (Handwriting's pencil) the mask trims a different share
+    # of the map than of the plain Lanczos, and matching the two maps bare left
+    # that frame 9% out while every other one landed.
+    _, name, idx = key.split("__")
+    o = _orig(key)[..., 3]
+    target = np.median(o[o > _VIS * o.max()])
+    m = _mask(name, int(idx), _LEVEL_REF) / 255.0
+    for _ in range(3):                   # the clip at 255 eats part of each pass
+        cur = _resample(a, _LEVEL_REF) * m
+        vis = cur > _VIS * cur.max()
+        lvl = float(np.median(cur[vis])) if vis.sum() > 32 else 0.0
+        if lvl < 1e-6 or abs(lvl - target) < 0.05:
+            break
+        a = np.clip(a * target / lvl, 0, 255)
+    return a
+
+
+_LEVEL_REF = 128         # size the glass level is matched at
+
+
+def _resample(a, size):
+    if a.shape[0] == size:
+        return a
+    return np.clip(np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
+                              .resize((size, size), Image.LANCZOS), dtype=np.float64), 0, 255)
+
+
+def _up_alpha_raw(key, size):
+    """The native blend at `size`, resampled. Lanczos both ways: a box
+    downsample was tried for being the physically right average of a coverage
+    map and is measurably worse here (the ladder's interior spread went
+    2.5..3.9% -> 3.4..6.3%), because the rim this map carries is flat by
+    construction and what the average would protect is already gone."""
+    a = _up_alpha_native(key)
+    if a.shape[0] == size:
+        return a
+    return np.clip(np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
+                              .resize((size, size), Image.LANCZOS), dtype=np.float64), 0, 255)
+
+
+@functools.lru_cache(maxsize=None)
 def _up_alpha(name, idx, size):
     """Silhouette translucency at `size`. The vector mask already gives a crisp
     edge; this is the glass *inside* it. A plain Lanczos of the 32px original
@@ -497,20 +893,47 @@ def _up_alpha(name, idx, size):
     was tried and is worse than the artefact it removes: the AI alpha is what
     holds the glass opaque up to the traced edge, and without it every one of
     those frames goes soft all round. Falls back to the plain Lanczos when no
-    master is present, so a torch-free build is identical to before."""
+    master is present, so a torch-free build is identical to before.
+
+    The blend is made once at the master's own resolution (_up_alpha_native,
+    rim flattened) and only resampled here, so every size gets one and the same
+    alpha scaled rather than a fresh one derived from differently-resampled
+    ingredients. Rescaling the level per size on top of that was tried and is
+    not needed once the rim is flat - a uniform scalar cannot fix a
+    distribution, and it traded 0.03 -> 0.15 logical units of coverage drift
+    for the 2..4% of interior level it recovered."""
     key = _key(name, idx)
-    _, ref = _resize(_orig(key), size)
-    path = os.path.join(HERE, "src", "aialpha", key + ".png")
-    if not os.path.exists(path):
-        return ref
-    ai = np.asarray(Image.open(path).convert("L"), dtype=np.float64)
-    if ai.shape[0] != size:
-        ai = np.asarray(Image.fromarray(ai.astype(np.float32), mode="F")
-                        .resize((size, size), Image.LANCZOS), dtype=np.float64)
-    ai = ai * _ai_scale(ref, ai)
-    t = _ai_tonality(key)
-    w = (_BLEND_AI * (t + (1.0 - t) * _TONE_FLOOR)) * (1.0 - _ai_dropout(key, size))
-    return np.clip((1.0 - w) * ref + w * ai, 0, 255)
+    if not os.path.exists(os.path.join(HERE, "src", "aialpha", key + ".png")):
+        return _resize(_orig(key), size)[1]
+    a = _up_alpha_raw(key, size)
+    if size == _LEVEL_REF:
+        return a
+    # Held to the reference size's own level. The map is one and the same at
+    # every size, but the mask it gets multiplied by is not: that mask's edge is
+    # one device pixel wide, a whole logical unit of the cursor at 32px and a
+    # sixteenth of one at 512, so the product still drifts - 0.15 logical units
+    # of coverage, the cursor quietly changing size with the size it is drawn
+    # at. A scalar fixes that and cannot do any harm to the edge, which is what
+    # flattening the map's own falloff did (see _up_alpha_native).
+    m = _mask(name, idx, size)
+    ms = m.sum()
+    if ms < 1e-6:
+        return a
+    target = _up_alpha_level(name, idx)
+    for _ in range(2):                   # the clip at 255 eats part of the first
+        cur = float((m * a).sum() / ms)
+        if cur < 1e-6:
+            break
+        a = np.clip(a * (target / cur), 0, 255)
+    return a
+
+
+@functools.lru_cache(maxsize=None)
+def _up_alpha_level(name, idx):
+    """Mask-weighted mean of the translucency map at the reference size."""
+    m = _mask(name, idx, _LEVEL_REF)
+    return float((m * _up_alpha_raw(_key(name, idx), _LEVEL_REF)).sum()
+                 / max(m.sum(), 1e-6))
 
 
 def original(name, idx):
@@ -533,6 +956,298 @@ def _sat_anchor(name, idx):
                                     _orig(_key(name, i))[..., 3]) for i in idxs]))
 
 
+_BEAD_FEATHER = 0.25     # logical units the bead blends back into the glass
+
+
+def _bead(rgb, name, idx, size):
+    """Shade Help's dot as a bead of the same glass, not as a chip of the master.
+
+    Two logical units across is below anything the colour master can resolve: it
+    fills the dot with a hard dark wedge and a bright crescent, which at 512
+    reads as a stone chipped out of the cursor. The dot's outline is analytic
+    here already (see cursors._round_island), so its shading can be too - the
+    same bevel lighting the geometric cursors use, over the colour of the glass
+    immediately around it."""
+    if name not in C.HELP_ROUND_ISLANDS:
+        return rgb
+    beads = [C._round_island(poly) for poly in C.TRACED[name]["frames"][idx]["polys"]
+             if len(poly) <= 12]
+    beads = [b for b in beads if b is not None]
+    if not beads:
+        return rgb
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    out = rgb
+    for cx, cy, r in beads:
+        dist = np.hypot(xs - cx * s, ys - cy * s) / s
+        inside = dist < r + _BEAD_FEATHER
+        if not inside.any():
+            continue
+        # The dot floats free of the arrow, so there is no glass around it to
+        # borrow a tone from - a push-pull fill here reads the transparent
+        # background and washes the bead out. The author's own three pixels do
+        # carry the right tone even though they carry no shape, so the bead is
+        # levelled onto their mean and gets its form from the shading alone.
+        base, oa = _resize(_orig(_key(name, idx)), size)
+        w0 = inside.astype(np.float64) * (oa.astype(np.float64) / 255.0)
+        if w0.sum() < 1.0:
+            continue
+        tone = (base.astype(np.float64) * w0[..., None]).sum((0, 1)) / w0.sum()
+        around = np.broadcast_to(tone, rgb.shape)
+        # A sphere, not a cone: the height r - dist has a crease running out of
+        # the centre because its normal turns over discontinuously there, and
+        # the bead came out with a seam across it.
+        d = np.sqrt(np.clip(r * r - dist * dist, 0.0, None))
+        gy, gx = np.gradient(d)
+        gx, gy = gx * s, gy * s
+        inv = 1.0 / np.sqrt(gx * gx + gy * gy + 1.0 / (_BEVEL_SLOPE ** 2))
+        nx, ny, nz = -gx * inv, -gy * inv, inv / _BEVEL_SLOPE
+        lx, ly, lz = _BEVEL_LIGHT
+        ln = np.sqrt(lx * lx + ly * ly + lz * lz)
+        dot = np.clip((nx * lx + ny * ly + nz * lz) / ln, -1.0, 1.0)
+        shade = _BEVEL_DIFF * dot
+        w = inside.astype(np.float64)
+        shade = shade - float((shade * w).sum() / max(w.sum(), 1e-6))
+        blend = np.clip((r + _BEAD_FEATHER - dist) / _BEAD_FEATHER, 0.0, 1.0)[..., None]
+        out = out * (1.0 - blend) + np.clip(around + shade[..., None], 0, 255) * blend
+    return out
+
+
+_ENGRAVE_DROP = 70.0     # levels a pixel may fall below the glass around it
+_ENGRAVE_UNIT = 2.0      # logical units that "around it" spans
+
+
+def _engrave(rgb, name, size):
+    """Keep Help's question mark a groove in the glass instead of ink on it.
+
+    The author cut the mark into the surface: a shallow depression, a highlight
+    on one side of it, and nothing anywhere near black. The master reads those
+    few dark 32px pixels as a stroke and sharpens them into a solid black
+    crescent with a hard edge - it stops looking like glass and starts looking
+    like a sticker. Measured against the author's own frame, our darkest glass
+    reaches 0 where his floor is 35, and a full percent of the visible cursor
+    is pure black where he has nothing below 100.
+
+    Limiting how far a pixel may fall below its own surroundings restores the
+    groove and leaves everything else alone, because a groove is a local dip
+    while the cursor's own dark rim is a step at the silhouette's edge, where
+    there is nothing brighter beside it to be measured against.
+
+    Only Help. Tried on the arrows the same limit takes the crease off the top
+    edge and the glass goes flat - those darks are the drawing, not invention."""
+    lum = rgb.mean(-1)
+    small = max(2, int(round(V.LOGICAL / _ENGRAVE_UNIT)))
+    im = Image.fromarray(lum.astype(np.float32), mode="F")
+    around = np.asarray(im.resize((small, small), Image.BOX)
+                          .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    lift = np.clip(around - _ENGRAVE_DROP - lum, 0.0, None)
+    return np.clip(rgb + lift[..., None], 0, 255)
+
+
+# Cursors whose colour master is not a rendering of the author's drawing but an
+# invention. Real-ESRGAN, handed a 32px wedge with one straight fold in it,
+# returns a wedge with an S-shaped hook and a swelling - the shapes read as
+# melted rather than faceted, and it does it on every one of the plain
+# geometric cursors. No measurement separates those frames from good ones
+# (structure correlation, contrast ratio and edge density were all tried), and
+# the author's own colour, scaled up, is coherent but has no fold left in it at
+# all past ~128px.
+#
+# For these the shading is built from the outline instead. A wedge is a bevel:
+# the distance to its own edge rises to a ridge along the medial axis, which for
+# a triangle runs dead straight from the apex - the very fold the author drew.
+# Lighting that surface gives two clean facets meeting on it. This is a
+# deliberate departure from the 2006 pixels, taken because reproducing them
+# through the net produces something worse than either.
+_SYNTH_BEVEL = {"Cross", "SizeAll", "SizeNS", "SizeWE", "SizeNESW", "SizeNWSE", "IBeam"}
+
+_BEVEL_REF = 512         # size the distance field is measured at, once
+_BEVEL_LIGHT = (-0.6, -0.8, 0.55)   # from the upper left, as the author lit them
+_BEVEL_SLOPE = 1.6       # how steeply the glass rises from its edge
+_BEVEL_DIFF = 52.0       # luma swing between the facets
+_BEVEL_RIM = 26.0        # how much the outline's own dark edge darkens
+_BEVEL_RIM_W = 0.9       # logical units that edge is wide
+
+
+def _chamfer(inside):
+    """Distance to the outside of `inside`, in pixels.
+
+    Two raster passes with a (1, sqrt2) chamfer. The left-to-right step inside a
+    row is a running minimum of d[k] + (x - k), which is (d[k] - k) plus x, so
+    numpy's accumulate does it in one call instead of a Python loop; the same
+    trick backwards covers right-to-left. A plain minimum filter was tried first
+    and steps by exactly one in eight directions, which builds an octagonal,
+    staircased field - its gradient then draws a diagonal hatch straight across
+    the facets."""
+    big = float(inside.shape[0] * 4)
+    d = np.where(inside, big, 0.0)
+    n = d.shape[1]
+    idx = np.arange(n, dtype=np.float64)
+    diag = np.sqrt(2.0)
+
+    def scan(rows, step):
+        for y in rows:
+            ny = y - step
+            prev = d[ny] if 0 <= ny < d.shape[0] else None
+            if prev is not None:
+                cand = prev + 1.0
+                cand[1:] = np.minimum(cand[1:], prev[:-1] + diag)
+                cand[:-1] = np.minimum(cand[:-1], prev[1:] + diag)
+                d[y] = np.minimum(d[y], cand)
+            row = d[y]
+            row = np.minimum(row, np.minimum.accumulate(row - idx) + idx)
+            rev = row[::-1]
+            row = np.minimum(row, (np.minimum.accumulate(rev - idx) + idx)[::-1])
+            d[y] = row
+
+    scan(range(1, d.shape[0]), 1)
+    scan(range(d.shape[0] - 2, -1, -1), -1)
+    return d
+
+
+@functools.lru_cache(maxsize=None)
+def _edge_distance(name, idx):
+    """Distance from every interior pixel to the silhouette's edge, in logical
+    units, measured once at _BEVEL_REF and resampled from there."""
+    size = _BEVEL_REF
+    return _chamfer(_mask(name, idx, size) > 127) / (size / V.LOGICAL)
+
+
+_BEVEL_SMOOTH = 0.3     # logical units the field is smoothed by before differencing
+
+
+def _smooth1(a, unit, size):
+    """Blur a single-channel float field by `unit` logical units."""
+    small = max(2, int(round(V.LOGICAL / unit)))
+    im = Image.fromarray(a.astype(np.float32), mode="F")
+    return np.asarray(im.resize((small, small), Image.BOX)
+                        .resize((size, size), Image.BILINEAR), dtype=np.float64)
+
+
+_ROUND_HOLES = {"SizeAll"}   # cursors whose interior hole the author drew round
+_HOLE_FEATHER = 0.08         # logical units the analytic hole's edge spans
+
+
+@functools.lru_cache(maxsize=None)
+def _hole_circle(name, idx):
+    """Centre and radius of the interior hole the alpha master draws, or None.
+
+    Only the outline of SizeAll is traced; its centre hole lives in the alpha
+    master alone, and the master renders it as a rounded octagon - the facets
+    are obvious by 512 against an outline that is otherwise analytic. It is a
+    circle to within a fifth of a logical unit (equal-area radius 4.33, largest
+    radius 4.52), so measuring it once and redrawing it as one is a correction,
+    not a redesign."""
+    size = 512
+    a = _up_alpha(name, idx, size)
+    m = _mask(name, idx, size)
+    inner = (m > 250) & (_edge_distance(name, idx) > 0.6)
+    if not inner.any():
+        return None
+    dark = ((m > 250) & (a < 0.5 * np.median(a[inner]))).astype(np.uint8) * 255
+    # grow out of the centre rather than label the image: everything else that
+    # is dark inside the mask is where the two silhouettes disagree at the rim,
+    # and only the component holding the middle is the hole
+    seed = np.zeros((size, size), np.uint8)
+    c = size // 2
+    seed[c - 2:c + 3, c - 2:c + 3] = 255
+    for _ in range(size):
+        grown = np.minimum(np.asarray(Image.fromarray(seed)
+                                      .filter(ImageFilter.MaxFilter(3))), dark)
+        if (grown == seed).all():
+            break
+        seed = grown
+    comp = seed > 0
+    if comp.sum() < 64:
+        return None
+    ys, xs = np.nonzero(comp)
+    L = size / V.LOGICAL
+    return (xs.mean() / L, ys.mean() / L, (comp.sum() / np.pi) ** 0.5 / L)
+
+
+def _round_hole(alpha, name, idx, size):
+    """Cut the measured hole back out as a true circle."""
+    if name not in _ROUND_HOLES:
+        return alpha
+    fit = _hole_circle(name, idx)
+    if fit is None:
+        return alpha
+    cx, cy, r = fit
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    dist = np.hypot(xs - cx * L, ys - cy * L) / L
+    keep = np.clip((dist - r) / _HOLE_FEATHER, 0.0, 1.0)
+    near = dist < r + 1.0            # leave the rest of the frame untouched
+    return np.where(near, alpha * keep, alpha)
+
+
+_DEBURR_LOGICAL = 0.14   # widest feature a burr may be, in logical units
+
+
+def _deburr(alpha, size):
+    """Close hairline nicks where the two silhouettes disagree.
+
+    The alpha is the vector mask times the AI alpha master, and the two do not
+    trace exactly the same outline. Almost everywhere the difference is under a
+    pixel and invisible; where the outline turns through a deep concave corner -
+    SizeAll's waist, between an arm and the centre hole - the master's edge
+    crosses the vector one and a thin transparent spike is left sticking into
+    the glass, plain at 512.
+
+    A grey closing at a fraction of a logical unit fills a spike that thin and
+    is too small to touch anything drawn on purpose: the hole is twenty times
+    wider, Help's engraved groove ten."""
+    r = max(1, int(round(_DEBURR_LOGICAL * size / V.LOGICAL)))
+    k = 2 * r + 1
+    im = Image.fromarray(np.clip(alpha, 0, 255).astype(np.uint8), "L")
+    closed = im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k))
+    return np.maximum(alpha, np.asarray(closed, dtype=np.float64))
+
+
+def _bevel_shading(name, idx, size):
+    """Luma to add so a flat wedge reads as bevelled glass."""
+    d = _edge_distance(name, idx)
+    if d.shape[0] != size:
+        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
+                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    L = size / V.LOGICAL
+    # The field is grown a whole pixel at a time, so it climbs in steps; its
+    # gradient turns those steps into a diagonal hatch across the facets, plain
+    # to see by 384. Smoothing it first costs nothing - the ridge stays where it
+    # is, and only the staircase goes.
+    gy, gx = np.gradient(_smooth1(d, _BEVEL_SMOOTH, size))
+    gx, gy = gx * L, gy * L                      # per logical unit
+    inv = 1.0 / np.sqrt(gx * gx + gy * gy + 1.0 / (_BEVEL_SLOPE ** 2))
+    nx, ny, nz = -gx * inv, -gy * inv, inv / _BEVEL_SLOPE
+    lx, ly, lz = _BEVEL_LIGHT
+    ln = np.sqrt(lx * lx + ly * ly + lz * lz)
+    dot = np.clip((nx * lx + ny * ly + nz * lz) / ln, -1.0, 1.0)
+    rim = np.clip(1.0 - d / _BEVEL_RIM_W, 0.0, 1.0) ** 1.5
+    shade = _BEVEL_DIFF * dot - _BEVEL_RIM * rim
+    # Mean removed: a light from one side lands more of the cone facing it than
+    # away, so the raw term brightens the glass by a dozen levels as well as
+    # shaping it, and the wedges came out paler than the author drew them.
+    w = _mask(name, idx, size)
+    if w.sum() > 1e-6:
+        shade = shade - float((shade * w).sum() / w.sum())
+    return shade
+
+
+# Frames whose colour master is not usable. Real-ESRGAN, given a frame that is
+# nearly transparent to begin with, does not upscale it - it invents a sheet of
+# glass plates with hard cracks between them, and Handwriting's middle three are
+# where it does that. Nothing separates them from the good frames by measurement:
+# structure correlation, local-contrast ratio and edge density were all tried and
+# all rank ordinary frames above these. So they are named, which is what a hand
+# correction is.
+#
+# What replaces them is the author's own colour, Lanczos-scaled: blurred, because
+# it comes from 32px, but whole. At the shipped sizes the difference does not
+# show; past 256 these three read softer than their neighbours, which is the
+# price of not having them read as broken glass.
+_BROKEN_COLOUR = {("Handwriting", 3), ("Handwriting", 4), ("Handwriting", 5)}
+
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -549,8 +1264,19 @@ def frame_image(name, idx, size):
         rgb, _ = _resize(np.dstack([m_rgb, m_a]), size)
         if size > anchor:                                  # only when past native detail
             rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
+    if (name, idx) in _BROKEN_COLOUR:
+        rgb = _resize(orig, size)[0]
+    if name == "Help":
+        rgb = _engrave(rgb, name, size)
+        rgb = _bead(rgb, name, idx, size)
+    if name in _SYNTH_BEVEL:
+        rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
+                      0, 255)
+    rgb = _straighten_fold(rgb, name, idx, size)
+    rgb = _tip_pinch(rgb, name, idx, size)
     up_a = _up_alpha(name, idx, size)
-    alpha = _mask(name, idx, size) / 255.0 * up_a
+    alpha = _round_hole(_deburr(_mask(name, idx, size) / 255.0 * up_a, size),
+                        name, idx, size)
     # anchor saturation at the shipped size, where the superiority metric reads
     # it: the premultiplied linear-light downsample shifts a vivid ring's chroma
     # (the 512-anchored match drifted +12% by 128), so matching here to the 32px
@@ -559,7 +1285,7 @@ def frame_image(name, idx, size):
     orig_sat = _sat_anchor(name, idx)
     if orig_sat >= 0.035:
         rgb = _sat_match(rgb, alpha, orig_sat * 1.05)
-    return _compose(rgb, alpha)
+    return _hide_ghost(_compose(rgb, alpha), name, size)
 
 
 def _premult(im):
@@ -579,16 +1305,28 @@ def _unpremult(m):
 
 def _lerp(im_a, im_b, t):
     """Cross-fade in premultiplied linear-light space - no dark fringes and no
-    gamma-space midpoint dimming.
-
-    Deliberately linear: a cubic (Catmull-Rom, monotone Hermite) makes the
-    velocity continuous across keyframes but a cross-fade is a dissolve, not
-    motion, so its apparent speed then oscillates *inside* each interval -
-    measured on AppStarting's tip the peak-to-mean speed went 1.69 -> 2.02 and
-    the frame-to-frame jerk doubled. The sheen's uneven pace belongs to the
-    author's keyframes and is damped there instead (see _SHEEN_SMOOTH)."""
+    gamma-space midpoint dimming."""
     pa, pb = _premult(im_a), _premult(im_b)
     return _unpremult(pa + (pb - pa) * t)
+
+
+def _spline(p0, p1, p2, p3, t):
+    """Catmull-Rom through four keyframes, in premultiplied linear light.
+
+    A straight cross-fade traces a polyline through image space, and at each
+    keyframe that polyline turns a corner: the frame either side of a keyframe
+    differs from it more than two frames inside an interval do, which is a
+    regular tick three times a cycle. Rounding the corner removes it.
+
+    A cubic was tried once before and reverted, because at uniform t its
+    apparent speed oscillates *inside* each interval - which it does. That is
+    no longer how the frames are placed: anim_frames measures each interval's
+    own pace and inverts it, so the curve is sampled where it moves evenly
+    rather than where its parameter says it should."""
+    a, b, c, d = (_premult(p) for p in (p0, p1, p2, p3))
+    return _unpremult(0.5 * ((2 * b) + (-a + c) * t
+                             + (2 * a - 5 * b + 4 * c - d) * t * t
+                             + (-a + 3 * b - 3 * c + d) * t * t * t))
 
 
 def anim_frames(name, size, interp=True):
@@ -604,15 +1342,53 @@ def anim_frames(name, size, interp=True):
     pointer on every frame swap with no compositor-side frame sync, and at
     a true 60 fps cadence that lands the swap out of phase with a 60 Hz
     panel's own refresh often enough to read as a visible flicker on the
-    animated cursors; static ones never change so there's nothing to tear."""
+    animated cursors; static ones never change so there's nothing to tear.
+
+    The output frames are spaced evenly by how much the picture changes, not by
+    keyframe index. The author's sheen does not sweep at a constant rate - the
+    widest step of a cycle runs a quarter above its own average - and cutting
+    each interval into three equal cross-fades preserves that unevenness
+    exactly, so the sweep visibly hurries and dawdles. Placing all 27 frames at
+    equal intervals of cumulative change spreads the motion out instead. Frame
+    count and cycle length are untouched, so the .ani timing is unchanged."""
     n = len(BY_NAME[name]["frames"])
     base = [frame_image(name, i, size) for i in range(n)]
     if name not in INTERP or not interp:
         return base, list(BY_NAME[name]["rates"])
-    out = []
+    arr = [np.asarray(f, dtype=np.float64) for f in base]
+    peak = max(float(x[..., 3].max()) for x in arr)
+
+    def moved(a, b):                     # how much the glass itself changed
+        m = (a[..., 3] > _PACE_SOLID * peak) & (b[..., 3] > _PACE_SOLID * peak)
+        return float(np.abs(a[..., :3][m] - b[..., :3][m]).mean()) if m.sum() else 0.0
+
+    # Distance is measured along each interval too, not just between keyframes:
+    # a cross-fade run at equal t does not change the picture at an equal rate,
+    # because the blend is linear in premultiplied linear light and the eye (and
+    # the metric) reads sRGB. Sampling the interval and inverting its own
+    # distance curve is what actually evens the pace out.
+    def at(i, t):
+        return _spline(base[(i - 1) % n], base[i], base[(i + 1) % n], base[(i + 2) % n], t)
+
+    curves = []
     for i in range(n):
-        nxt = base[(i + 1) % n]
-        out.append(base[i])
-        for k in range(1, INTERP_N):
-            out.append(_lerp(base[i], nxt, k / INTERP_N))
+        ts = np.linspace(0.0, 1.0, _PACE_SAMPLES)
+        mid = [arr[i]] + [np.asarray(at(i, t), dtype=np.float64)
+                          for t in ts[1:-1]] + [arr[(i + 1) % n]]
+        d = np.array([moved(mid[k], mid[k + 1]) for k in range(len(mid) - 1)])
+        curves.append((ts, np.concatenate([[0.0], np.cumsum(d)])))
+    step = np.array([c[1][-1] for c in curves])
+    if step.sum() < 1e-9:
+        step = np.ones(n)
+        curves = [(np.linspace(0, 1, _PACE_SAMPLES), np.linspace(0, 1, _PACE_SAMPLES))
+                  for _ in range(n)]
+    edge = np.concatenate([[0.0], np.cumsum(step)])      # distance at each keyframe
+    total = edge[-1]
+    out = []
+    for k in range(n * INTERP_N):
+        want = k * total / (n * INTERP_N)
+        i = min(int(np.searchsorted(edge, want, side="right")) - 1, n - 1)
+        ts, cum = curves[i]
+        t = float(np.interp(want - edge[i], cum, ts))
+        out.append(base[i] if t <= 1e-6 else _hide_ghost(at(i, t), name, size))
     return out, [1] * len(out)
