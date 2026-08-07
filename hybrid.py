@@ -586,9 +586,9 @@ def _straighten_fold(rgb, name, idx, size):
     return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
 
 
-_PINCH_R = 7.0           # logical units from a point at which the rebuild ends
-_PINCH_FULL = 2.5        # inside this the tip is the rebuilt wedge outright
-_PINCH_P = 0.9           # how sharply the rebuild ramps up toward the apex
+_PINCH_R = 2.6           # logical units from a point at which the rebuild ends
+_PINCH_FULL = 0.6        # inside this the tip is the rebuilt wedge outright
+_PINCH_P = 1.0           # how sharply the rebuild ramps up toward the apex
 
 
 def _tip_pinch(rgb, name, idx, size):
@@ -1133,20 +1133,71 @@ def _chamfer(inside):
 @functools.lru_cache(maxsize=None)
 def _edge_distance(name, idx):
     """Distance from every interior pixel to the silhouette's edge, in logical
-    units, measured once at _BEVEL_REF and resampled from there."""
+    units, measured once at _BEVEL_REF and resampled from there.
+
+    Exact, from the traced segments themselves, when there are any. A chamfer
+    on the rasterised mask grows in steps of 1 and sqrt2, so the field carries a
+    fine terracing; differentiating it to light the bevel turns that terracing
+    into a speckled crest along the medial ridge - the fold came out as a dotted
+    line rather than a drawn one, and smoothing the field first only traded the
+    speckle for a staircase. The distance to a line segment is a closed form, so
+    there is no reason to approximate it."""
     size = _BEVEL_REF
-    return _chamfer(_mask(name, idx, size) > 127) / (size / V.LOGICAL)
+    polys = C.TRACED.get(name, {}).get("frames", [{}])[idx].get("polys") \
+        if name in C.TRACED else None
+    inside = _mask(name, idx, size) > 127
+    if not polys:
+        return _chamfer(inside) / (size / V.LOGICAL)
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    px = (xs + 0.5) / L
+    py = (ys + 0.5) / L
+    best = np.full((size, size), np.inf)
+    for poly in polys:
+        pts = np.array([(p[0], p[1]) for p in poly], dtype=np.float64)
+        for i in range(len(pts)):
+            a, b = pts[i], pts[(i + 1) % len(pts)]
+            ab = b - a
+            den = float(ab @ ab)
+            if den < 1e-12:
+                continue
+            t = np.clip(((px - a[0]) * ab[0] + (py - a[1]) * ab[1]) / den, 0.0, 1.0)
+            best = np.minimum(best, np.hypot(px - (a[0] + t * ab[0]),
+                                             py - (a[1] + t * ab[1])))
+    return np.where(inside, best, 0.0)
 
 
 _BEVEL_SMOOTH = 0.3     # logical units the field is smoothed by before differencing
 
 
+def _box1(a, r, axis):
+    """Running mean of width 2r+1 along one axis, edge-clamped, via cumsum."""
+    if r < 1:
+        return a
+    a = np.swapaxes(a, 0, axis)
+    pad = np.concatenate([np.repeat(a[:1], r, 0), a, np.repeat(a[-1:], r, 0)], 0)
+    c = np.cumsum(pad, 0)
+    out = (c[2 * r:] - np.concatenate([np.zeros_like(c[:1]), c[:-2 * r - 1]], 0)) \
+        / (2.0 * r + 1.0)
+    return np.swapaxes(out, 0, axis)
+
+
 def _smooth1(a, unit, size):
-    """Blur a single-channel float field by `unit` logical units."""
-    small = max(2, int(round(V.LOGICAL / unit)))
-    im = Image.fromarray(a.astype(np.float32), mode="F")
-    return np.asarray(im.resize((small, small), Image.BOX)
-                        .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    """Blur a single-channel float field by `unit` logical units.
+
+    Three box passes each way, which is close enough to a Gaussian and costs
+    four cumulative sums. This used to downsample to a small grid with BOX and
+    come back up with BILINEAR: cheap, but the result is built out of blocks,
+    and lighting a bevel through it turned the fold into a visible staircase -
+    asking for more smoothing made the steps bigger rather than the line
+    smoother."""
+    r = max(0, int(round(unit * size / V.LOGICAL / 3.0)))
+    if r < 1:
+        return a.astype(np.float64)
+    out = a.astype(np.float64)
+    for _ in range(3):
+        out = _box1(_box1(out, r, 0), r, 1)
+    return out
 
 
 _ROUND_HOLES = {"SizeAll"}   # cursors whose interior hole the author drew round
