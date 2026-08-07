@@ -586,8 +586,9 @@ def _straighten_fold(rgb, name, idx, size):
     return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
 
 
-_PINCH_R = 4.0           # logical units around a point over which the glass closes
-_PINCH_P = 0.7           # how sharply that closing ramps up toward the apex
+_PINCH_R = 7.0           # logical units from a point at which the rebuild ends
+_PINCH_FULL = 2.5        # inside this the tip is the rebuilt wedge outright
+_PINCH_P = 0.9           # how sharply the rebuild ramps up toward the apex
 
 
 def _tip_pinch(rgb, name, idx, size):
@@ -600,16 +601,23 @@ def _tip_pinch(rgb, name, idx, size):
     arrive at the apex still held apart. That is what reads as the point being
     split on the inside while sharp on the outside.
 
-    The fix is to let the cross-section close: near a point the colour is taken
-    to the wedge's own edge colour, weighted to full at the apex. The edge
-    colour is not invented - it is the master's own, read from the band just
-    inside the silhouette and carried inward. So the bevels meet, the core
-    pinches off, and nothing outside _PINCH_R of a point is touched.
+    So near a point the master is set aside and the glass is rebuilt: its tone
+    is the wedge's own edge colour, read from the band just inside the
+    silhouette and carried inward, and its shape is the bevel the outline
+    implies - the distance to the edge rises to a ridge on the medial axis,
+    which at a true corner runs into that corner. Lighting it gives two facets
+    meeting on one line that ends at the point, which is one inner tip arriving
+    at the outer one. Nothing outside _PINCH_R of a point is touched.
 
-    A radial magnification about the apex was tried first (it pulled the fold
-    in but also dragged the highlight out past the point, which read as a
-    second, offset tip) and so was a local contrast boost (the fold is absent
-    there, not faint, so boosting only etched what little was present)."""
+    The edge colour alone was tried first, without the bevel. It does close the
+    core, but with nothing in its place the tip goes to a flat smear and the
+    inner line disappears instead of converging - the point reads soft.
+
+    A radial magnification about the apex was tried before either (it pulled
+    the fold in but also dragged the highlight out past the point, which read
+    as a second, offset tip) and so was a local contrast boost (the fold is
+    absent there, not faint, so boosting only etched what little was
+    present)."""
     pts = _sharp_corners(name, idx)
     if not pts:
         return rgb
@@ -619,13 +627,14 @@ def _tip_pinch(rgb, name, idx, size):
     if band.sum() < 32:
         return rgb
     edge = _pushpull(rgb, band)
+    wedge = np.clip(edge + _bevel_shading(name, idx, size)[..., None], 0, 255)
     s = size / V.LOGICAL
     ys, xs = np.mgrid[0:size, 0:size]
     out = rgb
     for px, py in pts:
         d = np.hypot(xs - px * s, ys - py * s) / s
-        w = np.clip(1.0 - d / _PINCH_R, 0.0, 1.0) ** _PINCH_P
-        out = out * (1.0 - w[..., None]) + edge * w[..., None]
+        w = np.clip((_PINCH_R - d) / (_PINCH_R - _PINCH_FULL), 0.0, 1.0) ** _PINCH_P
+        out = out * (1.0 - w[..., None]) + wedge * w[..., None]
     return out
 
 
@@ -1277,6 +1286,9 @@ def _master_rgb(name, idx, size):
 
 
 _FLOOR_SHARE = 0.3       # of the author's own darkest glass, where ours may bottom out
+_GASH_WIDTH = 0.35       # logical units: darkness this thin is a gash, not a crease
+_GASH_CUT = 0.8          # how much of that thin darkness is taken away
+_GASH_KEEP_EDGE = 0.35   # logical units of the outline's own dark rim left alone
 
 
 @functools.lru_cache(maxsize=None)
@@ -1299,28 +1311,54 @@ def _lift_blacks(rgb, name, idx, size):
     converges on the outline still read as split - the eye follows the gash,
     not the outline.
 
-    Everything below the author's floor is compressed linearly into the top
-    part of that range, so the ordering of every crease survives and only the
-    invented black goes. The share is picked by eye against the alternative:
-    lifting all the way to his floor washes the top crease out to grey and the
-    glass reads as plastic, while a third of it takes the gash off and leaves
-    the crease as dark as it was drawn. A relative limit was tried before this and does flatten
-    the drawing, because it cannot tell a crease from a gash by depth alone -
-    but a floor can, since the drawing never reaches it."""
+    Two things are done with the darkness below that floor, because depth alone
+    does not separate a gash from a crease.
+
+    The width does. A gash is a hairline: it disappears under a grey opening a
+    fraction of a unit wide, while the dark band the author drew along an edge
+    survives one, being many units long and a unit or more thick. So the part
+    of the darkness that the opening removes - the top hat - is taken out
+    almost entirely, and that is what clears the tips: on UpArrow the gash
+    between the yellow and the rim ran to 33 where the author has nothing
+    below 108.
+
+    What is left over is compressed linearly into the top of the range below
+    the floor, so the ordering of every crease survives. Lifting everything all
+    the way to his floor was tried and washes the top crease out to grey: the
+    glass reads as plastic. A relative limit on its own was tried before either
+    and flattens the drawing for the same reason - it reads depth, not width."""
     knee = _dark_knee(name, idx)
     if knee is None:
         return rgb
     floor = knee * _FLOOR_SHARE
     lum = rgb @ _LUMA
-    low = lum < knee
-    if not low.any():
+    if not (lum < knee).any():
         return rgb
+    r = max(1, int(round(_GASH_WIDTH * size / V.LOGICAL)))
+    k = 2 * r + 1
+    # A morphological closing of the colour itself, not of its luma. Closing
+    # erases dark features narrower than the window and leaves everything else
+    # where it is, so what it hands back at a gash is the colour of the glass
+    # the gash was cut into - the right hue by construction. Raising luma
+    # instead, whether by adding or by scaling, has to invent the chroma: on
+    # UpArrow's saturated yellow adding put a violet cast along the fold, and
+    # scaling turned near-black pixels into red and blue confetti.
+    im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB")
+    closed = np.asarray(im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k)),
+                        dtype=np.float64)
+    # and only inside. The dark band along the silhouette is the outline the
+    # author drew, it is a hairline by the same test, and eating it leaves the
+    # cursor with a pale edge and no shape.
+    d = np.asarray(Image.fromarray(_edge_distance(name, idx).astype(np.float32), mode="F")
+                   .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    inside = np.clip((d - _GASH_KEEP_EDGE) / _GASH_KEEP_EDGE, 0.0, 1.0)[..., None]
+    out = rgb + _GASH_CUT * inside * np.clip(closed - rgb, 0.0, None)
+    # what is left below the author's floor is a broad dark, which is drawing;
+    # it is only compressed, never removed
+    lum = out @ _LUMA
+    low = lum < knee
     want = floor + (knee - floor) * (lum / max(knee, 1e-6))
-    # added, not scaled: a near-black pixel's channels are a handful of levels
-    # apart, and multiplying to reach the floor multiplies that gap too - the
-    # gash came back as red and blue confetti. Adding moves the luma and leaves
-    # the chroma the size it was.
-    return np.clip(rgb + np.where(low, want - lum, 0.0)[..., None], 0, 255)
+    return np.clip(out + np.where(low, want - lum, 0.0)[..., None], 0, 255)
 
 
 _FREEZE_UNIT = 0.6       # logical units below which detail counts as a line
