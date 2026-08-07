@@ -586,9 +586,8 @@ def _straighten_fold(rgb, name, idx, size):
     return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
 
 
-_PINCH_R = 2.6           # logical units from a point at which the rebuild ends
-_PINCH_FULL = 0.6        # inside this the tip is the rebuilt wedge outright
-_PINCH_P = 1.0           # how sharply the rebuild ramps up toward the apex
+_PINCH_R = 4.0           # logical units around a point over which the glass closes
+_PINCH_P = 0.7           # how sharply that closing ramps up toward the apex
 
 
 def _tip_pinch(rgb, name, idx, size):
@@ -601,23 +600,16 @@ def _tip_pinch(rgb, name, idx, size):
     arrive at the apex still held apart. That is what reads as the point being
     split on the inside while sharp on the outside.
 
-    So near a point the master is set aside and the glass is rebuilt: its tone
-    is the wedge's own edge colour, read from the band just inside the
-    silhouette and carried inward, and its shape is the bevel the outline
-    implies - the distance to the edge rises to a ridge on the medial axis,
-    which at a true corner runs into that corner. Lighting it gives two facets
-    meeting on one line that ends at the point, which is one inner tip arriving
-    at the outer one. Nothing outside _PINCH_R of a point is touched.
+    The fix is to let the cross-section close: near a point the colour is taken
+    to the wedge's own edge colour, weighted to full at the apex. The edge
+    colour is not invented - it is the master's own, read from the band just
+    inside the silhouette and carried inward. So the bevels meet, the core
+    pinches off, and nothing outside _PINCH_R of a point is touched.
 
-    The edge colour alone was tried first, without the bevel. It does close the
-    core, but with nothing in its place the tip goes to a flat smear and the
-    inner line disappears instead of converging - the point reads soft.
-
-    A radial magnification about the apex was tried before either (it pulled
-    the fold in but also dragged the highlight out past the point, which read
-    as a second, offset tip) and so was a local contrast boost (the fold is
-    absent there, not faint, so boosting only etched what little was
-    present)."""
+    A radial magnification about the apex was tried first (it pulled the fold
+    in but also dragged the highlight out past the point, which read as a
+    second, offset tip) and so was a local contrast boost (the fold is absent
+    there, not faint, so boosting only etched what little was present)."""
     pts = _sharp_corners(name, idx)
     if not pts:
         return rgb
@@ -627,14 +619,13 @@ def _tip_pinch(rgb, name, idx, size):
     if band.sum() < 32:
         return rgb
     edge = _pushpull(rgb, band)
-    wedge = np.clip(edge + _bevel_shading(name, idx, size)[..., None], 0, 255)
     s = size / V.LOGICAL
     ys, xs = np.mgrid[0:size, 0:size]
     out = rgb
     for px, py in pts:
         d = np.hypot(xs - px * s, ys - py * s) / s
-        w = np.clip((_PINCH_R - d) / (_PINCH_R - _PINCH_FULL), 0.0, 1.0) ** _PINCH_P
-        out = out * (1.0 - w[..., None]) + wedge * w[..., None]
+        w = np.clip(1.0 - d / _PINCH_R, 0.0, 1.0) ** _PINCH_P
+        out = out * (1.0 - w[..., None]) + edge * w[..., None]
     return out
 
 
@@ -1139,19 +1130,16 @@ def _edge_distance(name, idx):
     on the rasterised mask grows in steps of 1 and sqrt2, so the field carries a
     fine terracing; differentiating it to light the bevel turns that terracing
     into a speckled crest along the medial ridge - the fold came out as a dotted
-    line rather than a drawn one, and smoothing the field first only traded the
-    speckle for a staircase. The distance to a line segment is a closed form, so
-    there is no reason to approximate it."""
+    line rather than a drawn one. The distance to a line segment is a closed
+    form, so there is no reason to approximate it."""
     size = _BEVEL_REF
-    polys = C.TRACED.get(name, {}).get("frames", [{}])[idx].get("polys") \
-        if name in C.TRACED else None
     inside = _mask(name, idx, size) > 127
+    polys = C.TRACED[name]["frames"][idx].get("polys") if name in C.TRACED else None
     if not polys:
         return _chamfer(inside) / (size / V.LOGICAL)
     L = size / V.LOGICAL
     ys, xs = np.mgrid[0:size, 0:size]
-    px = (xs + 0.5) / L
-    py = (ys + 0.5) / L
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
     best = np.full((size, size), np.inf)
     for poly in polys:
         pts = np.array([(p[0], p[1]) for p in poly], dtype=np.float64)
@@ -1172,8 +1160,6 @@ _BEVEL_SMOOTH = 0.3     # logical units the field is smoothed by before differen
 
 def _box1(a, r, axis):
     """Running mean of width 2r+1 along one axis, edge-clamped, via cumsum."""
-    if r < 1:
-        return a
     a = np.swapaxes(a, 0, axis)
     pad = np.concatenate([np.repeat(a[:1], r, 0), a, np.repeat(a[-1:], r, 0)], 0)
     c = np.cumsum(pad, 0)
@@ -1323,6 +1309,9 @@ def _bevel_shading(name, idx, size):
 # price of not having them read as broken glass.
 _BROKEN_COLOUR = {("Handwriting", 3), ("Handwriting", 4), ("Handwriting", 5)}
 
+_FREEZE_UNIT = 0.6       # logical units below which detail counts as a line
+
+
 @functools.lru_cache(maxsize=None)
 def _master_rgb(name, idx, size):
     """The sharpened master's colour at `size`, before any correction."""
@@ -1336,83 +1325,9 @@ def _master_rgb(name, idx, size):
     return rgb
 
 
-_FLOOR_SHARE = 0.3       # of the author's own darkest glass, where ours may bottom out
-_GASH_WIDTH = 0.35       # logical units: darkness this thin is a gash, not a crease
-_GASH_CUT = 0.8          # how much of that thin darkness is taken away
-_GASH_KEEP_EDGE = 0.35   # logical units of the outline's own dark rim left alone
-
-
-@functools.lru_cache(maxsize=None)
-def _dark_knee(name, idx):
-    """The darkest the author's own glass gets, in luma."""
-    o = _orig(_key(name, idx)).astype(np.float64)
-    ins = o[..., 3] > 200
-    if ins.sum() < 16:
-        return None
-    return float((o[..., :3] @ _LUMA)[ins].min())
-
-
-def _lift_blacks(rgb, name, idx, size):
-    """Stop the upscale inventing black inside the glass.
-
-    The author's glass never goes below about 106 luma on the grey cursors and
-    30 on the coloured ones. Ours reaches 0 over two to four percent of every
-    interior: the net, given a dark crease a pixel wide, resolves it into a
-    hard black gash, and the one beside the point is what makes a tip that
-    converges on the outline still read as split - the eye follows the gash,
-    not the outline.
-
-    Two things are done with the darkness below that floor, because depth alone
-    does not separate a gash from a crease.
-
-    The width does. A gash is a hairline: it disappears under a grey opening a
-    fraction of a unit wide, while the dark band the author drew along an edge
-    survives one, being many units long and a unit or more thick. So the part
-    of the darkness that the opening removes - the top hat - is taken out
-    almost entirely, and that is what clears the tips: on UpArrow the gash
-    between the yellow and the rim ran to 33 where the author has nothing
-    below 108.
-
-    What is left over is compressed linearly into the top of the range below
-    the floor, so the ordering of every crease survives. Lifting everything all
-    the way to his floor was tried and washes the top crease out to grey: the
-    glass reads as plastic. A relative limit on its own was tried before either
-    and flattens the drawing for the same reason - it reads depth, not width."""
-    knee = _dark_knee(name, idx)
-    if knee is None:
-        return rgb
-    floor = knee * _FLOOR_SHARE
-    lum = rgb @ _LUMA
-    if not (lum < knee).any():
-        return rgb
-    r = max(1, int(round(_GASH_WIDTH * size / V.LOGICAL)))
-    k = 2 * r + 1
-    # A morphological closing of the colour itself, not of its luma. Closing
-    # erases dark features narrower than the window and leaves everything else
-    # where it is, so what it hands back at a gash is the colour of the glass
-    # the gash was cut into - the right hue by construction. Raising luma
-    # instead, whether by adding or by scaling, has to invent the chroma: on
-    # UpArrow's saturated yellow adding put a violet cast along the fold, and
-    # scaling turned near-black pixels into red and blue confetti.
-    im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB")
-    closed = np.asarray(im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k)),
-                        dtype=np.float64)
-    # and only inside. The dark band along the silhouette is the outline the
-    # author drew, it is a hairline by the same test, and eating it leaves the
-    # cursor with a pale edge and no shape.
-    d = np.asarray(Image.fromarray(_edge_distance(name, idx).astype(np.float32), mode="F")
-                   .resize((size, size), Image.BILINEAR), dtype=np.float64)
-    inside = np.clip((d - _GASH_KEEP_EDGE) / _GASH_KEEP_EDGE, 0.0, 1.0)[..., None]
-    out = rgb + _GASH_CUT * inside * np.clip(closed - rgb, 0.0, None)
-    # what is left below the author's floor is a broad dark, which is drawing;
-    # it is only compressed, never removed
-    lum = out @ _LUMA
-    low = lum < knee
-    want = floor + (knee - floor) * (lum / max(knee, 1e-6))
-    return np.clip(out + np.where(low, want - lum, 0.0)[..., None], 0, 255)
-
-
-_FREEZE_UNIT = 0.6       # logical units below which detail counts as a line
+def _smooth3(rgb, unit, size):
+    """Blur an RGB float array by `unit` logical units."""
+    return np.dstack([_smooth1(rgb[..., c], unit, size) for c in range(3)])
 
 
 def _freeze_lines(rgb, name, idx, size):
@@ -1422,39 +1337,27 @@ def _freeze_lines(rgb, name, idx, size):
     only their colour - the alpha is bit-identical from frame to frame. Each
     keyframe's colour, though, is its own upscale, and the net puts the creases
     in slightly different places each time: measured against the author's own
-    frames the average swing over the cycle matches him well (20.1 against
-    20.2 levels on Hand), but along two hairlines - the crease under the top
-    edge and the fold where it meets the tail junction - ours swings two and a
-    half times as far as anything he drew. A line a pixel wide moving a pixel
-    is what the eye calls jitter, and no amount of straightening a single fold
-    reaches it, because it is every line at once.
+    frames the average swing over the cycle matches him well, but along two
+    hairlines - the crease under the top edge and the fold where it meets the
+    tail junction - ours swings two and a half times as far as anything he
+    drew. A line a pixel wide moving a pixel is what the eye calls jitter, and
+    no amount of straightening a single fold reaches it, because it is every
+    line at once.
 
     So the cycle keeps one keyframe's lines and every keyframe's light: detail
     finer than _FREEZE_UNIT comes from the reference frame, everything coarser
     - which is the whole of the sheen, it sweeps over a third of the cursor -
     stays the frame's own.
 
-    That costs some of the measured swing - 14 levels against the author's 20
-    on Hand - and the loss is the point: what it removes is the creases
-    flickering, and the sheen sweeping the surface, which is what the author
-    actually animated, is a low frequency and comes through untouched. Letting
-    the frozen lines' contrast follow each frame's own was tried to win the
-    number back; it bought 0.4 of a level and put the jitter back on the top
-    crease, so the lines are held outright.
-
     An earlier attempt took the high frequencies from the cycle's mean instead
     of from one frame. The mean of a moving line is a smear, and substituting
-    it softened every crease it touched."""
+    it softened every crease it touched. One frame's are as sharp as they were
+    drawn, which is why this does not soften anything."""
     if name not in INTERP or idx == 0:
         return rgb
-    ref_rgb = _master_rgb(name, 0, size)
-    hi_ref = ref_rgb - _smooth3(ref_rgb, _FREEZE_UNIT, size)
-    return np.clip(_smooth3(rgb, _FREEZE_UNIT, size) + hi_ref, 0, 255)
-
-
-def _smooth3(rgb, unit, size):
-    """Blur an RGB float array by `unit` logical units."""
-    return np.dstack([_smooth1(rgb[..., c], unit, size) for c in range(3)])
+    ref = _master_rgb(name, 0, size)
+    return np.clip(_smooth3(rgb, _FREEZE_UNIT, size)
+                   + (ref - _smooth3(ref, _FREEZE_UNIT, size)), 0, 255)
 
 
 @functools.lru_cache(maxsize=None)
@@ -1473,7 +1376,6 @@ def frame_image(name, idx, size):
     if name in _SYNTH_BEVEL:
         rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
                       0, 255)
-    rgb = _lift_blacks(rgb, name, idx, size)
     rgb = _straighten_fold(rgb, name, idx, size)
     rgb = _tip_pinch(rgb, name, idx, size)
     up_a = _up_alpha(name, idx, size)
