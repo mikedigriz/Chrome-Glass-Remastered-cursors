@@ -106,6 +106,13 @@ THRESHOLDS = {
     "temporal": 1.0,            # frame-to-frame step over cycle amplitude, scaled so
                                 # a sinusoid sampled n times reads 1.0
     "delta_e": 5.0,             # CIEDE2000 against the author's own 32px frame
+    "tip_sheen": 0.75,          # share of the author's own sweep that has to survive
+                                # at the points. Not 1.0: the remaster's silhouette is
+                                # crisp where his is soft, so the disc holds a little
+                                # less glass. Frozen tips score 0.007 of him, so this
+                                # separates "damped" from "switched off" with room to
+                                # spare either side.
+    # tip_wobble is reported, not gated - see gate()
 }
 
 
@@ -610,6 +617,58 @@ def temporal_smoothness(name):
     return r
 
 
+_TIP_DISC = 2.0            # logical units around a corner the sweep is read in
+
+
+def tip_sheen(name, get=frame):
+    """Whether the sweep reaches the points, and how steady it is when it does.
+
+    A cursor whose sheen stops short of its tips looks dead at exactly the part
+    of it the eye is on. Nothing here saw that: the shading near a corner was
+    frozen to the cycle mean over a disc of six logical units, and every metric
+    in this file read the result as perfectly smooth, because a still image is.
+
+    amp    the cycle's own swing inside the disc, in luma levels after
+           compositing. Frozen tips measure 0.07 against the author's 10.65.
+    wobble frame-to-frame travel of the lit part's centre inside the same disc,
+           in logical units. This is what freezing the tips was buying, and it
+           is what has to be checked before unfreezing them.
+    lean   where that centre sits relative to the apex, positive to the right.
+           Reported because it is largely the author's own: he draws the arrow's
+           point leaning +0.79 and the remaster reads +0.92."""
+    n = nframes(name)
+    if n < 3 or name not in H.INTERP:
+        return {}
+    size = JITTER_SIZE
+    fr = [get(name, i, size) for i in range(n)]
+    al = np.array([f[..., 3] for f in fr]) / 255.0
+    lum = np.array([f[..., :3].mean(-1) for f in fr])
+    comp = lum * al + 128.0 * (1.0 - al)
+    mean = comp.mean(0)
+    L = size / 32.0
+    ys, xs = np.mgrid[0:size, 0:size]
+    amps, wobs, leans = [], [], []
+    for (px, py), _ in corners(name):
+        d = np.hypot(xs - px * L, ys - py * L) / L
+        m = (d < _TIP_DISC) & (al.min(0) > 0.15)
+        if m.sum() < 12:
+            continue
+        amps.append(float(np.abs(comp[:, m] - mean[m]).mean()))
+        cx = []
+        for f in range(n):
+            w = np.clip(comp[f][m] - mean[m], 0.0, None)
+            if w.sum() > 1e-6:
+                cx.append(float((w * (xs[m] - px * L)).sum() / w.sum() / L))
+        if cx:
+            wobs.append(float(np.std(cx)))
+            leans.append(float(np.mean(cx)))
+    if not amps:
+        return {}
+    # Worst corner, not the average: one dead point is a dead point.
+    return {"amp": min(amps), "wobble": max(wobs) if wobs else 0.0,
+            "lean": max(leans, key=abs) if leans else 0.0}
+
+
 def corners(name, idx=0):
     """Traced corner vertices with their outward direction, in logical units.
 
@@ -904,6 +963,8 @@ def _collect_one(job):
     if name in H.ANIM:
         e["interp"] = interp_uniformity(name)
         e["temporal"] = temporal_smoothness(name)
+        e["tip_sheen"] = tip_sheen(name)
+        e["tip_sheen_orig"] = tip_sheen(name, get=orig_frame)
         if name in H.INTERP:
             e["inner_jitter"] = inner_jitter(name)
         else:
@@ -1006,6 +1067,16 @@ def gate(rep, base=None):
         de = e.get("delta_e")
         if de and de["mean"] > T["delta_e"]:
             fail(name, f"delta_e[{de['frame']}]", de["mean"], ">", T["delta_e"], "delta_e")
+        sh, sh0 = e.get("tip_sheen"), e.get("tip_sheen_orig")
+        if sh and sh0 and sh0.get("amp"):
+            want = sh0["amp"] * T["tip_sheen"]
+            if sh["amp"] < want:
+                fail(name, "tip_sheen", sh["amp"], "<", round(want, 2), "tip_sheen")
+            # tip_wobble is reported, not gated. The author's own is 0.10 at one
+            # of Arrow's corners and 0.34 at another, so a ratio against him
+            # swings by a factor of three between two corners of one cursor and
+            # would be gating his drawing's variance, not ours. The number is
+            # here because unfreezing a tip has to be checked against something.
         ts = e.get("temporal")
         if ts:
             for z in ("fold", "body"):
@@ -1080,6 +1151,8 @@ def _flat(e):
         "morph_iou": mo["iou_min"] if mo else None,
         "temporal_fold": ts.get("fold"),
         "temporal_body": ts.get("body"),
+        "tip_sheen": (e.get("tip_sheen") or {}).get("amp"),
+        "tip_wobble": (e.get("tip_sheen") or {}).get("wobble"),
     }
 
 
@@ -1088,6 +1161,7 @@ def show(rep, base=None):
             ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_contrast", 7, ".3f"),
             ("gap", "fold_gap", 6, ".2f"), ("wander", "fold_wander", 7, ".2f"),
             ("jag", "fold_jag", 6, ".0f"), ("dE", "delta_e", 6, ".2f"),
+            ("sheen", "tip_sheen", 7, ".2f"), ("wob", "tip_wobble", 6, ".2f"),
             ("ghost", "ghost_rgb", 7, ".2f"), ("cad", "cadence", 6, ".2f"),
             ("jit95", "inner_jitter", 7, ".2f"), ("iou", "morph_iou", 6, ".3f"),
             ("tsm", "temporal_fold", 6, ".2f")]

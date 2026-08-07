@@ -344,12 +344,22 @@ def _declutter_engraved_detail(name, idx, rgb, size):
 
 
 _SHEEN_SMOOTH = (1.0, 2.0, 1.0)   # circular temporal kernel over an animation's colour
-_STILL_TIP_R = 6.0                # logical units around a corner whose shading is frozen.
-                                  # Wide enough to cover the whole neighbourhood
-                                  # _tip_pinch reads its edge colour from, or the pinch
-                                  # brings moving sheen into a point that is meant to
-                                  # stand still and the tip beats over the cycle:
-                                  # measured, its luma swung 8..12 levels at radius 4.
+_STILL_TIP_R = 1.75               # logical units around a corner whose shading is frozen.
+                                  # Was 6.0, widened from 4.0 to cover the neighbourhood
+                                  # _tip_pinch read its edge colour from. The pinch is
+                                  # gone, and at 6.0 the sweep did not reach the points
+                                  # at all: the cycle's own swing inside two units of a
+                                  # corner measured 0.07 luma levels against the author's
+                                  # 10.65, so the tips were simply dead.
+                                  #
+                                  # Set by matching the author rather than by eye: at
+                                  # 1.75 that swing is 10.62 against his 10.65. What the
+                                  # freeze was for - the point appearing to beat as the
+                                  # sweep crosses the narrow wedge - is measured too, as
+                                  # the frame-to-frame travel of the lit centroid inside
+                                  # the same disc, and at this radius it sits at or below
+                                  # the author's own on every arrow (apex 0.11 against
+                                  # his 0.25).
 _STILL_TIP_FEATHER = 2.0          # logical units of blend back into the moving body
 
 

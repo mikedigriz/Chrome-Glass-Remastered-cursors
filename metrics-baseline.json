@@ -1,18 +1,20 @@
 {
  "AppStarting": {
-  "cadence": 1.017317,
-  "delta_e": 5.130694,
+  "cadence": 1.017502,
+  "delta_e": 4.403642,
   "density": 2.701379,
   "fold_gap": 1.5,
-  "fold_jag": 91.933333,
-  "fold_luma_step": 3.45,
-  "fold_wander": 2.942206,
-  "ghost_rgb": 2.1e-05,
-  "inner_jitter": 0.196429,
+  "fold_jag": 92.133333,
+  "fold_luma_step": 3.5,
+  "fold_wander": 2.923156,
+  "ghost_rgb": 3.4e-05,
+  "inner_jitter": 0.219681,
   "scale_drift": 0.141157,
-  "temporal_fold": 1.091044,
-  "tip_contrast": 0.167074,
-  "tip_convergence": 1.8
+  "temporal_fold": 0.995065,
+  "tip_contrast": 0.109573,
+  "tip_convergence": 1.6,
+  "tip_sheen": 15.225921,
+  "tip_wobble": 0.323936
  },
  "Arrow": {
   "delta_e": 2.702907,
@@ -48,19 +50,21 @@
   "tip_convergence": 0.0
  },
  "Hand": {
-  "cadence": 1.018937,
-  "delta_e": 3.203645,
+  "cadence": 1.037241,
+  "delta_e": 2.848925,
   "density": 2.702798,
   "fold_gap": 1.5,
   "fold_jag": 50.666667,
   "fold_luma_step": 9.666667,
   "fold_wander": 0.022502,
-  "ghost_rgb": 0.0,
-  "inner_jitter": 0.095967,
+  "ghost_rgb": 7e-06,
+  "inner_jitter": 0.095833,
   "scale_drift": 0.140925,
-  "temporal_fold": 0.962105,
-  "tip_contrast": 0.137255,
-  "tip_convergence": 1.2
+  "temporal_fold": 1.017919,
+  "tip_contrast": 0.107958,
+  "tip_convergence": 1.1,
+  "tip_sheen": 12.751379,
+  "tip_wobble": 0.284825
  },
  "Handwriting": {
   "cadence": 1.424345,
@@ -179,18 +183,20 @@
   "tip_convergence": 2.0
  },
  "Wait": {
-  "cadence": 1.028205,
-  "delta_e": 4.57049,
+  "cadence": 1.034752,
+  "delta_e": 4.064439,
   "density": 2.701379,
   "fold_gap": 1.5,
-  "fold_jag": 77.916667,
-  "fold_luma_step": 4.533333,
-  "fold_wander": 0.208312,
-  "ghost_rgb": 1.4e-05,
-  "inner_jitter": 0.32254,
+  "fold_jag": 78.933333,
+  "fold_luma_step": 4.1,
+  "fold_wander": 0.214062,
+  "ghost_rgb": 4.1e-05,
+  "inner_jitter": 0.324848,
   "scale_drift": 0.141157,
-  "temporal_fold": 1.047374,
-  "tip_contrast": 0.199892,
-  "tip_convergence": 1.7
+  "temporal_fold": 0.973965,
+  "tip_contrast": 0.169935,
+  "tip_convergence": 1.6,
+  "tip_sheen": 10.618967,
+  "tip_wobble": 0.299478
  }
 }
