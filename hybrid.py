@@ -586,6 +586,71 @@ def _straighten_fold(rgb, name, idx, size):
     return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
 
 
+_ALONG_BAND = 1.5        # logical units either side of the chord that get smoothed
+_ALONG_LEN = 0.75        # logical units of travel along the chord averaged over
+_ALONG_TAPS = 7          # samples across that travel
+_ALONG_KEEP_TIP = 7.5    # logical units around a sharp corner left untouched.
+                         # The chord runs into the points, and averaging along it
+                         # there smears them: measured, Arrow's apex contrast fell
+                         # 0.328 to 0.206 and UpArrow's 0.157 to 0.105 with the
+                         # band reaching all the way in. The fold wants averaging
+                         # down its length in the body of the glass and nowhere
+                         # near a point, where there is no length left to average.
+
+
+def _smooth_along_fold(rgb, name, idx, size):
+    """Average the crease along its own length, and only along it.
+
+    What the removed straightener was actually good for was this: it resampled
+    colour down the fold, which averaged the section from row to row and kept it
+    the same shape. Taking it out cost that - the row-to-row change of the
+    section rose on every cursor that has a fold, by 10 to 60 per cent.
+
+    Smoothing along the line recovers it without any of what the straightener
+    also did. It never moves the line, so it cannot blunt a point; it is a
+    weighted mean along one fixed direction, so it cannot add anything that was
+    not there; and the direction is the chord's, taken from the outline, so it
+    is the same in every frame of a cycle and cannot chase a defect.
+
+    That last part is the whole difference from PLAN.md dead end 3, which
+    smoothed along a direction estimated from the picture. The estimate followed
+    the jitter and smoothed the fold itself. A chord cannot follow anything.
+
+    Not for the engraved cursors. Help's "?" crosses the chord's band and does
+    not run along it, so averaging down the chord smears the groove across
+    itself: measured, its section got half again as rough (63 -> 95) while every
+    other cursor's improved."""
+    if name in _ENGRAVED_DETAIL:
+        return rgb
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (x0, y0), (x1, y1) = ch
+    dx, dy = x1 - x0, y1 - y0
+    n = float(np.hypot(dx, dy))
+    if n < 1e-6:
+        return rgb
+    dx, dy = dx / n, dy / n
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    # Distance from the chord's infinite line, in logical units. The band is
+    # cut around the line rather than the segment so the crease keeps its
+    # treatment where it runs past the chord's ends.
+    d = np.abs((xs / s - x0) * dy - (ys / s - y0) * dx)
+    w = np.clip(1.0 - d / _ALONG_BAND, 0.0, 1.0)
+    for px, py in _sharp_corners(name, idx):
+        w = w * np.clip(np.hypot(xs - px * s, ys - py * s) / s / _ALONG_KEEP_TIP,
+                        0.0, 1.0)
+    if w.max() <= 0.0:
+        return rgb
+    offs = np.linspace(-0.5, 0.5, _ALONG_TAPS) * _ALONG_LEN * s
+    acc = np.zeros_like(rgb)
+    for o in offs:
+        acc += _sample(rgb, xs + dx * o, ys + dy * o)
+    acc /= len(offs)
+    return rgb * (1.0 - w[..., None]) + acc * w[..., None]
+
+
 _PINCH_R = 4.0           # logical units around a point over which the glass closes
 _PINCH_P = 0.7           # how sharply that closing ramps up toward the apex
 
@@ -1376,8 +1441,41 @@ def frame_image(name, idx, size):
     if name in _SYNTH_BEVEL:
         rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
                       0, 255)
-    rgb = _straighten_fold(rgb, name, idx, size)
-    rgb = _tip_pinch(rgb, name, idx, size)
+    # _straighten_fold and _tip_pinch used to run here. Both are out, and both
+    # were measured on the way out rather than argued about.
+    #
+    # _tip_pinch took the colour near every sharp corner to a flat edge colour.
+    # It closed the cross-section onto nothing: the seam beside Arrow's tail
+    # corners lifted from black to 69 and the lit core fell from 255 to 229,
+    # both sliding toward the same flat value. The two tail corners lost a third
+    # of their contrast on a background (0.325 -> 0.207, 0.347 -> 0.267) and the
+    # point it was added for did not move at all. It is PLAN.md dead end 10,
+    # shipped.
+    #
+    # _straighten_fold cost the point itself: with it out, contrast at Arrow's
+    # apex goes 0.266 -> 0.367, past every value in this repo's history. It also
+    # turns out to have been a source of the jitter it was aimed at - it fits
+    # its chord per frame, so the correction itself moved from frame to frame.
+    # Removing it drops fold smoothness on every interpolated cursor at once
+    # (Hand 1.141 -> 0.962, Wait 1.215 -> 1.047, AppStarting 1.241 -> 1.091) and
+    # brings every fold two logical units closer to its point. That is dead end
+    # 3's mechanism, wired into the pipeline instead of tried and rejected.
+    #
+    # The functions are left in place, unused, until the geometric shading of
+    # stage 2 either needs them or replaces them.
+    #
+    # _smooth_along_fold is written and measured but not wired in. It recovers
+    # the one thing the straightener was good for - the section's roughness
+    # falls below where it was before any of this (Arrow 98.8 -> 41.7, UpArrow
+    # 71.9 -> 64.4, Wait 70.7 -> 58.7) - and it costs, every time, a few per
+    # cent of the two things that were actually asked for: Arrow_Down's point
+    # contrast 0.208 -> 0.199, UpArrow's 0.157 -> 0.149, and Wait's sheen
+    # smoothness 1.047 -> 1.165. Widening the corner exclusion to 7.5 units
+    # bought back all of Arrow's and none of theirs.
+    #
+    # A rough section is a defect. It is not the defect that was reported, and
+    # it is not worth paying for in points and in sheen. Left here, off, with
+    # its numbers, so the trade is a decision rather than a discovery.
     up_a = _up_alpha(name, idx, size)
     alpha = _round_hole(_deburr(_mask(name, idx, size) / 255.0 * up_a, size),
                         name, idx, size)

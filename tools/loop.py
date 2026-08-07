@@ -279,19 +279,26 @@ def note(path, line):
 def cmd_progress(args):
     rep = A.collect(A.LADDER_FAST if args.fast else A.LADDER, args.only, args.jobs)
     bad, debt = A.gate(rep, ratchet())
+    # Most of these are worst-is-highest. Two are not: a point's contrast and a
+    # morph's overlap are both worst at their lowest, and taking a max of them
+    # would report the healthiest cursor in the set as the state of the set.
+    lower_is_worse = {"morph_iou", "tip_contrast"}
     worst = {}
     for name, e in rep.items():
         for k, v in A._flat(e).items():
-            if v is not None:
-                worst[k] = max(worst.get(k, 0.0), v) if k != "morph_iou" else min(
-                    worst.get(k, 1.0), v)
-    cols = ["scale_drift", "fold_gap", "fold_wander", "fold_jag", "delta_e",
-            "temporal_fold", "inner_jitter"]
+            if v is None:
+                continue
+            worst[k] = (min(worst.get(k, 1e9), v) if k in lower_is_worse
+                        else max(worst.get(k, 0.0), v))
+    cols = ["tip_contrast", "tip_convergence", "temporal_fold", "inner_jitter",
+            "fold_gap", "fold_wander", "fold_jag", "delta_e", "scale_drift"]
     if not os.path.exists(PROGRESS):
         note(PROGRESS,
              "# Progress\n\n"
              "One row per iteration. Every number is the worst over all sixteen "
-             "cursors, so a row only improves when the weakest one does.\n\n"
+             "cursors, so a row only improves when the weakest one does. "
+             "`tip_contrast` is worst at its lowest; everything else is worst "
+             "at its highest.\n\n"
              "`reg` counts values that moved away from a target since the last "
              "committed baseline: that column has to stay at zero. `debt` counts "
              "values that miss a target but have not got worse - that is the "

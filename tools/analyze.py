@@ -437,7 +437,23 @@ def fold_profile(name, idx, size, get=frame):
     ref = _chord_ref(name, idx, size)
     if ref is None:
         return None
-    t = _fold_track(name, idx, size, ref, _JAG_BAND * L, get=get)
+    win = _JAG_BAND * L
+    # Two passes. The chord comes from the outline and the crease it stands for
+    # is allowed to sit a little off it; with the window centred on the chord
+    # the rim falls inside it on some rows and wins the argmin there, which
+    # reads as the line jumping. Re-centring on the run's own median offset pins
+    # the search to one feature, the way inner_jitter pins it across frames.
+    #
+    # Measured on Arrow, whose fold is the same line at every size: 0.001
+    # logical units of curvature at 128, 0.016 at 384, 0.035 at 512 - and 0.941
+    # at 256, from four rows out of forty-one. A defect that exists at one rung
+    # and at none of its neighbours is the reading, not the render.
+    t = _fold_track(name, idx, size, ref, win, get=get)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        off = np.nanmedian(t - ref)
+    if np.isfinite(off):
+        t = _fold_track(name, idx, size, ref + off, win, get=get)
     rows = np.nonzero(~np.isnan(t))[0]
     if len(rows) < _FOLD_ROWS:
         return None
