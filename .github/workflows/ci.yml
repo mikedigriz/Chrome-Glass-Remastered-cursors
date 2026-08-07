@@ -37,6 +37,36 @@ jobs:
           path: packages/
           retention-days: 7
 
+  # The build's own check_metrics only looks at median alpha and saturation. It
+  # passes a silhouette that changes size with the size it is drawn at, a fold
+  # broken into pieces and a colour that has drifted off the author's, all of
+  # which have numbers in tools/analyze.py. Runs beside the packaging jobs
+  # rather than inside build, because it needs the repo and nothing else.
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: pip install -r requirements.txt
+
+      # Before the gate, not after: a gate whose metrics cannot fail reports a
+      # clean run on a broken cursor, which is how the fold measurement passed
+      # everything for nine attempts while measuring nothing.
+      - name: Metrics can still see their own defects
+        run: python tools/selftest.py
+
+      # Against the committed baseline, not against the bare thresholds: the set
+      # misses several of its own targets today, and those are printed as debt.
+      # Anything that moves further from a target fails here.
+      - name: Geometry, colour and motion gate
+        run: python tools/analyze.py --check metrics-baseline.json --jobs $(nproc)
+
   # Everything below exercises the install paths a byte-comparison cannot see:
   # maintainer scripts, alternatives registration, symlink resolution, makepkg.
   deb:

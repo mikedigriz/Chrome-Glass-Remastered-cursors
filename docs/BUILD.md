@@ -38,6 +38,20 @@ src/ -> trace.py -> traced.json -> hybrid.py + glyphs.py -> build.py -> curlib.p
 
 A couple of details are hand-drawn in `cursors.py` instead of auto-traced - like the dot under the question mark on Help, which sits apart from the arrow and the tracer just misses it.
 
+## Checking the render
+
+`build.py`'s own gate only watches median alpha and saturation. Everything else - a silhouette whose size depends on the size it is drawn at, a fold broken into pieces, a colour that has drifted off the author's, an animation that hurries - is measured by `tools/analyze.py`, straight off `hybrid.frame_image` with no build needed:
+
+```
+python tools/analyze.py --check metrics-baseline.json --jobs 8
+```
+
+`metrics-baseline.json` is where the set stands today and it is committed. A value that misses its target but is no worse than that file prints as debt and does not fail; a value that moves further from a target fails on the spot. `--fast` is the short ladder for iterating, `--full` adds 512 and is what acceptance runs on, and `--ratchet FILE` rewrites the baseline once an improvement is real.
+
+`tools/selftest.py` plants a defect of each kind and asserts the metric that owns it moves. Run it before trusting a clean gate: a metric that cannot fail reports a clean run on a broken cursor.
+
+`tools/loop.py diagnose` groups whatever is failing into artifacts and names the next thing to try; `checkpoint`, `rollback` and `progress` keep `PROGRESS.md` and `DEAD_ENDS.md`.
+
 ## Preview assets
 
 `build.py` also generates everything the READMEs embed:

@@ -125,3 +125,53 @@ def _round_island(poly):
 # crisp it read as a second, ghost "?" over the true one. The AI alpha holds
 # the real curl on its own, so the line is gone and the ghost with it.
 HELP_ROUND_ISLANDS = {"Help"}
+
+
+# Per-frame shape invariants, checked by tools/analyze.py::validate_topology.
+#
+# Every number here was read off the trace, not decided: contours are the
+# polygon count in traced.json, tips are what analyze.corners() calls a convex
+# sharp corner, fold is whether hybrid._fold_chord() resolves a chord. They are
+# frozen so that a change in trace.py which quietly merges two contours, drops
+# an apex or loses a fold fails a check instead of turning up later as a
+# cursor that renders wrong.
+#
+# The counts are surprising in four places, and all four are the trace being
+# right rather than the table being wrong:
+#
+#   NO       - the ring and the bar struck through it come back as ONE merged
+#              outline, not as a ring plus a stripe.
+#   SizeAll  - the four-way star is one 32-vertex polygon, not four wedges.
+#              Its hole is cut by the translucency map, not by a second contour.
+#   Help     - two contours are the arrow body and the "?" dot island. The curl
+#              is not traced at all, the AI alpha carries it.
+#   Arrow    - three corners, not one: the point plus the two corners of the
+#              tail. Only the point is a tip in the everyday sense, but all
+#              three are convex and sharp, and all three have to stay that way.
+#
+# Handwriting and NO redraw themselves, so their counts fall through the cycle
+# as the arrow gives way to the pencil and to the ring. Those sequences are the
+# invariant, which is why this is a list per frame and not a single number.
+CURSOR_TOPOLOGY = {
+    "Arrow":       {"contours": [1], "tips": [3], "fold": [True]},
+    "Arrow_Down":  {"contours": [1], "tips": [3], "fold": [True]},
+    "Cross":       {"contours": [4], "tips": [12], "fold": [False]},
+    "Help":        {"contours": [2], "tips": [3], "fold": [True]},
+    "IBeam":       {"contours": [2], "tips": [6], "fold": [False]},
+    "SizeAll":     {"contours": [1], "tips": [4], "fold": [True]},
+    "SizeNESW":    {"contours": [2], "tips": [6], "fold": [False]},
+    "SizeNS":      {"contours": [2], "tips": [6], "fold": [False]},
+    "SizeNWSE":    {"contours": [2], "tips": [6], "fold": [False]},
+    "SizeWE":      {"contours": [2], "tips": [6], "fold": [False]},
+    "UpArrow":     {"contours": [1], "tips": [3], "fold": [True]},
+    "AppStarting": {"contours": [1] * 9, "tips": [3] * 9, "fold": [True] * 9},
+    "Hand":        {"contours": [1] * 9, "tips": [3] * 9, "fold": [True] * 9},
+    "Handwriting": {"contours": [1] * 9,
+                    "tips": [3, 3, 3, 3, 3, 2, 2, 1, 1],
+                    "fold": [True, True, True, True, False,
+                             True, False, False, False]},
+    "NO":          {"contours": [1] * 11,
+                    "tips": [3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 1],
+                    "fold": [True] * 4 + [False] * 7},
+    "Wait":        {"contours": [1] * 9, "tips": [3] * 9, "fold": [True] * 9},
+}
