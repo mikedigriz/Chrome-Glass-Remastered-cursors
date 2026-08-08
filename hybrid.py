@@ -639,7 +639,11 @@ _FOLD_DRAW_HOLD = 0.0    # logical units from the apex left to _draw_tip. Zero: 
 _FOLD_DRAW_RAMP = 7.0    # logical units the rebuild fades in over. Short, it
                          # leaves a dark nick where the rebuilt line meets the
                          # sculpted one it replaces.
-_FOLD_DRAW_CORE = 0.45   # logical units of the crease's own dark core
+_FOLD_DRAW_CORE = 0.2    # logical units of the crease's own dark core. 0.45 is
+                         # seven pixels at 512 and reads as a soft trough rather
+                         # than a crease.
+_FOLD_DRAW_AA = 1.0      # pixels the sheets cross over in
+_FOLD_DRAW_ROOM_MIN = 1.5  # glass thinner than this is the point's, left alone
 _FOLD_DRAW_ROOM = 3.0    # logical units the rebuild fades in over as glass widens
 _FOLD_DRAW_WIPE = 2.0    # logical units the leftover stub is smoothed away over
 _FOLD_DRAW_KEEP = 2.0    # glass this thin is the point's own, never wiped
@@ -703,7 +707,16 @@ def _draw_fold(rgb, name, idx, size):
     # across the band was tried first and wipes the divider out altogether -
     # the step between the sheets IS the divider, so blending it away leaves a
     # flat sheet with no crease at all.
-    flat = near
+    # Anti-aliased across one pixel, not one logical unit. Butted straight
+    # together the sheets alias - the divider reads as a staircase on a
+    # diagonal. Blended over half a unit, which is eight pixels at 512, it reads
+    # as a smear instead. The edge is a geometric line, so its coverage is known
+    # exactly: fade it over the pixel it actually crosses and it is both crisp
+    # and clean at every size.
+    aa = np.clip(np.abs(q) * s / _FOLD_DRAW_AA, 0.0, 1.0)[..., None]
+    step2 = (-side * rs - q) * s
+    far = _sample(rgb, xs + nv[0] * step2, ys + nv[1] * step2)
+    flat = far + (near - far) * (0.5 + 0.5 * aa)
 
     # The crease's own darkening, measured off the master along the band rather
     # than chosen: how far below the interpolated sheets it actually sits.
@@ -714,7 +727,14 @@ def _draw_fold(rgb, name, idx, size):
     # Faded in over several units, not one. Switched on the moment the glass is
     # wider than the band, the rebuilt line starts with a visible notch where it
     # meets the sculpted crease it replaces.
-    room = np.clip((inset - _FOLD_DRAW_REACH) / _FOLD_DRAW_ROOM, 0.0, 1.0)
+    # Clearance is now only what the crease itself needs, not the full band
+    # width. The band's width used to gate this because an unclamped sample
+    # landed on the outer bevel; the sampling distance carries its own clamp
+    # now, so holding the rebuild back until the glass is four units thick only
+    # left the divider unbuilt near the point, where it showed as a soft ramp -
+    # measured across the line at a third of its length the level slid 162 to
+    # 133 over twelve pixels with no step in it at all.
+    room = np.clip((inset - _FOLD_DRAW_ROOM_MIN) / _FOLD_DRAW_ROOM, 0.0, 1.0)
 
     core = np.clip(1.0 - np.abs(q) / _FOLD_DRAW_CORE, 0.0, 1.0)[..., None]
     # Measured across the whole band, not on the chord. The crease is off the
