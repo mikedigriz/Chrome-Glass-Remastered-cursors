@@ -79,3 +79,28 @@ loop has to know not to reach for them again.
 ## Written, measured, not shipped
 
 - `_smooth_along_fold` Averaging the crease down its own length, along the chord's direction, with a corner exclusion. Not dead end 3: the direction comes from the outline, so it cannot chase the jitter, and it never moves the line. It works on what it aims at - section roughness falls below where it was before any of this (Arrow 98.8 to 41.7, UpArrow 71.9 to 64.4, Wait 70.7 to 58.7). It is off because it costs a few per cent of both things that were actually asked for, every time: Arrow_Down's point contrast 0.208 to 0.199, UpArrow's 0.157 to 0.149, Wait's sheen smoothness 1.047 to 1.165. Widening the exclusion to 7.5 logical units bought all of Arrow's contrast back and none of theirs. Left in hybrid.py, unwired, with the numbers: the trade is a decision, not a discovery.
+
+## The red tip: three ways it cannot be fixed (2026-08-08)
+
+The defect, measured across Wait's point: the master's dark rim does not narrow
+as the wedge narrows. The author's rim is 0.20 logical units wide 1.5 units back
+from the apex and 1.10 at four units back; the master's is 0.90 and 1.20 over
+the same span. Four units back the two agree. At the point the master's rim is
+four times too wide, leaving 0.20 units of lit glass out of 1.48 and pushing it
+onto one flank - which is what reads as the orange stopping short and sitting
+off to the right.
+
+The reason nothing below worked is one number. The brightest pixel of the
+section, read off the colour master before any of our stages, is 53 luma at 1.5
+units back, 117 at two, 151 at three and 218 at six. Our alpha there is 190-205
+and the shipped frame matches the master to the level. The net painted the tip
+as ink. There is no lit glass at the point to move, sharpen or re-centre.
+
+- `tip_relief_from_bevel` Flat edge colour plus the analytic bevel, in the pinch's place. The bevel is mean-removed over the whole mask, so near a thin wedge its rim term dominates and the point went darker still: contrast 0.207 to 0.183 on Arrow, 0.144 to 0.080 on UpArrow.
+- `_taper_tip_rim` Fetch the colour from depth d*2 and place it at depth d, narrowing the rim while leaving the outline itself untouched (the displacement vanishes at the edge, so it cannot eat the author's own outline the way PLAN.md 18 and 19 did). It barely moved the rim - 1.12 to 1.08 at 2.5 units, nothing at 1.5 - because the whole wedge is dark there and the fetch lands on a medial axis that is itself inside the rim. Cost contrast anyway: 0.328 to 0.281.
+- `_author_tip` The last 2.5 units of each point taken from the author's own colour, the way Handwriting's middle frames are. It does narrow the rim (0.90 to 0.56 at 1.5 units), and it costs 48 per cent of the point's contrast: 0.328 to 0.172 on Arrow, 0.208 to 0.123 on Arrow_Down. His colour is 32 pixels, and a point is the smallest feature in the drawing.
+
+What is left is the route that already works elsewhere: draw the shading at the
+points analytically, as `_SYNTH_BEVEL` does for the seven geometric cursors,
+where tip_convergence measures 0.00. That is not a correction, it is the stage 5
+fork in PLAN.md - flatter glass, and a change of look for the whole set.
