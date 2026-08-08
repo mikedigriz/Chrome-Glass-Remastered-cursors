@@ -687,7 +687,16 @@ def _draw_fold(rgb, name, idx, size):
         return rgb
     # Colour of each sheet, read at the rim of the band on that pixel's own side.
     side = np.where(q >= 0.0, 1.0, -1.0)
-    step = (side * _FOLD_DRAW_REACH - q) * s
+    inset = np.asarray(Image.fromarray(
+        _edge_distance(name, 0 if name in INTERP else idx).astype(np.float32),
+        mode="F").resize((size, size), Image.BILINEAR), dtype=np.float64)
+    # Sampling distance only, clamped to the glass actually there. The band,
+    # the crossover and the core keep their full width - narrowing those was
+    # tried and smears the crease's own darkness across the sheet as a whisker.
+    # Left unclamped the far sample lands on the outer bevel where the wedge is
+    # thinner than twice the reach, and drags a grey blot onto the divider.
+    rs = np.minimum(_FOLD_DRAW_REACH, np.maximum(inset - 1.0, 1.0))
+    step = (side * rs - q) * s
     near = _sample(rgb, xs + nv[0] * step, ys + nv[1] * step)
     k = np.clip((np.abs(q) / _FOLD_DRAW_REACH), 0.0, 1.0)[..., None]
     # Each side carries its own sheet right up to the line. Averaging the two
@@ -702,9 +711,6 @@ def _draw_fold(rgb, name, idx, size):
     # narrower than the reach, so the sample for a sheet's colour lands on the
     # outer bevel and drags the silver in - it showed up as a grey wedge beside
     # the apex the first time this ran.
-    inset = np.asarray(Image.fromarray(
-        _edge_distance(name, 0 if name in INTERP else idx).astype(np.float32),
-        mode="F").resize((size, size), Image.BILINEAR), dtype=np.float64)
     # Faded in over several units, not one. Switched on the moment the glass is
     # wider than the band, the rebuilt line starts with a visible notch where it
     # meets the sculpted crease it replaces.

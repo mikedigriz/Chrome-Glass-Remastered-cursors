@@ -192,3 +192,31 @@ nothing.
 glass behind the point in the frame being rendered, which multiplies a shape that
 never moves by a number that pulses: temporal_fold 1.149 on Wait against 0.972
 untouched. Frozen to the cycle mean it reads 0.963, below baseline.
+
+- Narrowing the whole band toward the point so the built divider reaches the
+  apex. The colour of each sheet is sampled at the band's own edge, so a band
+  squeezed into the narrow wedge samples the crease itself and smears its
+  darkness across the glass as a dark whisker. Clamping the *sampling* distance
+  alone, with the band, the crossover and the core left at full width, is the
+  version that works - it is what removed the grey blot the far sample dragged
+  in off the outer bevel.
+
+- Wiping the leftover sculpted crease above where the rebuild starts, to kill
+  the burr on the inner tip. The burr was never the leftover: it was the built
+  straight line crossing the real crease where the real one bows outside a
+  2.5-unit band. Widening the band to 4.0 removes it outright. The wipe stays in
+  place because it does smooth the junction, but it is not what fixed this, and
+  at 2, 4 and 7 units of smoothing the burr did not move at all.
+
+- Allowing the drawn point to sit above the colour it replaces. Meant to keep
+  the relief while cutting the bloom; measured, the allowance costs the point
+  instead - UpArrow 0.170 at zero, 0.141 at ten levels, 0.112 at twenty. The
+  clamp was never eating relief, it darkens the point, and a darker point reads
+  harder against every background.
+
+- Reading the fold metrics off a baseline recorded on a different size ladder.
+  Not a code fault and not a render regression: --ratchet without --full records
+  32/64/128/256 while --check --full measures 32..512, and scale_drift alone
+  differs 0.1337 against 0.1409 between the two. It presents as every one of the
+  sixteen cursors regressing by the same amount at once, which is the tell. The
+  render is deterministic - two runs agree to the last digit.
