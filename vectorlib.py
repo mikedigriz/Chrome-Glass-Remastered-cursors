@@ -23,10 +23,24 @@ LOGICAL = 32
 _SRGB_THRESH = 0.0031308
 
 
-def srgb_to_linear(u8):
-    """uint8 sRGB array -> float32 linear-light array, 0..1 range."""
-    c = u8.astype(_np.float32) / 255.0
+def _build_srgb_lut():
+    c = _np.arange(256, dtype=_np.float32) / 255.0
     return _np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+_SRGB_LUT = _build_srgb_lut()
+
+
+def srgb_to_linear(u8):
+    """uint8 sRGB array -> float32 linear-light array, 0..1 range.
+
+    Table lookup, not arithmetic. The input is uint8, so there are 256 possible
+    answers; computing the power for every pixel instead measured 0.105 s per
+    call at 512px and 18 calls go into one frame. np.where made it worse still -
+    it evaluates both branches, so the power ran over the whole array either
+    way. Values are the same to the bit: the table is built by the old
+    expression."""
+    return _SRGB_LUT[u8]
 
 
 def linear_to_srgb(lin):

@@ -90,7 +90,27 @@ def _resize(arr, size):
 
 
 @functools.lru_cache(maxsize=None)
-def _mask(name, idx, size):
+def _static_outline(name):
+    """True where every frame of a cursor is traced to the same outline.
+
+    Wait, Hand and AppStarting animate their colour only - all nine keyframes
+    carry an identical polygon. Anything derived from the outline alone is
+    therefore one answer for the whole cycle, and keying it per frame made the
+    build rasterise the same silhouette and rebuild the same distance field 27
+    times per cursor. Handwriting and NO really do change shape, so they are
+    excluded by the same test rather than by a list."""
+    fr = C.TRACED[name]["frames"]
+    first = fr[0]["polys"]
+    return all(f["polys"] == first for f in fr)
+
+
+def _geom(name, idx):
+    """The frame whose outline stands in for this one."""
+    return 0 if _static_outline(name) else idx
+
+
+@functools.lru_cache(maxsize=None)
+def _mask_geom(name, idx, size):
     """Crisp silhouette from the traced outline, white on transparent."""
     fr = C.TRACED[name]["frames"][idx]
     white = (255, 255, 255, 255)
@@ -106,6 +126,10 @@ def _mask(name, idx, size):
         prims.append({"poly": C.smooth([tuple(p) for p in poly]), "fill": white})
     img = V.render(prims, size)
     return np.asarray(img, dtype=np.float64)[..., 3]
+
+
+def _mask(name, idx, size):
+    return _mask_geom(name, _geom(name, idx), size)
 
 
 def _stats(rgb, a):
@@ -596,6 +620,148 @@ def _straighten_fold(rgb, name, idx, size):
     return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
 
 
+_FOLD_DRAW_REACH = 4.0   # logical units either side of the chord that get rebuilt.
+                         # Must cover the whole excursion of the crease it
+                         # replaces. At 2.5 the crease left the band where it
+                         # bows furthest and survived out there, crossing the
+                         # built line - the burr partway down the divider was
+                         # those two lines meeting at an angle, not anything to
+                         # do with how the rebuild fades in. Widening the band
+                         # removes it outright and costs no tip contrast
+                         # (Arrow 0.326, UpArrow 0.170, Hand 0.244, unmoved).
+_FOLD_DRAW_HOLD = 0.0    # logical units from the apex left to _draw_tip. Zero: the
+                         # room gate below already keeps the rebuild out of the
+                         # narrow wedge, where the glass is thinner than the band,
+                         # and a second cut-off along the chord only drew a
+                         # junction across the line for the tracker to trip on.
+                         # At 4.0 UpArrow's curvature read 0.67, at 0.0 it reads
+                         # 0.21, with tip contrast unmoved (Arrow 0.326).
+_FOLD_DRAW_RAMP = 7.0    # logical units the rebuild fades in over. Short, it
+                         # leaves a dark nick where the rebuilt line meets the
+                         # sculpted one it replaces.
+_FOLD_DRAW_CORE = 0.45   # logical units of the crease's own dark core
+_FOLD_DRAW_ROOM = 3.0    # logical units the rebuild fades in over as glass widens
+_FOLD_DRAW_WIPE = 2.0    # logical units the leftover stub is smoothed away over
+_FOLD_DRAW_KEEP = 2.0    # glass this thin is the point's own, never wiped
+
+
+def _draw_fold(rgb, name, idx, size):
+    """Rebuild the divider as the straight line it is meant to be.
+
+    The upscale keeps the fold dark but sculpts a path for it that the author
+    never drew: on UpArrow the divider bows visibly between the point and the
+    tail notch, and because the two sheets it separates differ sharply, the eye
+    reads the bow long before any metric does. Straightening it by displacing
+    colour was tried and does not work here - the correction has to come from
+    the fold tracker, and on this cursor the tracker does not hold the line at
+    all, jumping from x=27 to x=14 to x=9 on neighbouring rows. A correction
+    measured off that straightens the wrong thing.
+
+    So the divider is built rather than corrected, the same way the point is.
+    The chord from the apex to the tail notch is straight by construction. The
+    colour of each sheet is taken from the master at the edge of the band, so
+    both sheets stay his, and across the band the two are interpolated with the
+    crease's own dark core laid in at the middle - the core's depth measured off
+    the master, not invented. Geometry supplies the path, the author supplies
+    the colour and the depth.
+
+    The last few units at the point are left alone: _draw_tip owns them, and
+    reaching into them is what cost the retired _straighten_fold its place."""
+    ch = _fold_chord(name, 0 if name in INTERP else idx)
+    if ch is None:
+        return rgb
+    s = size / V.LOGICAL
+    p0, p1 = np.array(ch[0]) * s, np.array(ch[1]) * s
+    d = p1 - p0
+    span = float(np.hypot(*d))
+    if span < _FOLD_MIN_SPAN * s:
+        return rgb
+    u = d / span
+    nv = np.array([-u[1], u[0]])
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    rel = np.dstack([xs - p0[0], ys - p0[1]])
+    t = (rel @ u) / span
+    q = (rel @ nv) / s                      # logical units across the chord
+    band = (np.abs(q) < _FOLD_DRAW_REACH) & (t > 0.0) & (t < 1.0)
+    if not band.any():
+        return rgb
+    # Colour of each sheet, read at the rim of the band on that pixel's own side.
+    side = np.where(q >= 0.0, 1.0, -1.0)
+    step = (side * _FOLD_DRAW_REACH - q) * s
+    near = _sample(rgb, xs + nv[0] * step, ys + nv[1] * step)
+    k = np.clip((np.abs(q) / _FOLD_DRAW_REACH), 0.0, 1.0)[..., None]
+    # Each side carries its own sheet right up to the line. Averaging the two
+    # across the band was tried first and wipes the divider out altogether -
+    # the step between the sheets IS the divider, so blending it away leaves a
+    # flat sheet with no crease at all.
+    flat = near
+
+    # The crease's own darkening, measured off the master along the band rather
+    # than chosen: how far below the interpolated sheets it actually sits.
+    # Only where the glass is wider than the band. Near the point the wedge is
+    # narrower than the reach, so the sample for a sheet's colour lands on the
+    # outer bevel and drags the silver in - it showed up as a grey wedge beside
+    # the apex the first time this ran.
+    inset = np.asarray(Image.fromarray(
+        _edge_distance(name, 0 if name in INTERP else idx).astype(np.float32),
+        mode="F").resize((size, size), Image.BILINEAR), dtype=np.float64)
+    # Faded in over several units, not one. Switched on the moment the glass is
+    # wider than the band, the rebuilt line starts with a visible notch where it
+    # meets the sculpted crease it replaces.
+    room = np.clip((inset - _FOLD_DRAW_REACH) / _FOLD_DRAW_ROOM, 0.0, 1.0)
+
+    core = np.clip(1.0 - np.abs(q) / _FOLD_DRAW_CORE, 0.0, 1.0)[..., None]
+    # Measured across the whole band, not on the chord. The crease is off the
+    # chord - that is the entire reason this stage exists - so sampling the dip
+    # at q=0 finds no dip and builds a divider with no dark core at all. On
+    # UpArrow that still reads, because its two sheets differ in colour; on
+    # Arrow, whose sheets are both grey, the divider simply dissolved, and the
+    # fold tracker lost it hard enough that the selftest's planted defect could
+    # no longer move the metric.
+    # Depth along the line, not one number for all of it. The author's crease
+    # deepens and eases off as it runs, and laying a single depth over the whole
+    # length puts a brightness step wherever the real one differed: on Hand the
+    # step along the crease read 23.3 levels against 2.35 before this stage.
+    live = band & (room > 0.0)
+    lum = rgb[..., :3].mean(-1)
+    flum = flat[..., :3].mean(-1)
+    bins = 48
+    ti = np.clip((t * bins).astype(np.int64), 0, bins - 1)
+    prof = np.zeros(bins)
+    for b in range(bins):
+        m = live & (ti == b)
+        if m.sum() >= 16:
+            prof[b] = max(float(flum[m].mean() - np.percentile(lum[m], 5.0)), 0.0)
+    prof = np.convolve(np.pad(prof, 3, mode="edge"), np.ones(7) / 7.0, "valid")
+    depth = np.interp(np.clip(t, 0.0, 1.0), (np.arange(bins) + 0.5) / bins, prof)
+    built = np.clip(flat - core * depth[..., None], 0.0, 255.0)
+
+    hold = np.clip((t * span / s - _FOLD_DRAW_HOLD) / _FOLD_DRAW_RAMP, 0.0, 1.0)
+    w = (band * hold * room * (1.0 - k[..., 0] ** 2))[..., None]
+    out = rgb.copy()
+
+    # Where the rebuild cannot reach full strength - the wedge is still too
+    # narrow for the band - the sculpted crease survives as a stub, and the stub
+    # meets the built line at an angle. That junction is the burr: a dark
+    # chevron partway down the divider with the line skewing off below it.
+    # Carrying the built line further up was tried and is worse: with the band
+    # squeezed into the narrow wedge the colour is sampled off the crease itself
+    # and smears its darkness across the glass as a whisker. So the stub is
+    # wiped instead of continued - the divider simply starts where the geometry
+    # can carry it, and above that the sheet is left plain, which is what the
+    # author drew there anyway.
+    al = _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size) / 255.0
+    plain = _smooth3(_bleed(rgb, al), _FOLD_DRAW_WIPE, size)
+    # Kept off the point. room is zero over the whole narrow wedge, apex
+    # included, so wiping wherever it is zero smooths the point's own dark rim
+    # away: Arrow's tip contrast fell 0.326 to 0.069 the first time this ran.
+    keep = np.clip((inset - _FOLD_DRAW_KEEP) / 1.0, 0.0, 1.0)
+    wipe = (band * (1.0 - room) * keep * (1.0 - k[..., 0] ** 2))[..., None]
+    out[..., :3] = rgb[..., :3] * (1.0 - wipe) + plain[..., :3] * wipe
+    out[..., :3] = out[..., :3] * (1.0 - w) + built[..., :3] * w
+    return out
+
+
 _LEVEL_CAP = 12.0        # levels the author-match may move a pixel by
 _LEVEL_SMOOTH = 3.0      # logical units the upsampled correction is smoothed by.
                          # 1.2 left a tail of the bilinear lattice for the fold
@@ -714,10 +880,21 @@ def _ring_amp(name, idx, size, lo, hi, apex):
 
 
 _DRAW_TIP_R = 3.5        # logical units around a point the wedge is drawn in
-_DRAW_TIP_FEATHER = 1.75
+_DRAW_TIP_FEATHER = 3.0  # Was 1.75, and at that width the disc's own edge showed
+                         # as a step across the point: on Wait the author runs a
+                         # bright sliver right into the apex and the drawn patch
+                         # cut it off square. Widening the blend lets the sliver
+                         # through and reads better as well as measuring better
+                         # (Wait 0.048 to 0.078). 4.5 helps Wait further, 0.102,
+                         # but costs Hand 0.244 to 0.174, so 3.0 it is.
 _DRAW_TIP_BASE = 1.5     # logical units the master's colour is smoothed to a base by
 _DRAW_TIP_REF = (4.0, 7.0)   # annulus the drawn relief takes its amplitude from
 _DRAW_TIP_GAIN = 1.0    # share of that amplitude the drawn wedge keeps
+_DRAW_TIP_LIFT = 0.0    # levels the drawn point may sit above what it replaces.
+                        # Measured, not assumed: allowing 10 costs UpArrow's point
+                        # 0.17 to 0.141 and 20 costs it 0.112. The clamp was never
+                        # eating the relief - it darkens the point, and a darker
+                        # point reads harder against every background.
 
 
 def _draw_tip(rgb, name, idx, size):
@@ -779,7 +956,21 @@ def _draw_tip(rgb, name, idx, size):
         want = float(rgb[..., :3].mean(-1)[ring].std())
     shade = (shade - shade[inner].mean()) * (_DRAW_TIP_GAIN * want / shade[inner].std())
     beat = _tip_beat(name, idx, size)
+    # Held at the level it replaces. _bleed spreads the interior's colour
+    # outward, and the interior is brighter than a point: drawn straight, the
+    # apex came out whiter than anything around it, which the author's own tip
+    # is not - his is darker than ours, 22 levels against 34-53.
     drawn = base + shade[..., None]
+    keep = w > 0.5
+    if keep.any():
+        drawn = drawn + (rgb[..., :3].mean(-1)[keep].mean()
+                         - drawn[..., :3].mean(-1)[keep].mean())
+    # Never brighter than what it replaces. _bevel_shading lights the rim, and
+    # at the apex every rim meets every other one, which came out as a white
+    # bloom on the point - light the author never drew there. A point earns its
+    # contrast by darkening its flanks, not by inventing a highlight.
+    over = drawn[..., :3].mean(-1) - rgb[..., :3].mean(-1)
+    drawn = drawn - np.clip(over - _DRAW_TIP_LIFT, 0.0, None)[..., None]
     if beat is not None:
         drawn = drawn + beat[..., None]
     drawn = np.clip(drawn, 0.0, 255.0)
@@ -1386,8 +1577,12 @@ def _chamfer(inside):
     return d
 
 
-@functools.lru_cache(maxsize=None)
 def _edge_distance(name, idx):
+    return _edge_distance_geom(name, _geom(name, idx))
+
+
+@functools.lru_cache(maxsize=None)
+def _edge_distance_geom(name, idx):
     """Distance from every interior pixel to the silhouette's edge, in logical
     units, measured once at _BEVEL_REF and resampled from there.
 
@@ -1682,6 +1877,7 @@ def frame_image(name, idx, size):
     # A rough section is a defect. It is not the defect that was reported, and
     # it is not worth paying for in points and in sheen. Left here, off, with
     # its numbers, so the trade is a decision rather than a discovery.
+    rgb = _draw_fold(rgb, name, idx, size)
     rgb = _match_author_level(rgb, name, idx, size)
     rgb = _draw_tip(rgb, name, idx, size)
     up_a = _up_alpha(name, idx, size)
