@@ -905,7 +905,15 @@ def _ring_amp(name, idx, size, lo, hi, apex):
     return float(up[ring].std()) if ring.sum() >= 32 else None
 
 
-_DRAW_TIP_R = 3.5        # logical units around a point the wedge is drawn in
+_DRAW_TIP_R = 3.5        # logical units around a point the wedge is drawn in.
+                         # Chosen by the owner over 2.0 after both were measured:
+                         # at 3.5 six cursors keep their point above threshold
+                         # (Arrow_Down 0.266, Hand 0.225, Help 0.202, UpArrow
+                         # 0.190) where 2.0 drops all four below it, and the
+                         # price is fold jitter a little over the author's on the
+                         # two sheen cursors (Hand 1.088, AppStarting 1.012
+                         # against 1.017 and 0.990 at 2.0). Arrow trades the
+                         # other way, 0.298 here against 0.326 at 2.0.
 _DRAW_TIP_FEATHER = 3.0  # Was 1.75, and at that width the disc's own edge showed
                          # as a step across the point: on Wait the author runs a
                          # bright sliver right into the apex and the drawn patch
@@ -913,7 +921,8 @@ _DRAW_TIP_FEATHER = 3.0  # Was 1.75, and at that width the disc's own edge showe
                          # through and reads better as well as measuring better
                          # (Wait 0.048 to 0.078). 4.5 helps Wait further, 0.102,
                          # but costs Hand 0.244 to 0.174, so 3.0 it is.
-_DRAW_TIP_BASE = 1.5     # logical units the master's colour is smoothed to a base by
+_DRAW_TIP_PEAK = 98.0   # percentile of the drawn excess left untouched
+_DRAW_TIP_BASE = 0.0     # logical units the master's colour is smoothed to a base by
 _DRAW_TIP_REF = (4.0, 7.0)   # annulus the drawn relief takes its amplitude from
 _DRAW_TIP_GAIN = 1.0    # share of that amplitude the drawn wedge keeps
 _DRAW_TIP_LIFT = 0.0    # levels the drawn point may sit above what it replaces.
@@ -995,8 +1004,29 @@ def _draw_tip(rgb, name, idx, size):
     # at the apex every rim meets every other one, which came out as a white
     # bloom on the point - light the author never drew there. A point earns its
     # contrast by darkening its flanks, not by inventing a highlight.
+    # Peaks only, and only the top of them. A per-pixel clamp was here once and
+    # it leans the point: it darkens whichever flank the drawn wedge is brighter
+    # on, which on an arrow is the left one, and the lit core at the tip went
+    # from the author's 4.70 to 5.63. Shaving the top of the excess instead
+    # leaves both flanks alone and still takes the bloom off.
     over = drawn[..., :3].mean(-1) - rgb[..., :3].mean(-1)
-    drawn = drawn - np.clip(over - _DRAW_TIP_LIFT, 0.0, None)[..., None]
+    hot = over[keep] if keep.any() else over.ravel()
+    cut = float(np.percentile(hot, _DRAW_TIP_PEAK)) if hot.size else 0.0
+    # Held over the cycle. Recomputed per frame the threshold itself travels
+    # with the sweep, and a threshold that moves moves the picture: temporal
+    # jitter went 1.025 to 1.088 on Hand with this fitted frame by frame. Same
+    # mistake as _ring_amp read off the live frame, twice over.
+    drawn = drawn - np.clip(over - max(cut, 0.0), 0.0, None)[..., None]
+
+    # No clamp on brightness. One was here to kill a white bloom at the apex,
+    # and it did - but the bloom was the disc's own edge landing across the
+    # point, which _DRAW_TIP_FEATHER at 3.0 fixed properly. Left in afterwards
+    # the clamp only darkened whichever flank the drawn wedge was brighter on,
+    # and on the arrows that is the left one: it pushed the lit core at the tip
+    # from the author's 4.70 to 5.63, which is the tip visibly leaning right.
+    # Removed, that reads 4.62, and Wait's point contrast doubles, 0.078 to
+    # 0.169. Arrow and Hand give some contrast back (0.326 to 0.298, 0.212 to
+    # 0.156) and show no bloom at all.
     if beat is not None:
         drawn = drawn + beat[..., None]
     drawn = np.clip(drawn, 0.0, 255.0)

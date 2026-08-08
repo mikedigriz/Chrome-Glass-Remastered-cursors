@@ -220,3 +220,31 @@ untouched. Frozen to the cycle mean it reads 0.963, below baseline.
   differs 0.1337 against 0.1409 between the two. It presents as every one of the
   sixteen cursors regressing by the same amount at once, which is the tell. The
   render is deterministic - two runs agree to the last digit.
+
+- Clamping the drawn point per pixel so it can never sit above the colour it
+  replaces. It was added against a white bloom at the apex, and it did hide it -
+  but the bloom's real cause was the drawn disc's own edge landing across the
+  point, which _DRAW_TIP_FEATHER at 3.0 fixed properly. Left in afterwards the
+  clamp darkens whichever flank the drawn wedge is brighter on, and on an arrow
+  that is always the left one, so the lit core at the tip slid from the author's
+  4.70 to 5.63 - the tip visibly leaning right, which is exactly what the owner
+  reported. Removing it reads 4.62 and doubles Wait's point contrast, 0.078 to
+  0.169. Shaving only the top of the excess (98th percentile) keeps the bloom
+  guard without the lean.
+
+- Smoothing the drawn tip's base to fight the jitter that removing that clamp
+  exposed. It goes the wrong way: Hand's fold jitter is 1.088 at no smoothing,
+  1.141 at 0.6 and 1.146 at 1.2. The base is not what varies frame to frame.
+
+- Freezing the peak-shave threshold over a sheen cycle. Measured first, and the
+  measurement killed it: the threshold sits around 145 levels on Wait and 77 on
+  Hand, high enough that the shave touches almost nothing, so its per-frame
+  travel cannot be what moves the picture.
+
+**Standing rule, learned three times over.** Any quantity fitted to the frame
+being rendered becomes a jitter source, even when the picture looks unchanged:
+`want` read off the live frame (temporal 1.149 against 0.972), `_tip_beat`
+carried as one scalar for the disc (1.027/1.053/1.091 against 0.972/1.016/0.990),
+and the fold offsets fitted per frame, which is what retired _straighten_fold in
+the first place. Check any new constant for frame dependence before looking
+anywhere else.
