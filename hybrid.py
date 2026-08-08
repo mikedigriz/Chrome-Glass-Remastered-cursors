@@ -597,7 +597,13 @@ def _straighten_fold(rgb, name, idx, size):
 
 
 _LEVEL_CAP = 12.0        # levels the author-match may move a pixel by
-_LEVEL_SMOOTH = 1.2      # logical units the correction is smoothed by
+_LEVEL_SMOOTH = 3.0      # logical units the upsampled correction is smoothed by.
+                         # 1.2 left a tail of the bilinear lattice for the fold
+                         # tracker to walk: Help wandered 2.36 against 0.27 untouched,
+                         # Handwriting 2.68 against 0.86. At 3.0 wander is back at
+                         # baseline everywhere and the brightness step along the crease
+                         # is better than baseline on Help (12.3 vs 16.1) and UpArrow
+                         # (7.8 vs 10.0), with the colour gain kept.
 
 
 @functools.lru_cache(maxsize=None)
@@ -663,6 +669,121 @@ def _match_author_level(rgb, name, idx, size):
     # frame it drifts with the frame, and a correction that moves flickers.
     return np.clip(rgb + _level_diff(name, 0 if name in INTERP else idx, size),
                    0.0, 255.0)
+
+
+@functools.lru_cache(maxsize=None)
+def _tip_beat(name, idx, size):
+    """How far this frame's glass sits off the cycle's mean, as a field.
+
+    The drawn wedge's shape is geometry, and geometry is the same in every
+    frame. Drawn from that alone the point goes dead: measured, the sweep's
+    swing at the apex fell from the author's 10.6 luma levels to 5.3, which is
+    the very defect _STILL_TIP_R was cut to 1.75 to fix. So the frame's own beat
+    is carried in separately, read off the master where the sweep actually
+    lives. Shape from the field, timing from the author.
+
+    A scalar will not do, and this was measured rather than reasoned: taking one
+    average level for the whole disc lifted temporal_fold to 1.027/1.053/1.091
+    on Wait, Hand and AppStarting against 0.972/1.016/0.990 with the tip left
+    alone. Inside the disc the author's highlight has a shape and the shape
+    travels; replacing it with one number makes the whole disc pump. So the
+    residual is carried as the field it is."""
+    if name not in INTERP:
+        return None
+    cur = V.linear_to_srgb(_lin_master(name, idx))[..., :3].mean(-1)
+    ref = V.linear_to_srgb(_cycle_mean(name))[..., :3].mean(-1)
+    up = np.asarray(Image.fromarray((cur - ref).astype(np.float32), mode="F")
+                    .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    return _smooth1(up, _DRAW_TIP_BASE, size)
+
+
+@functools.lru_cache(maxsize=None)
+def _ring_amp(name, idx, size, lo, hi, apex):
+    """Contrast of the glass behind a point, held still over a sheen cycle."""
+    if name not in INTERP:
+        return None
+    lum = V.linear_to_srgb(_cycle_mean(name))[..., :3].mean(-1).astype(np.float32)
+    up = np.asarray(Image.fromarray(lum, mode="F").resize((size, size), Image.BILINEAR),
+                    dtype=np.float64)
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    d = np.hypot(xs - apex[0] * s, ys - apex[1] * s) / s
+    al = _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size)
+    ring = (d > lo) & (d < hi) & (al > 0.5 * al.max())
+    return float(up[ring].std()) if ring.sum() >= 32 else None
+
+
+_DRAW_TIP_R = 3.5        # logical units around a point the wedge is drawn in
+_DRAW_TIP_FEATHER = 1.75
+_DRAW_TIP_BASE = 1.5     # logical units the master's colour is smoothed to a base by
+_DRAW_TIP_REF = (4.0, 7.0)   # annulus the drawn relief takes its amplitude from
+_DRAW_TIP_GAIN = 1.0    # share of that amplitude the drawn wedge keeps
+
+
+def _draw_tip(rgb, name, idx, size):
+    """Draw the wedge at each point instead of correcting what is there.
+
+    Everything else tried here moves the master's colour around, and near a
+    point there is nothing to move: measured down Wait's wedge the brightest
+    pixel of the section reads 53 luma at 1.5 units back from the apex against
+    218 at six, so the last two units are ink. A warp, a contrast boost, a
+    pinch, a wedge, a rim taper and the author's own colour have all been tried
+    on that and all failed the same way (PLAN.md 8-11, DEAD_ENDS).
+
+    So the tip is drawn. The shape comes from the distance field, the same one
+    the seven synthetic-bevel cursors use, where tip_convergence measures 0.00 -
+    its two flanks meet where the outline meets because they are the outline.
+    The colour it is drawn in is the master's own, smoothed to a base so the hue
+    and the level are still his, and the relief is scaled to the contrast the
+    real glass carries just behind the point, so the drawn part and the rendered
+    part meet at the same amplitude instead of at a seam.
+
+    This is the stage 5 fork from PLAN.md, taken locally: geometry at the
+    points, the master everywhere else."""
+    # The apex only, not every sharp corner. The tails end in dark points in
+    # the author's drawing too, and drawing a lit wedge into them turns those
+    # into hard black triangles - the two flanks of a blunt corner are too far
+    # apart for the field to close them the way it closes a real point. The apex
+    # is where the fold's chord starts, which is the drawing's own answer to
+    # "which of these is the point".
+    ch = _fold_chord(name, idx)
+    pts = _sharp_corners(name, idx)
+    if not pts or ch is None:
+        return rgb
+    ax, ay = ch[0]
+    apex = min(pts, key=lambda p: (p[0] - ax) ** 2 + (p[1] - ay) ** 2)
+    if (apex[0] - ax) ** 2 + (apex[1] - ay) ** 2 > 1.0:
+        return rgb
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    d = np.hypot(xs - apex[0] * s, ys - apex[1] * s) / s
+    w = np.clip((_DRAW_TIP_R - d) / _DRAW_TIP_FEATHER, 0.0, 1.0)
+    if w.max() <= 0.0:
+        return rgb
+    al = _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size)
+    base = _smooth3(_bleed(rgb, al), _DRAW_TIP_BASE, size)
+
+    shade = _bevel_shading(name, idx, size)
+    inner = w > 0.05
+    lo, hi = _DRAW_TIP_REF
+    ring = (d > lo) & (d < hi) & (al > 0.5 * al.max())
+    if ring.sum() < 32 or shade[inner].std() < 1e-6:
+        return rgb
+    # Amplitude borrowed from the glass just behind the point, so the drawn
+    # wedge is as contrasty as its neighbour and no more. Frozen over the cycle
+    # where there is one: read off the live frame it is a per-frame multiplier
+    # on a shape that never moves, so the whole wedge pumps with the sweep -
+    # temporal_fold measured 1.149 on Wait against 0.972 with the tip untouched.
+    want = _ring_amp(name, idx, size, lo, hi, apex)
+    if want is None:
+        want = float(rgb[..., :3].mean(-1)[ring].std())
+    shade = (shade - shade[inner].mean()) * (_DRAW_TIP_GAIN * want / shade[inner].std())
+    beat = _tip_beat(name, idx, size)
+    drawn = base + shade[..., None]
+    if beat is not None:
+        drawn = drawn + beat[..., None]
+    drawn = np.clip(drawn, 0.0, 255.0)
+    return rgb * (1.0 - w[..., None]) + drawn * w[..., None]
 
 
 _ALONG_BAND = 1.5        # logical units either side of the chord that get smoothed
@@ -1410,8 +1531,14 @@ def _deburr(alpha, size):
     return np.maximum(alpha, np.asarray(closed, dtype=np.float64))
 
 
-def _bevel_shading(name, idx, size):
-    """Luma to add so a flat wedge reads as bevelled glass."""
+def _bevel_shading(name, idx, size, rim_w=1.0):
+    """Luma to add so a flat wedge reads as bevelled glass.
+
+    rim_w scales the darkening along the outline. It has to go to zero
+    when the shading is drawn into a point: the rim term arrives from both
+    flanks at once where the wedge closes, and the two together turn the
+    apex into a black triangle - visible on Wait's tails the moment the
+    tips were drawn rather than corrected."""
     d = _edge_distance(name, idx)
     if d.shape[0] != size:
         d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
@@ -1429,7 +1556,7 @@ def _bevel_shading(name, idx, size):
     ln = np.sqrt(lx * lx + ly * ly + lz * lz)
     dot = np.clip((nx * lx + ny * ly + nz * lz) / ln, -1.0, 1.0)
     rim = np.clip(1.0 - d / _BEVEL_RIM_W, 0.0, 1.0) ** 1.5
-    shade = _BEVEL_DIFF * dot - _BEVEL_RIM * rim
+    shade = _BEVEL_DIFF * dot - _BEVEL_RIM * rim_w * rim
     # Mean removed: a light from one side lands more of the cone facing it than
     # away, so the raw term brightens the glass by a dozen levels as well as
     # shaping it, and the wedges came out paler than the author drew them.
@@ -1555,6 +1682,8 @@ def frame_image(name, idx, size):
     # A rough section is a defect. It is not the defect that was reported, and
     # it is not worth paying for in points and in sheen. Left here, off, with
     # its numbers, so the trade is a decision rather than a discovery.
+    rgb = _match_author_level(rgb, name, idx, size)
+    rgb = _draw_tip(rgb, name, idx, size)
     up_a = _up_alpha(name, idx, size)
     alpha = _round_hole(_deburr(_mask(name, idx, size) / 255.0 * up_a, size),
                         name, idx, size)

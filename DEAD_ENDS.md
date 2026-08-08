@@ -161,6 +161,34 @@ UpArrow, which share the silhouette.
 
 - `_match_author_level` The author's levels restored across the whole glass, not just at the points: his 32px frame minus ours downsampled to it, capped at 12 levels, smoothed by 1.2 logical units on the way back up, frozen per cycle, skipped where the colour is already his. It fixes what it aims at - the shift's middle rows go from +0.62 to +0.21 on Hand and +0.47 to +0.31 on Arrow - and it improves the colour of every cursor it touches (Arrow's Delta-E 2.70 to 2.34, UpArrow's 3.84 to 2.99, Wait's 4.06 to 3.59) while leaving the points alone (Arrow 0.328 to 0.327, UpArrow 0.157 to 0.179). It is off for two reasons. Wait loses 16 per cent of its point contrast, which is the same unavoidable trade as everywhere else here: his tip is darker than ours. And the crease metrics regress on five cursors - fold curvature 0.21 to 1.95 on Wait, brightness step along the crease 3.5 to 10.2 on AppStarting. That second one could not be pinned down: the seam is 80 luma levels deep and the correction is 12, which cannot move a minimum that deep, and on frame 0 the curvature reads 0.11 to 0.23 rather than 1.95 - so the regression comes from frames and sizes where the tracker loses the seam, not from a line that bent. Repairing the tracker in order to clear a number that blocks a change of mine is not a thing to do, so the change stays off and the choice is the owner's.
 
-Left in hybrid.py, one line from being on: call `_match_author_level` in
-`frame_image` just before `_up_alpha`. The patch is also in
-`.metrics/level-match.patch`.
+**Now on.** The owner asked for the shifted line to be beaten and allowed the
+drawing to be departed from where something has to be drawn in. Both objections
+above were dealt with rather than waived. The point contrast is no longer traded:
+`_draw_tip` builds the apex from the distance field, so Wait's tip does not
+depend on the correction at all. The crease regression was the smoothing being
+too short - the bilinear lattice from the author's 32 pixels still had a tail at
+1.2 logical units for the tracker to walk. At 3.0 the curvature is back at
+baseline everywhere and the brightness step is better than baseline on Help
+(12.3 against 16.1) and UpArrow (7.8 against 10.0).
+
+Two knobs were tried and rejected with numbers: lowering `_LEVEL_CAP` to 8, 5 or
+3 does not touch the step and costs colour (Arrow 2.62 to 2.83), and skipping the
+morphs makes them worse, not better (Handwriting 35.2 to 36.5, its Delta-E 6.39
+to 6.63).
+
+What is still paid: Handwriting's brightness step along the crease, 21 to 35.
+Neither stage explains it alone - 21 with both off, 44 with the levels only, 36
+with the drawn tip only - so it is their interaction, and no knob removes it.
+Named as a regression, not filed as noise.
+
+- `_tip_beat` as a scalar. The drawn tip needs the frame's own beat carried in or
+it goes dead (the sweep's swing at the apex falls from the author's 10.6 levels
+to 5.3). Carrying it as one average level for the whole disc makes the disc pump:
+temporal_fold 1.027/1.053/1.091 on Wait, Hand and AppStarting against
+0.972/1.016/0.990 with the tip left alone. Carried as the field it is, it costs
+nothing.
+
+- `want` read off the live frame. The drawn wedge's amplitude was taken from the
+glass behind the point in the frame being rendered, which multiplies a shape that
+never moves by a number that pulses: temporal_fold 1.149 on Wait against 0.972
+untouched. Frozen to the cycle mean it reads 0.963, below baseline.
