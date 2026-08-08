@@ -93,12 +93,12 @@ def _resize(arr, size):
 def _static_outline(name):
     """True where every frame of a cursor is traced to the same outline.
 
-    Wait, Hand and AppStarting animate their colour only - all nine keyframes
-    carry an identical polygon. Anything derived from the outline alone is
-    therefore one answer for the whole cycle, and keying it per frame made the
-    build rasterise the same silhouette and rebuild the same distance field 27
-    times per cursor. Handwriting and NO really do change shape, so they are
-    excluded by the same test rather than by a list."""
+    Wait, Hand and AppStarting animate colour only - all nine keyframes carry an
+    identical polygon, so anything derived from the outline is one answer for
+    the whole cycle. Keyed per frame the build rasterised the same silhouette
+    and rebuilt the same distance field 27 times per cursor. Verified bit-exact
+    on all sixteen before being wired in; Handwriting and NO really do change
+    shape and the same test excludes them."""
     fr = C.TRACED[name]["frames"]
     first = fr[0]["polys"]
     return all(f["polys"] == first for f in fr)
@@ -368,22 +368,12 @@ def _declutter_engraved_detail(name, idx, rgb, size):
 
 
 _SHEEN_SMOOTH = (1.0, 2.0, 1.0)   # circular temporal kernel over an animation's colour
-_STILL_TIP_R = 1.75               # logical units around a corner whose shading is frozen.
-                                  # Was 6.0, widened from 4.0 to cover the neighbourhood
-                                  # _tip_pinch read its edge colour from. The pinch is
-                                  # gone, and at 6.0 the sweep did not reach the points
-                                  # at all: the cycle's own swing inside two units of a
-                                  # corner measured 0.07 luma levels against the author's
-                                  # 10.65, so the tips were simply dead.
-                                  #
-                                  # Set by matching the author rather than by eye: at
-                                  # 1.75 that swing is 10.62 against his 10.65. What the
-                                  # freeze was for - the point appearing to beat as the
-                                  # sweep crosses the narrow wedge - is measured too, as
-                                  # the frame-to-frame travel of the lit centroid inside
-                                  # the same disc, and at this radius it sits at or below
-                                  # the author's own on every arrow (apex 0.11 against
-                                  # his 0.25).
+_STILL_TIP_R = 6.0                # logical units around a corner whose shading is frozen.
+                                  # Wide enough to cover the whole neighbourhood
+                                  # _tip_pinch reads its edge colour from, or the pinch
+                                  # brings moving sheen into a point that is meant to
+                                  # stand still and the tip beats over the cycle:
+                                  # measured, its luma swung 8..12 levels at radius 4.
 _STILL_TIP_FEATHER = 2.0          # logical units of blend back into the moving body
 
 
@@ -618,458 +608,6 @@ def _straighten_fold(rgb, name, idx, size):
     fall = np.clip(1.0 - np.abs(q) / _FOLD_REACH, 0.0, 1.0) ** 2
     shift = off * fall * s * ((t > 0.0) & (t < 1.0))
     return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
-
-
-_FOLD_DRAW_REACH = 4.0   # logical units either side of the chord that get rebuilt.
-                         # Must cover the whole excursion of the crease it
-                         # replaces. At 2.5 the crease left the band where it
-                         # bows furthest and survived out there, crossing the
-                         # built line - the burr partway down the divider was
-                         # those two lines meeting at an angle, not anything to
-                         # do with how the rebuild fades in. Widening the band
-                         # removes it outright and costs no tip contrast
-                         # (Arrow 0.326, UpArrow 0.170, Hand 0.244, unmoved).
-_FOLD_DRAW_HOLD = 0.0    # logical units from the apex left to _draw_tip. Zero: the
-                         # room gate below already keeps the rebuild out of the
-                         # narrow wedge, where the glass is thinner than the band,
-                         # and a second cut-off along the chord only drew a
-                         # junction across the line for the tracker to trip on.
-                         # At 4.0 UpArrow's curvature read 0.67, at 0.0 it reads
-                         # 0.21, with tip contrast unmoved (Arrow 0.326).
-_FOLD_DRAW_RAMP = 7.0    # logical units the rebuild fades in over. Short, it
-                         # leaves a dark nick where the rebuilt line meets the
-                         # sculpted one it replaces.
-_FOLD_DRAW_CORE = 0.2    # logical units of the crease's own dark core. 0.45 is
-                         # seven pixels at 512 and reads as a soft trough rather
-                         # than a crease.
-_FOLD_DRAW_AA = 1.0      # pixels the sheets cross over in
-_FOLD_DRAW_ROOM_MIN = 1.5  # glass thinner than this is the point's, left alone
-_FOLD_DRAW_ROOM = 3.0    # logical units the rebuild fades in over as glass widens
-_FOLD_DRAW_WIPE = 2.0    # logical units the leftover stub is smoothed away over
-_FOLD_DRAW_KEEP = 2.0    # glass this thin is the point's own, never wiped
-
-
-def _draw_fold(rgb, name, idx, size):
-    """Rebuild the divider as the straight line it is meant to be.
-
-    The upscale keeps the fold dark but sculpts a path for it that the author
-    never drew: on UpArrow the divider bows visibly between the point and the
-    tail notch, and because the two sheets it separates differ sharply, the eye
-    reads the bow long before any metric does. Straightening it by displacing
-    colour was tried and does not work here - the correction has to come from
-    the fold tracker, and on this cursor the tracker does not hold the line at
-    all, jumping from x=27 to x=14 to x=9 on neighbouring rows. A correction
-    measured off that straightens the wrong thing.
-
-    So the divider is built rather than corrected, the same way the point is.
-    The chord from the apex to the tail notch is straight by construction. The
-    colour of each sheet is taken from the master at the edge of the band, so
-    both sheets stay his, and across the band the two are interpolated with the
-    crease's own dark core laid in at the middle - the core's depth measured off
-    the master, not invented. Geometry supplies the path, the author supplies
-    the colour and the depth.
-
-    The last few units at the point are left alone: _draw_tip owns them, and
-    reaching into them is what cost the retired _straighten_fold its place."""
-    ch = _fold_chord(name, 0 if name in INTERP else idx)
-    if ch is None:
-        return rgb
-    s = size / V.LOGICAL
-    p0, p1 = np.array(ch[0]) * s, np.array(ch[1]) * s
-    d = p1 - p0
-    span = float(np.hypot(*d))
-    if span < _FOLD_MIN_SPAN * s:
-        return rgb
-    u = d / span
-    nv = np.array([-u[1], u[0]])
-    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
-    rel = np.dstack([xs - p0[0], ys - p0[1]])
-    t = (rel @ u) / span
-    q = (rel @ nv) / s                      # logical units across the chord
-    band = (np.abs(q) < _FOLD_DRAW_REACH) & (t > 0.0) & (t < 1.0)
-    if not band.any():
-        return rgb
-    # Colour of each sheet, read at the rim of the band on that pixel's own side.
-    side = np.where(q >= 0.0, 1.0, -1.0)
-    inset = np.asarray(Image.fromarray(
-        _edge_distance(name, 0 if name in INTERP else idx).astype(np.float32),
-        mode="F").resize((size, size), Image.BILINEAR), dtype=np.float64)
-    # Sampling distance only, clamped to the glass actually there. The band,
-    # the crossover and the core keep their full width - narrowing those was
-    # tried and smears the crease's own darkness across the sheet as a whisker.
-    # Left unclamped the far sample lands on the outer bevel where the wedge is
-    # thinner than twice the reach, and drags a grey blot onto the divider.
-    rs = np.minimum(_FOLD_DRAW_REACH, np.maximum(inset - 1.0, 1.0))
-    step = (side * rs - q) * s
-    near = _sample(rgb, xs + nv[0] * step, ys + nv[1] * step)
-    k = np.clip((np.abs(q) / _FOLD_DRAW_REACH), 0.0, 1.0)[..., None]
-    # Each side carries its own sheet right up to the line. Averaging the two
-    # across the band was tried first and wipes the divider out altogether -
-    # the step between the sheets IS the divider, so blending it away leaves a
-    # flat sheet with no crease at all.
-    # Anti-aliased across one pixel, not one logical unit. Butted straight
-    # together the sheets alias - the divider reads as a staircase on a
-    # diagonal. Blended over half a unit, which is eight pixels at 512, it reads
-    # as a smear instead. The edge is a geometric line, so its coverage is known
-    # exactly: fade it over the pixel it actually crosses and it is both crisp
-    # and clean at every size.
-    aa = np.clip(np.abs(q) * s / _FOLD_DRAW_AA, 0.0, 1.0)[..., None]
-    step2 = (-side * rs - q) * s
-    far = _sample(rgb, xs + nv[0] * step2, ys + nv[1] * step2)
-    flat = far + (near - far) * (0.5 + 0.5 * aa)
-
-    # The crease's own darkening, measured off the master along the band rather
-    # than chosen: how far below the interpolated sheets it actually sits.
-    # Only where the glass is wider than the band. Near the point the wedge is
-    # narrower than the reach, so the sample for a sheet's colour lands on the
-    # outer bevel and drags the silver in - it showed up as a grey wedge beside
-    # the apex the first time this ran.
-    # Faded in over several units, not one. Switched on the moment the glass is
-    # wider than the band, the rebuilt line starts with a visible notch where it
-    # meets the sculpted crease it replaces.
-    # Clearance is now only what the crease itself needs, not the full band
-    # width. The band's width used to gate this because an unclamped sample
-    # landed on the outer bevel; the sampling distance carries its own clamp
-    # now, so holding the rebuild back until the glass is four units thick only
-    # left the divider unbuilt near the point, where it showed as a soft ramp -
-    # measured across the line at a third of its length the level slid 162 to
-    # 133 over twelve pixels with no step in it at all.
-    room = np.clip((inset - _FOLD_DRAW_ROOM_MIN) / _FOLD_DRAW_ROOM, 0.0, 1.0)
-
-    core = np.clip(1.0 - np.abs(q) / _FOLD_DRAW_CORE, 0.0, 1.0)[..., None]
-    # Measured across the whole band, not on the chord. The crease is off the
-    # chord - that is the entire reason this stage exists - so sampling the dip
-    # at q=0 finds no dip and builds a divider with no dark core at all. On
-    # UpArrow that still reads, because its two sheets differ in colour; on
-    # Arrow, whose sheets are both grey, the divider simply dissolved, and the
-    # fold tracker lost it hard enough that the selftest's planted defect could
-    # no longer move the metric.
-    # Depth along the line, not one number for all of it. The author's crease
-    # deepens and eases off as it runs, and laying a single depth over the whole
-    # length puts a brightness step wherever the real one differed: on Hand the
-    # step along the crease read 23.3 levels against 2.35 before this stage.
-    live = band & (room > 0.0)
-    lum = rgb[..., :3].mean(-1)
-    flum = flat[..., :3].mean(-1)
-    bins = 48
-    ti = np.clip((t * bins).astype(np.int64), 0, bins - 1)
-    prof = np.zeros(bins)
-    for b in range(bins):
-        m = live & (ti == b)
-        if m.sum() >= 16:
-            prof[b] = max(float(flum[m].mean() - np.percentile(lum[m], 5.0)), 0.0)
-    prof = np.convolve(np.pad(prof, 3, mode="edge"), np.ones(7) / 7.0, "valid")
-    depth = np.interp(np.clip(t, 0.0, 1.0), (np.arange(bins) + 0.5) / bins, prof)
-    built = np.clip(flat - core * depth[..., None], 0.0, 255.0)
-
-    hold = np.clip((t * span / s - _FOLD_DRAW_HOLD) / _FOLD_DRAW_RAMP, 0.0, 1.0)
-    w = (band * hold * room * (1.0 - k[..., 0] ** 2))[..., None]
-    out = rgb.copy()
-
-    # Where the rebuild cannot reach full strength - the wedge is still too
-    # narrow for the band - the sculpted crease survives as a stub, and the stub
-    # meets the built line at an angle. That junction is the burr: a dark
-    # chevron partway down the divider with the line skewing off below it.
-    # Carrying the built line further up was tried and is worse: with the band
-    # squeezed into the narrow wedge the colour is sampled off the crease itself
-    # and smears its darkness across the glass as a whisker. So the stub is
-    # wiped instead of continued - the divider simply starts where the geometry
-    # can carry it, and above that the sheet is left plain, which is what the
-    # author drew there anyway.
-    al = _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size) / 255.0
-    plain = _smooth3(_bleed(rgb, al), _FOLD_DRAW_WIPE, size)
-    # Kept off the point. room is zero over the whole narrow wedge, apex
-    # included, so wiping wherever it is zero smooths the point's own dark rim
-    # away: Arrow's tip contrast fell 0.326 to 0.069 the first time this ran.
-    keep = np.clip((inset - _FOLD_DRAW_KEEP) / 1.0, 0.0, 1.0)
-    wipe = (band * (1.0 - room) * keep * (1.0 - k[..., 0] ** 2))[..., None]
-    out[..., :3] = rgb[..., :3] * (1.0 - wipe) + plain[..., :3] * wipe
-    out[..., :3] = out[..., :3] * (1.0 - w) + built[..., :3] * w
-    return out
-
-
-_TIP_CAP = 60.0          # levels the sharp tip term may move a pixel by
-_LEVEL_CAP = 12.0        # levels the author-match may move a pixel by
-_LEVEL_SMOOTH = 3.0      # logical units the upsampled correction is smoothed by.
-                         # 1.2 left a tail of the bilinear lattice for the fold
-                         # tracker to walk: Help wandered 2.36 against 0.27 untouched,
-                         # Handwriting 2.68 against 0.86. At 3.0 wander is back at
-                         # baseline everywhere and the brightness step along the crease
-                         # is better than baseline on Help (12.3 vs 16.1) and UpArrow
-                         # (7.8 vs 10.0), with the colour gain kept.
-
-
-@functools.lru_cache(maxsize=None)
-def _level_diff(name, idx, size):
-    """The author's level minus ours, measured at his own resolution."""
-    rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
-    k = size // 32
-    al = (_mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size) / 255.0)[..., None]
-    num = (rgb * al).reshape(32, k, 32, k, 3).mean(axis=(1, 3))
-    den = al.reshape(32, k, 32, k, 1).mean(axis=(1, 3))
-    a = _orig(_key(name, idx))
-    oa = a[..., 3:4] / 255.0
-    # Where neither drawing has glass there is nothing to match, and dividing by
-    # a near-zero coverage would turn edge noise into a correction.
-    live = (den > 0.05) & (oa > 0.05)
-    diff = np.where(live, a[..., :3] - num / np.maximum(den, 1e-6), 0.0)
-    diff = np.clip(diff, -_LEVEL_CAP, _LEVEL_CAP)
-    up = np.dstack([np.asarray(
-        Image.fromarray(diff[..., c].astype(np.float32), mode="F")
-        .resize((size, size), Image.BILINEAR), dtype=np.float64) for c in range(3)])
-    # Bilinear from 32 pixels is piecewise linear, and its slope breaks on every
-    # source pixel boundary. Left like that the correction is a low-frequency
-    # lattice laid over the whole glass, and the fold tracker walks its facets:
-    # AppStarting's brightness step along the crease went 3.5 to 96.9 levels.
-    # Smoothing by a logical unit removes the facets and keeps the level.
-    return _smooth3(up, _LEVEL_SMOOTH, size)
-
-
-_TIP_ZONE = 2.5          # logical units of glass thickness the sharp term covers
-_TIP_SMOOTH = 0.5        # logical units the sharp term is smoothed by
-
-
-@functools.lru_cache(maxsize=None)
-def _level_diff_sharp(name, idx, size):
-    """The same author-minus-ours difference, kept sharp for the points.
-
-    _LEVEL_SMOOTH is 3.0 because anything less leaves the bilinear lattice for
-    the fold tracker to walk. At a point the correction is local, so three units
-    of blur dilute it to nothing: measured on Wait the apex sits at 61 luma
-    levels against the author's 14, and raising the cap from 12 to 90 moves it
-    to 58. It is not the cap, it is the blur. One parameter cannot serve a broad
-    body correction and a two-pixel one at the tip, so the tip gets its own."""
-    rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
-    k = size // 32
-    al = (_mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size) / 255.0)[..., None]
-    num = (rgb * al).reshape(32, k, 32, k, 3).mean(axis=(1, 3))
-    den = al.reshape(32, k, 32, k, 1).mean(axis=(1, 3))
-    a = _orig(_key(name, idx))
-    oa = a[..., 3:4] / 255.0
-    live = (den > 0.05) & (oa > 0.05)
-    diff = np.where(live, a[..., :3] - num / np.maximum(den, 1e-6), 0.0)
-    diff = np.clip(diff, -_TIP_CAP, _TIP_CAP)
-    up = np.dstack([np.asarray(
-        Image.fromarray(diff[..., c].astype(np.float32), mode="F")
-        .resize((size, size), Image.BILINEAR), dtype=np.float64) for c in range(3)])
-    return _smooth3(up, _TIP_SMOOTH, size)
-
-
-def _match_author_level(rgb, name, idx, size):
-    """Put the author's own levels back across the glass. WRITTEN, MEASURED, OFF.
-
-    One line from being on: call it in frame_image just before _up_alpha. What
-    it does and what it costs are in DEAD_ENDS.md; the short version is that it
-    fixes the reported defect and improves the colour of every cursor, and it
-    moves the fold tracker enough that five cursors' crease metrics regress in a
-    way that could not be fully separated from the tracker's own unreliability.
-
-
-    Measured on the arrows: the boundary between the lit sheet and the darker
-    glass sits where he put it in the lower half and nowhere near it in the
-    upper. Read as a fraction of each row's interior, he holds it at 0.20 to
-    0.28 from y=8 down to y=13; the remaster has it at 0.99 down to 0.66. The
-    lit sheet is squeezed into a strip along the top edge near the point and
-    only opens out further down, and that slant is what reads as the dividing
-    line running from the tip and sliding right.
-
-    Same construction as the rest of this file's colour work: the difference is
-    taken at his 32 pixels and carried back up, so it is low frequency by
-    definition and every line in the result is still the master's own. It
-    cannot invent detail and it cannot soften any.
-
-    Capped, and the cap is the whole design. Matching him outright costs the
-    points their contrast - his tips are darker than ours, and contrast on a
-    dark background is exactly what darkening spends. Twelve levels is enough
-    to move a systematic level error and not enough to re-level the drawing.
-
-    Not applied where the colour is already his: the seven synthetic-bevel
-    cursors are his frame plus an analytic relief, and correcting toward him
-    there subtracts the relief."""
-    if name in _SYNTH_BEVEL or (name, idx) in _BROKEN_COLOUR or size % 32:
-        return rgb
-    # One correction for the whole cycle where there is a cycle: fitted per
-    # frame it drifts with the frame, and a correction that moves flickers.
-    src = 0 if name in INTERP else idx
-    out = rgb + _level_diff(name, src, size)
-    # Near a point, where the broad correction is blurred away, the author's own
-    # level is restored with a sharp term instead.
-    inset = np.asarray(Image.fromarray(
-        _edge_distance(name, src).astype(np.float32),
-        mode="F").resize((size, size), Image.BILINEAR), dtype=np.float64)
-    w = np.clip((_TIP_ZONE - inset) / _TIP_ZONE, 0.0, 1.0)[..., None]
-    out = out + w * (_level_diff_sharp(name, src, size) - _level_diff(name, src, size))
-    return np.clip(out, 0.0, 255.0)
-
-
-@functools.lru_cache(maxsize=None)
-def _tip_beat(name, idx, size):
-    """How far this frame's glass sits off the cycle's mean, as a field.
-
-    The drawn wedge's shape is geometry, and geometry is the same in every
-    frame. Drawn from that alone the point goes dead: measured, the sweep's
-    swing at the apex fell from the author's 10.6 luma levels to 5.3, which is
-    the very defect _STILL_TIP_R was cut to 1.75 to fix. So the frame's own beat
-    is carried in separately, read off the master where the sweep actually
-    lives. Shape from the field, timing from the author.
-
-    A scalar will not do, and this was measured rather than reasoned: taking one
-    average level for the whole disc lifted temporal_fold to 1.027/1.053/1.091
-    on Wait, Hand and AppStarting against 0.972/1.016/0.990 with the tip left
-    alone. Inside the disc the author's highlight has a shape and the shape
-    travels; replacing it with one number makes the whole disc pump. So the
-    residual is carried as the field it is."""
-    if name not in INTERP:
-        return None
-    cur = V.linear_to_srgb(_lin_master(name, idx))[..., :3].mean(-1)
-    ref = V.linear_to_srgb(_cycle_mean(name))[..., :3].mean(-1)
-    up = np.asarray(Image.fromarray((cur - ref).astype(np.float32), mode="F")
-                    .resize((size, size), Image.BILINEAR), dtype=np.float64)
-    return _smooth1(up, _DRAW_TIP_BASE, size)
-
-
-@functools.lru_cache(maxsize=None)
-def _ring_amp(name, idx, size, lo, hi, apex):
-    """Contrast of the glass behind a point, held still over a sheen cycle."""
-    if name not in INTERP:
-        return None
-    lum = V.linear_to_srgb(_cycle_mean(name))[..., :3].mean(-1).astype(np.float32)
-    up = np.asarray(Image.fromarray(lum, mode="F").resize((size, size), Image.BILINEAR),
-                    dtype=np.float64)
-    s = size / V.LOGICAL
-    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
-    d = np.hypot(xs - apex[0] * s, ys - apex[1] * s) / s
-    al = _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size)
-    ring = (d > lo) & (d < hi) & (al > 0.5 * al.max())
-    return float(up[ring].std()) if ring.sum() >= 32 else None
-
-
-_DRAW_TIP_R = 3.5        # logical units around a point the wedge is drawn in.
-                         # Chosen by the owner over 2.0 after both were measured:
-                         # at 3.5 six cursors keep their point above threshold
-                         # (Arrow_Down 0.266, Hand 0.225, Help 0.202, UpArrow
-                         # 0.190) where 2.0 drops all four below it, and the
-                         # price is fold jitter a little over the author's on the
-                         # two sheen cursors (Hand 1.088, AppStarting 1.012
-                         # against 1.017 and 0.990 at 2.0). Arrow trades the
-                         # other way, 0.298 here against 0.326 at 2.0.
-_DRAW_TIP_FEATHER = 3.0  # Was 1.75, and at that width the disc's own edge showed
-                         # as a step across the point: on Wait the author runs a
-                         # bright sliver right into the apex and the drawn patch
-                         # cut it off square. Widening the blend lets the sliver
-                         # through and reads better as well as measuring better
-                         # (Wait 0.048 to 0.078). 4.5 helps Wait further, 0.102,
-                         # but costs Hand 0.244 to 0.174, so 3.0 it is.
-_DRAW_TIP_PEAK = 98.0   # percentile of the drawn excess left untouched
-_DRAW_TIP_BASE = 0.0     # logical units the master's colour is smoothed to a base by
-_DRAW_TIP_REF = (4.0, 7.0)   # annulus the drawn relief takes its amplitude from
-_DRAW_TIP_GAIN = 1.0    # share of that amplitude the drawn wedge keeps
-_DRAW_TIP_LIFT = 0.0    # levels the drawn point may sit above what it replaces.
-                        # Measured, not assumed: allowing 10 costs UpArrow's point
-                        # 0.17 to 0.141 and 20 costs it 0.112. The clamp was never
-                        # eating the relief - it darkens the point, and a darker
-                        # point reads harder against every background.
-
-
-def _draw_tip(rgb, name, idx, size):
-    """Draw the wedge at each point instead of correcting what is there.
-
-    Everything else tried here moves the master's colour around, and near a
-    point there is nothing to move: measured down Wait's wedge the brightest
-    pixel of the section reads 53 luma at 1.5 units back from the apex against
-    218 at six, so the last two units are ink. A warp, a contrast boost, a
-    pinch, a wedge, a rim taper and the author's own colour have all been tried
-    on that and all failed the same way (PLAN.md 8-11, DEAD_ENDS).
-
-    So the tip is drawn. The shape comes from the distance field, the same one
-    the seven synthetic-bevel cursors use, where tip_convergence measures 0.00 -
-    its two flanks meet where the outline meets because they are the outline.
-    The colour it is drawn in is the master's own, smoothed to a base so the hue
-    and the level are still his, and the relief is scaled to the contrast the
-    real glass carries just behind the point, so the drawn part and the rendered
-    part meet at the same amplitude instead of at a seam.
-
-    This is the stage 5 fork from PLAN.md, taken locally: geometry at the
-    points, the master everywhere else."""
-    # The apex only, not every sharp corner. The tails end in dark points in
-    # the author's drawing too, and drawing a lit wedge into them turns those
-    # into hard black triangles - the two flanks of a blunt corner are too far
-    # apart for the field to close them the way it closes a real point. The apex
-    # is where the fold's chord starts, which is the drawing's own answer to
-    # "which of these is the point".
-    ch = _fold_chord(name, idx)
-    pts = _sharp_corners(name, idx)
-    if not pts or ch is None:
-        return rgb
-    ax, ay = ch[0]
-    apex = min(pts, key=lambda p: (p[0] - ax) ** 2 + (p[1] - ay) ** 2)
-    if (apex[0] - ax) ** 2 + (apex[1] - ay) ** 2 > 1.0:
-        return rgb
-    s = size / V.LOGICAL
-    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
-    d = np.hypot(xs - apex[0] * s, ys - apex[1] * s) / s
-    w = np.clip((_DRAW_TIP_R - d) / _DRAW_TIP_FEATHER, 0.0, 1.0)
-    if w.max() <= 0.0:
-        return rgb
-    al = _mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size)
-    base = _smooth3(_bleed(rgb, al), _DRAW_TIP_BASE, size)
-
-    shade = _bevel_shading(name, idx, size)
-    inner = w > 0.05
-    lo, hi = _DRAW_TIP_REF
-    ring = (d > lo) & (d < hi) & (al > 0.5 * al.max())
-    if ring.sum() < 32 or shade[inner].std() < 1e-6:
-        return rgb
-    # Amplitude borrowed from the glass just behind the point, so the drawn
-    # wedge is as contrasty as its neighbour and no more. Frozen over the cycle
-    # where there is one: read off the live frame it is a per-frame multiplier
-    # on a shape that never moves, so the whole wedge pumps with the sweep -
-    # temporal_fold measured 1.149 on Wait against 0.972 with the tip untouched.
-    want = _ring_amp(name, idx, size, lo, hi, apex)
-    if want is None:
-        want = float(rgb[..., :3].mean(-1)[ring].std())
-    shade = (shade - shade[inner].mean()) * (_DRAW_TIP_GAIN * want / shade[inner].std())
-    beat = _tip_beat(name, idx, size)
-    # Held at the level it replaces. _bleed spreads the interior's colour
-    # outward, and the interior is brighter than a point: drawn straight, the
-    # apex came out whiter than anything around it, which the author's own tip
-    # is not - his is darker than ours, 22 levels against 34-53.
-    drawn = base + shade[..., None]
-    keep = w > 0.5
-    if keep.any():
-        drawn = drawn + (rgb[..., :3].mean(-1)[keep].mean()
-                         - drawn[..., :3].mean(-1)[keep].mean())
-    # Never brighter than what it replaces. _bevel_shading lights the rim, and
-    # at the apex every rim meets every other one, which came out as a white
-    # bloom on the point - light the author never drew there. A point earns its
-    # contrast by darkening its flanks, not by inventing a highlight.
-    # Peaks only, and only the top of them. A per-pixel clamp was here once and
-    # it leans the point: it darkens whichever flank the drawn wedge is brighter
-    # on, which on an arrow is the left one, and the lit core at the tip went
-    # from the author's 4.70 to 5.63. Shaving the top of the excess instead
-    # leaves both flanks alone and still takes the bloom off.
-    over = drawn[..., :3].mean(-1) - rgb[..., :3].mean(-1)
-    hot = over[keep] if keep.any() else over.ravel()
-    cut = float(np.percentile(hot, _DRAW_TIP_PEAK)) if hot.size else 0.0
-    # Held over the cycle. Recomputed per frame the threshold itself travels
-    # with the sweep, and a threshold that moves moves the picture: temporal
-    # jitter went 1.025 to 1.088 on Hand with this fitted frame by frame. Same
-    # mistake as _ring_amp read off the live frame, twice over.
-    drawn = drawn - np.clip(over - max(cut, 0.0), 0.0, None)[..., None]
-
-    # No clamp on brightness. One was here to kill a white bloom at the apex,
-    # and it did - but the bloom was the disc's own edge landing across the
-    # point, which _DRAW_TIP_FEATHER at 3.0 fixed properly. Left in afterwards
-    # the clamp only darkened whichever flank the drawn wedge was brighter on,
-    # and on the arrows that is the left one: it pushed the lit core at the tip
-    # from the author's 4.70 to 5.63, which is the tip visibly leaning right.
-    # Removed, that reads 4.62, and Wait's point contrast doubles, 0.078 to
-    # 0.169. Arrow and Hand give some contrast back (0.326 to 0.298, 0.212 to
-    # 0.156) and show no bloom at all.
-    if beat is not None:
-        drawn = drawn + beat[..., None]
-    drawn = np.clip(drawn, 0.0, 255.0)
-    return rgb * (1.0 - w[..., None]) + drawn * w[..., None]
 
 
 _ALONG_BAND = 1.5        # logical units either side of the chord that get smoothed
@@ -1821,14 +1359,8 @@ def _deburr(alpha, size):
     return np.maximum(alpha, np.asarray(closed, dtype=np.float64))
 
 
-def _bevel_shading(name, idx, size, rim_w=1.0):
-    """Luma to add so a flat wedge reads as bevelled glass.
-
-    rim_w scales the darkening along the outline. It has to go to zero
-    when the shading is drawn into a point: the rim term arrives from both
-    flanks at once where the wedge closes, and the two together turn the
-    apex into a black triangle - visible on Wait's tails the moment the
-    tips were drawn rather than corrected."""
+def _bevel_shading(name, idx, size):
+    """Luma to add so a flat wedge reads as bevelled glass."""
     d = _edge_distance(name, idx)
     if d.shape[0] != size:
         d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
@@ -1846,7 +1378,7 @@ def _bevel_shading(name, idx, size, rim_w=1.0):
     ln = np.sqrt(lx * lx + ly * ly + lz * lz)
     dot = np.clip((nx * lx + ny * ly + nz * lz) / ln, -1.0, 1.0)
     rim = np.clip(1.0 - d / _BEVEL_RIM_W, 0.0, 1.0) ** 1.5
-    shade = _BEVEL_DIFF * dot - _BEVEL_RIM * rim_w * rim
+    shade = _BEVEL_DIFF * dot - _BEVEL_RIM * rim
     # Mean removed: a light from one side lands more of the cone facing it than
     # away, so the raw term brightens the glass by a dozen levels as well as
     # shaping it, and the wedges came out paler than the author drew them.
@@ -1972,17 +1504,6 @@ def frame_image(name, idx, size):
     # A rough section is a defect. It is not the defect that was reported, and
     # it is not worth paying for in points and in sheen. Left here, off, with
     # its numbers, so the trade is a decision rather than a discovery.
-    rgb = _draw_fold(rgb, name, idx, size)
-    rgb = _match_author_level(rgb, name, idx, size)
-    # _draw_tip is out of the pipeline. It was meant to sharpen the points and it
-    # did measure sharper, but every complaint about the tips traced back to it:
-    # a white bloom, then a lean to the right, then a glint. The measurement that
-    # settled it is the apex level against the author's own 32px frame - he puts
-    # it at 14 and 24 luma on the two top rows, the master alone gives 49 and 48,
-    # the sharp author-level term below brings that to 37 and 36, and drawing the
-    # tip on top pushes it back to 56 and 49 - brighter than the uncorrected
-    # master. It was fighting the correction, not helping it. The function stays
-    # in the file, unused, with the constants that were tuned for it.
     up_a = _up_alpha(name, idx, size)
     alpha = _round_hole(_deburr(_mask(name, idx, size) / 255.0 * up_a, size),
                         name, idx, size)

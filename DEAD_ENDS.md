@@ -273,3 +273,19 @@ anywhere else.
   there. What is left is the resolution of the reference itself - the correction
   is fitted on the author's 32px grid and cannot be sharper than one of his
   pixels.
+
+- **Treating the author's 32px tip level as a target.** His apex reads 14 luma
+  where the remaster reads 71, and three separate stages were built to close
+  that gap - a drawn tip, a no-brighten clamp, a sharp local level match. Each
+  one lowered the number (71 to 56 to 37) and each one was rejected on sight by
+  the owner, who had already called the un-corrected 71 version "almost
+  perfect". At sixteen times the scale a dark apex in his art is a shortage of
+  pixels, not a decision to reproduce. His frames stay the reference for
+  position and shape; they are not a reference for the level at a point.
+
+- **The whole line of render-side fixes for the red cursor's tip lean.** Five
+  rounds, five rejections. Every one had a mechanism and numbers behind it and
+  every one made something else worse in the eye. The lean is in the master -
+  the upscale sculpts the apex - and correcting a master defect by painting over
+  it downstream has now failed enough times to count as settled. If it is worth
+  another attempt, it is at the upscale, not in hybrid.py.
