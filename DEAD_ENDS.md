@@ -248,3 +248,28 @@ carried as one scalar for the disc (1.027/1.053/1.091 against 0.972/1.016/0.990)
 and the fold offsets fitted per frame, which is what retired _straighten_fold in
 the first place. Check any new constant for frame dependence before looking
 anywhere else.
+
+- **`_draw_tip`, the whole stage.** Shipped for a while and defended through four
+  rounds of tuning because tip_contrast rose with it. It rose because the stage
+  made the point *brighter* than its surroundings, and contrast against a
+  background is what that metric measures - so the number went up while the eye
+  saw a bloom, then a glint, then a tip that looked bent toward the bright spot.
+  Every complaint about the points traced back to it.
+
+  The measurement that should have been made first: what level does the point
+  actually want? The author's own 32px frame puts Wait's apex at 14 and 24 luma
+  on the two top rows. The master alone gives 49 and 48. With the tip drawn it
+  reads 56 and 49 - brighter than the uncorrected master, i.e. the stage was
+  fighting the level correction rather than helping it. Removing it leaves 37
+  and 36, and the jitter that had been traded against tip sharpness (Hand 1.088)
+  comes back on its own to 1.017.
+
+  Lesson worth more than the stage: when a metric rewards a change the eye keeps
+  rejecting, check what the metric is made of before defending the change again.
+
+- Raising `_LEVEL_CAP` to reach the tip. The cap was never the limit: 12 to 90
+  moves Wait's apex from 61 to 58. Nor is the smoothing of the sharp term (0.5
+  to 0.05 moves 37 to 36), nor the coverage gates, which pass at 0.35..0.79
+  there. What is left is the resolution of the reference itself - the correction
+  is fitted on the author's 32px grid and cannot be sharper than one of his
+  pixels.

@@ -788,6 +788,7 @@ def _draw_fold(rgb, name, idx, size):
     return out
 
 
+_TIP_CAP = 60.0          # levels the sharp tip term may move a pixel by
 _LEVEL_CAP = 12.0        # levels the author-match may move a pixel by
 _LEVEL_SMOOTH = 3.0      # logical units the upsampled correction is smoothed by.
                          # 1.2 left a tail of the bilinear lattice for the fold
@@ -822,6 +823,36 @@ def _level_diff(name, idx, size):
     # AppStarting's brightness step along the crease went 3.5 to 96.9 levels.
     # Smoothing by a logical unit removes the facets and keeps the level.
     return _smooth3(up, _LEVEL_SMOOTH, size)
+
+
+_TIP_ZONE = 2.5          # logical units of glass thickness the sharp term covers
+_TIP_SMOOTH = 0.5        # logical units the sharp term is smoothed by
+
+
+@functools.lru_cache(maxsize=None)
+def _level_diff_sharp(name, idx, size):
+    """The same author-minus-ours difference, kept sharp for the points.
+
+    _LEVEL_SMOOTH is 3.0 because anything less leaves the bilinear lattice for
+    the fold tracker to walk. At a point the correction is local, so three units
+    of blur dilute it to nothing: measured on Wait the apex sits at 61 luma
+    levels against the author's 14, and raising the cap from 12 to 90 moves it
+    to 58. It is not the cap, it is the blur. One parameter cannot serve a broad
+    body correction and a two-pixel one at the tip, so the tip gets its own."""
+    rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
+    k = size // 32
+    al = (_mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size) / 255.0)[..., None]
+    num = (rgb * al).reshape(32, k, 32, k, 3).mean(axis=(1, 3))
+    den = al.reshape(32, k, 32, k, 1).mean(axis=(1, 3))
+    a = _orig(_key(name, idx))
+    oa = a[..., 3:4] / 255.0
+    live = (den > 0.05) & (oa > 0.05)
+    diff = np.where(live, a[..., :3] - num / np.maximum(den, 1e-6), 0.0)
+    diff = np.clip(diff, -_TIP_CAP, _TIP_CAP)
+    up = np.dstack([np.asarray(
+        Image.fromarray(diff[..., c].astype(np.float32), mode="F")
+        .resize((size, size), Image.BILINEAR), dtype=np.float64) for c in range(3)])
+    return _smooth3(up, _TIP_SMOOTH, size)
 
 
 def _match_author_level(rgb, name, idx, size):
@@ -859,8 +890,16 @@ def _match_author_level(rgb, name, idx, size):
         return rgb
     # One correction for the whole cycle where there is a cycle: fitted per
     # frame it drifts with the frame, and a correction that moves flickers.
-    return np.clip(rgb + _level_diff(name, 0 if name in INTERP else idx, size),
-                   0.0, 255.0)
+    src = 0 if name in INTERP else idx
+    out = rgb + _level_diff(name, src, size)
+    # Near a point, where the broad correction is blurred away, the author's own
+    # level is restored with a sharp term instead.
+    inset = np.asarray(Image.fromarray(
+        _edge_distance(name, src).astype(np.float32),
+        mode="F").resize((size, size), Image.BILINEAR), dtype=np.float64)
+    w = np.clip((_TIP_ZONE - inset) / _TIP_ZONE, 0.0, 1.0)[..., None]
+    out = out + w * (_level_diff_sharp(name, src, size) - _level_diff(name, src, size))
+    return np.clip(out, 0.0, 255.0)
 
 
 @functools.lru_cache(maxsize=None)
@@ -1935,7 +1974,15 @@ def frame_image(name, idx, size):
     # its numbers, so the trade is a decision rather than a discovery.
     rgb = _draw_fold(rgb, name, idx, size)
     rgb = _match_author_level(rgb, name, idx, size)
-    rgb = _draw_tip(rgb, name, idx, size)
+    # _draw_tip is out of the pipeline. It was meant to sharpen the points and it
+    # did measure sharper, but every complaint about the tips traced back to it:
+    # a white bloom, then a lean to the right, then a glint. The measurement that
+    # settled it is the apex level against the author's own 32px frame - he puts
+    # it at 14 and 24 luma on the two top rows, the master alone gives 49 and 48,
+    # the sharp author-level term below brings that to 37 and 36, and drawing the
+    # tip on top pushes it back to 56 and 49 - brighter than the uncorrected
+    # master. It was fighting the correction, not helping it. The function stays
+    # in the file, unused, with the constants that were tuned for it.
     up_a = _up_alpha(name, idx, size)
     alpha = _round_hole(_deburr(_mask(name, idx, size) / 255.0 * up_a, size),
                         name, idx, size)
