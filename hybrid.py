@@ -596,6 +596,75 @@ def _straighten_fold(rgb, name, idx, size):
     return _sample(rgb, xs + nv[0] * shift, ys + nv[1] * shift)
 
 
+_LEVEL_CAP = 12.0        # levels the author-match may move a pixel by
+_LEVEL_SMOOTH = 1.2      # logical units the correction is smoothed by
+
+
+@functools.lru_cache(maxsize=None)
+def _level_diff(name, idx, size):
+    """The author's level minus ours, measured at his own resolution."""
+    rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
+    k = size // 32
+    al = (_mask(name, idx, size) / 255.0 * _up_alpha(name, idx, size) / 255.0)[..., None]
+    num = (rgb * al).reshape(32, k, 32, k, 3).mean(axis=(1, 3))
+    den = al.reshape(32, k, 32, k, 1).mean(axis=(1, 3))
+    a = _orig(_key(name, idx))
+    oa = a[..., 3:4] / 255.0
+    # Where neither drawing has glass there is nothing to match, and dividing by
+    # a near-zero coverage would turn edge noise into a correction.
+    live = (den > 0.05) & (oa > 0.05)
+    diff = np.where(live, a[..., :3] - num / np.maximum(den, 1e-6), 0.0)
+    diff = np.clip(diff, -_LEVEL_CAP, _LEVEL_CAP)
+    up = np.dstack([np.asarray(
+        Image.fromarray(diff[..., c].astype(np.float32), mode="F")
+        .resize((size, size), Image.BILINEAR), dtype=np.float64) for c in range(3)])
+    # Bilinear from 32 pixels is piecewise linear, and its slope breaks on every
+    # source pixel boundary. Left like that the correction is a low-frequency
+    # lattice laid over the whole glass, and the fold tracker walks its facets:
+    # AppStarting's brightness step along the crease went 3.5 to 96.9 levels.
+    # Smoothing by a logical unit removes the facets and keeps the level.
+    return _smooth3(up, _LEVEL_SMOOTH, size)
+
+
+def _match_author_level(rgb, name, idx, size):
+    """Put the author's own levels back across the glass. WRITTEN, MEASURED, OFF.
+
+    One line from being on: call it in frame_image just before _up_alpha. What
+    it does and what it costs are in DEAD_ENDS.md; the short version is that it
+    fixes the reported defect and improves the colour of every cursor, and it
+    moves the fold tracker enough that five cursors' crease metrics regress in a
+    way that could not be fully separated from the tracker's own unreliability.
+
+
+    Measured on the arrows: the boundary between the lit sheet and the darker
+    glass sits where he put it in the lower half and nowhere near it in the
+    upper. Read as a fraction of each row's interior, he holds it at 0.20 to
+    0.28 from y=8 down to y=13; the remaster has it at 0.99 down to 0.66. The
+    lit sheet is squeezed into a strip along the top edge near the point and
+    only opens out further down, and that slant is what reads as the dividing
+    line running from the tip and sliding right.
+
+    Same construction as the rest of this file's colour work: the difference is
+    taken at his 32 pixels and carried back up, so it is low frequency by
+    definition and every line in the result is still the master's own. It
+    cannot invent detail and it cannot soften any.
+
+    Capped, and the cap is the whole design. Matching him outright costs the
+    points their contrast - his tips are darker than ours, and contrast on a
+    dark background is exactly what darkening spends. Twelve levels is enough
+    to move a systematic level error and not enough to re-level the drawing.
+
+    Not applied where the colour is already his: the seven synthetic-bevel
+    cursors are his frame plus an analytic relief, and correcting toward him
+    there subtracts the relief."""
+    if name in _SYNTH_BEVEL or (name, idx) in _BROKEN_COLOUR or size % 32:
+        return rgb
+    # One correction for the whole cycle where there is a cycle: fitted per
+    # frame it drifts with the frame, and a correction that moves flickers.
+    return np.clip(rgb + _level_diff(name, 0 if name in INTERP else idx, size),
+                   0.0, 255.0)
+
+
 _ALONG_BAND = 1.5        # logical units either side of the chord that get smoothed
 _ALONG_LEN = 0.75        # logical units of travel along the chord averaged over
 _ALONG_TAPS = 7          # samples across that travel

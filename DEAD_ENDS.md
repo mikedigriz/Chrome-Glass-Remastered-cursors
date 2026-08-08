@@ -139,3 +139,28 @@ threshold. So Wait losing 44 per cent of its point contrast passed silently:
 0.095 still clears the author's 0.066. Both are now ratcheted against the
 baseline whatever they read, with five per cent of slack. Verified by replaying
 the exact number the gate let through.
+
+## The line that slides right (2026-08-08)
+
+The complaint, and it is real: on Wait the dividing line runs from the upper
+point downward and drifts right. Four measurements were tried before one held.
+The dark seam's own path, the left edge of the lit region, and the seam's
+position as a fraction of the wedge all gave different and mutually
+contradictory numbers - the first because the tracked span was a third of the
+line, the second because it caught the silhouette's edge, the third because the
+tracker went bimodal again. None of them should have been trusted, and the first
+of them was reported before it was checked.
+
+What holds: the boundary of the lit sheet, read as a fraction of each row's
+interior with the rim excluded, against the author's own at 32px. He puts it at
+0.20, 0.17, 0.24, 0.25, 0.25, 0.28 going down from y=8 to y=13. The remaster has
+it at 0.97, 0.99, 0.86, 0.72, 0.66, 0.38. The lit sheet is squeezed into a strip
+along the top edge near the point and only opens out further down, and that is
+the slant the eye reads as the line sliding right. Consistent on Arrow, Hand and
+UpArrow, which share the silhouette.
+
+- `_match_author_level` The author's levels restored across the whole glass, not just at the points: his 32px frame minus ours downsampled to it, capped at 12 levels, smoothed by 1.2 logical units on the way back up, frozen per cycle, skipped where the colour is already his. It fixes what it aims at - the shift's middle rows go from +0.62 to +0.21 on Hand and +0.47 to +0.31 on Arrow - and it improves the colour of every cursor it touches (Arrow's Delta-E 2.70 to 2.34, UpArrow's 3.84 to 2.99, Wait's 4.06 to 3.59) while leaving the points alone (Arrow 0.328 to 0.327, UpArrow 0.157 to 0.179). It is off for two reasons. Wait loses 16 per cent of its point contrast, which is the same unavoidable trade as everywhere else here: his tip is darker than ours. And the crease metrics regress on five cursors - fold curvature 0.21 to 1.95 on Wait, brightness step along the crease 3.5 to 10.2 on AppStarting. That second one could not be pinned down: the seam is 80 luma levels deep and the correction is 12, which cannot move a minimum that deep, and on frame 0 the curvature reads 0.11 to 0.23 rather than 1.95 - so the regression comes from frames and sizes where the tracker loses the seam, not from a line that bent. Repairing the tracker in order to clear a number that blocks a change of mine is not a thing to do, so the change stays off and the choice is the owner's.
+
+Left in hybrid.py, one line from being on: call `_match_author_level` in
+`frame_image` just before `_up_alpha`. The patch is also in
+`.metrics/level-match.patch`.
