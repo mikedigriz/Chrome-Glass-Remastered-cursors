@@ -104,3 +104,38 @@ What is left is the route that already works elsewhere: draw the shading at the
 points analytically, as `_SYNTH_BEVEL` does for the seven geometric cursors,
 where tip_convergence measures 0.00. That is not a correction, it is the stage 5
 fork in PLAN.md - flatter glass, and a change of look for the whole set.
+
+## Re-running the upscale: measured, and it is not the fix (2026-08-08)
+
+Both weights files were fetched and run against the same input, and the wedge's
+section at the point compared with the author's:
+
+- `RealESRGAN_x4plus_anime_6B` (what ships) sharpest step across the section 102 luma at 2.5 units back from Wait's apex.
+- `RealESRGAN_x4plus` (general, num_block=23) the same structure, marginally softer: 79. Correlation with the author's own profile 0.64 against 0.63. It also carries the chroma noise this repo already rejected it for.
+
+Neither model is the problem, and neither is the x4 pass: the bright ribbon is
+already in `src/ai` at 128px, so it comes from the 32-to-128 upscale, and
+regenerating that would move `traced.json` and every silhouette with it.
+
+More to the point, the premise was wrong. The author's own native 32px art has
+the same structure - at his y=5 the row reads 29, 112, 120, 66, 38, 23: a narrow
+bright core with dark shoulders, and a 91-level step between two adjacent pixels.
+The "smooth gradient" it was being compared against was his frame stretched with
+Lanczos, which turns that step into a ramp. That comparison is invalid for the
+same reason `morph_iou_vs_lanczos` (PLAN.md 34) was, and `orig_frame`'s own
+docstring says so.
+
+Judged at his resolution instead, the remaster sits 5.3 luma levels from him on
+average - which is where the real defect turned out to be, and it is fixed in
+`_match_author_at_tips` rather than in the upscale.
+
+- `_match_author_at_tips` The author's level restored at the points as a low-frequency correction: his 32px frame minus ours downsampled to it, carried back up and applied inside a disc around each traced corner. By construction it cannot invent or soften detail, and frozen to frame 0 it costs nothing temporally. It works on what it aims at - the one-sided gap along the inner flank drops from 44 luma levels to 28 - and it improves four cursors' point contrast (Arrow_Down 0.208 to 0.250, UpArrow 0.157 to 0.192, Hand 0.108 to 0.182). It is off because of Wait, the cursor it was written for: matching the author there costs 44 per cent of the point's contrast, 0.170 to 0.095. Capping the correction at 10 levels keeps Wait at 0.146 but then the gap it exists to close only goes 44 to 40, which is nothing. There is no setting in between, because on Wait the two are one axis: his tip is darker than ours, so matching him is darkening, and darkening a tip is exactly what lowers its contrast on a dark background. That is a choice between faithful and crisp, not a defect with a fix, so it is the owner's to make and not a thing to ship quietly. Two collateral failures it caused on the way are worth keeping: fitted per frame it flickered (fold smoothness 0.974 to 1.009 on Wait), and applied to the synthetic-bevel cursors it subtracted their analytic relief, since there the render already is the author's colour (SizeNS point contrast 0.079 to 0.040, below the author's own).
+
+## A hole in the gate, found by the above
+
+`tip_contrast` and `tip_sheen` have a floor, not a ceiling, and every other
+check here only consults the baseline once a value has already missed its
+threshold. So Wait losing 44 per cent of its point contrast passed silently:
+0.095 still clears the author's 0.066. Both are now ratcheted against the
+baseline whatever they read, with five per cent of slack. Verified by replaying
+the exact number the gate let through.

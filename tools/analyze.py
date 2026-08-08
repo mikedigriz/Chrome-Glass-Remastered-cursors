@@ -53,6 +53,7 @@ VALIDATE_SIZES_FULL = VALIDATE_SIZES + (512,)
 _JAG_BAND = 2.0            # logical units either side of the fold a step is looked for in
 _DE_NATIVE = 256           # size the colour is judged at, box-averaged 8:1 down to 32
 _FOLD_ROWS = 6             # rows a fold reading needs before it means anything
+_RATCHET_SLACK = 0.05      # how far a floor metric may slip before it is a regression
 _SOLID_FRAC = 0.85         # of a frame's own peak alpha: the glass proper
 _GHOST_FRAC = 0.05         # ...and below this, nothing that can be seen
 _FOLD_DEPTH = 6.0          # luma a dip must have to count as a fold and not as flat glass
@@ -1044,6 +1045,22 @@ def gate(rep, base=None):
             bad.append(f"{line}  (was {prev:.3f})")
         else:
             debt.append(line)
+
+    # Ratcheted whatever they read. Every other check here only consults the
+    # baseline once a value has already missed its threshold, which leaves a
+    # hole exactly where it matters most: a point's contrast fell 0.170 to 0.095
+    # on Wait - 44 per cent - and the gate said nothing, because 0.095 still
+    # clears the author's own 0.066. These two have a floor, not a ceiling, and
+    # losing most of the headroom above the floor is the regression.
+    for name, e in rep.items():
+        f, prev = _flat(e), was.get(name, {})
+        for key in ("tip_contrast", "tip_sheen"):
+            got, ref = f.get(key), prev.get(key)
+            if got is None or ref is None:
+                continue
+            if got < ref * (1.0 - _RATCHET_SLACK):
+                bad.append(f"{name:12s} {key:18s} {got:8.3f} < {ref * (1.0 - _RATCHET_SLACK):.3f}"
+                           f"  (was {ref:.3f})")
 
     for name, e in rep.items():
         for msg in e.get("topology", []):
