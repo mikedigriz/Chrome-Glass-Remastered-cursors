@@ -1527,10 +1527,26 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
 # enough that the groove stays a fraction of the (also still narrow) wedge
 # width all the way into the last few pixels, so a thin dark line survives
 # converging on the point instead of a flat wash swallowing it.
+#
+# depth raised 55 -> 150 for the same three. A groove this narrow (hw_grow
+# 0.4, the width that keeps it reading as a line rather than a patch at 512 -
+# see the taper history above) is only two or three device pixels wide by the
+# time it reaches the shipped sizes: at 32px each pixel's own anti-aliasing
+# with its solid-glass neighbours eats most of a 55-level swing before the
+# eye ever sees it, so a groove that read clearly at a 512px crop went nearly
+# flat at the size the cursor is actually used at (owner report 2026-08-XX,
+# "в сужении нет кончика внутреннего... незаметно на сером курсоре"). Depth
+# does not fight the anti-aliasing - width would, and a wider groove is
+# exactly the flat-patch defect two fixes back - it only gives the blend more
+# swing to survive it with. 150 was found by pushing depth alone at 32px
+# until the line stood out there (checked against Arrow_Down and Hand too,
+# same shape) while the 512px crop still reads as a clean dark line, not a
+# clipped black smear - tried 190, indistinguishable from 150 at 32px and
+# closer to full black at 512, so no reason to push past it.
 _TROUGH_PARAMS = {
-    "Arrow":       dict(hw0=0.0, hw_grow=0.4, depth=55.0, taper=5.0),
-    "Hand":        dict(hw0=0.0, hw_grow=0.4, depth=55.0, taper=5.0),
-    "Arrow_Down":  dict(hw0=0.0, hw_grow=0.4, depth=55.0, taper=5.0),
+    "Arrow":       dict(hw0=0.0, hw_grow=0.4, depth=150.0, taper=5.0),
+    "Hand":        dict(hw0=0.0, hw_grow=0.4, depth=150.0, taper=5.0),
+    "Arrow_Down":  dict(hw0=0.0, hw_grow=0.4, depth=150.0, taper=5.0),
     "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "AppStarting": dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
