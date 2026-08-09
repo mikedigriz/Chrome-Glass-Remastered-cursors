@@ -1568,34 +1568,47 @@ def _tip_relight(rgb, name, idx, size):
     s = relx * (-uy) + rely * ux           # signed distance to the chord line
     t = (relx * ux + rely * uy) / seg_len  # 0 at the point, 1 at the notch
 
-    # The chord is straight; the fold the master actually drew is not - it
-    # bends away from the chord the same way `_fold_offsets` measures for the
-    # divider-line straightening elsewhere. Our own groove was drawn dead
-    # straight along the chord, so past the point the two paths separate, and
-    # both stayed visible: ours where we painted it, the master's own where it
-    # had already drifted off our line - two dark lines forking from the one
-    # apex (owner report 2026-08-09). Bending our centreline the same way the
-    # real fold bends keeps the two coincident all the way down, not just at
-    # the point.
-    fo = _fold_offsets(name, idx)
-    if fo is not None:
-        ts_, offs_, _ = fo
-        s = s - np.interp(t, ts_, offs_, left=0.0, right=0.0)
-
+    # `along` first, so the bend below can be weighted by how much of this
+    # pixel's colour is even coming from the master to bend toward.
+    #
     # Coverage is the silhouette itself, not a lateral distance from the
-    # chord: bending the centreline (above) narrowed the gap between our line
-    # and the master's own, but did not close it, because the master's second
-    # line does not track the chord's bend at a constant offset either - nudging
-    # the centreline chases a moving target. Replacing every pixel actually
-    # inside the wedge near the point, instead of a band of some width around
-    # a line, leaves nothing of the master's own competing structure to bleed
-    # through at all - there is no pixel left unreplaced for a second line to
-    # be made of. `along` alone still limits how far down the chord this
-    # reaches and fades it back to the AI master past that.
+    # chord: replacing every pixel actually inside the wedge near the point,
+    # instead of a band of some width around a line, leaves nothing of the
+    # master's own competing structure to bleed through at all - there is no
+    # pixel left unreplaced for a second line to be made of. `along` alone
+    # still limits how far down the chord this reaches and fades it back to
+    # the AI master past that.
     along_flat = p.get("along_flat", _TIP_RELIGHT_ALONG_FLAT)
     along_end = p.get("along", _TIP_RELIGHT_ALONG)
     tc = np.clip(t, 0.0, 1.0)
     along = np.clip(1.0 - (tc - along_flat) / (along_end - along_flat), 0.0, 1.0)
+
+    # The chord is straight; the fold the master actually drew is not - it
+    # bends away from the chord the same way `_fold_offsets` measures for the
+    # divider-line straightening elsewhere. Past `along`'s own reach the band
+    # fades back to the master's own pixels, and bending our centreline to
+    # meet it there keeps the two paths coincident at the seam instead of
+    # forking (owner report 2026-08-09, first fix).
+    #
+    # Full strength - `along` at 1, deep inside the fully-replaced core - the
+    # bend has to stay off: at full coverage there is no master pixel left to
+    # meet, so bending there only imports the master's own measurement noise.
+    # `_fold_offsets` is sampled from a couple of pixels either side of a
+    # cross-section that is barely a unit wide this close to the apex, and it
+    # swung -0.7 units over three consecutive samples (t=0.09..0.16) - not a
+    # real bend, a measurement wobble. Painted at full strength, that wobble
+    # became a visible S-kink in the line converging on the apex itself,
+    # right where the point is meant to read as one clean line (owner report
+    # 2026-08-XX, "хорда идёт юзом" - the second fix, after the first left
+    # this in at every t). Scaling the bend by `1 - along` keeps it at zero
+    # through the flat core and fades it in only over the same stretch the
+    # band itself is already fading out, so the wobble never reaches the part
+    # of the line the eye is looking at.
+    fo = _fold_offsets(name, idx)
+    if fo is not None:
+        ts_, offs_, _ = fo
+        s = s - np.interp(t, ts_, offs_, left=0.0, right=0.0) * (1.0 - along)
+
     band = along * (_mask(name, idx, size) / 255.0)
     if band.max() < 1e-6:
         return rgb
