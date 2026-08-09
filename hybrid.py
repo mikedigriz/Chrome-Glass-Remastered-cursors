@@ -1447,133 +1447,54 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
                              # reaches down in total (flat part plus fade),
                              # before it fades back to the AI master
 
-# Per-cursor groove shape, measured off the author's own 32px art on
-# 2026-08-09 (see NEXT.md item 3): a sharp V for Arrow/Hand/Arrow_Down, and no
-# fold at all this close to the point for UpArrow/Wait/AppStarting (their fold
-# only exists past t=0.8, near the tail notch - outside this band, and off the
-# straight chord besides; see item 3's "not sent" note. `_fold_offsets` tracks
-# the real departure there and would be the way to reach it, not attempted
-# here).
+# Per-cursor fold shape near the point.
 #
-# Arrow/Hand first shipped with a wide flat-bottomed valley (hw_grow=1.6) on
-# the theory that the author's own art is flat-dark right at the point. It
-# is, but at the default taper (1.2 units) that width is reached almost
-# immediately, and 1.6 logical units is most of the wedge's own cross-section
-# that close to the apex - the "valley" was the whole glass, wall to wall,
-# with no facet left outside it to read against. Owner report 2026-08-09: the
-# interior point vanished into a flat grey/pale patch, in both the still
-# taper and the sheen animation. Arrow_Down's narrow V (hw_grow=0.4) never had
-# this problem - its groove stays a fraction of the wedge's width - and
-# Arrow/Hand's own art (see the 32px crop this was measured from) is a match
-# for the same shape, so they now share Arrow_Down's parameters exactly.
+# Two different shapes live here, because the author drew two different
+# things. Measured off his own 32px art on 2026-08-XX, cross-sections taken
+# perpendicular to the tip-notch chord (t = 0.15..0.75 on Arrow):
 #
-# depth=0.0 for the last three is not "no correction" - it still replaces the
-# band with its own flattened, mean-anchored version (see _tip_relight), which
-# is what a depth-zero groove degenerates to. That matters: the AI master
+#     t=0.15  103 103 103 | 164 164 164 | 132 132 | 106 113 113
+#     t=0.35  173 195 195 | 210 202 177 | 154 154 | 151 146 146
+#     t=0.55  214 214 206 | 206 199 176 | 176 153 | 150 150 150
+#
+# That is a STEP - one lit facet around 205-214, one shaded facet around
+# 150-154, and a single transition sample (~176) between them. Not one value
+# in it dips below the glass on either side. Arrow/Hand/Arrow_Down get that
+# step, as `diff` (the luma swing across it) and `edge` (how wide the
+# transition is, in logical units, away from the point).
+#
+# The trough model this replaced (hw0/hw_grow/depth: a dark valley with
+# brighter glass on *both* sides) was a misreading of the same art, and it is
+# what the whole 2026-08-XX run of reports was chasing. A valley painted
+# where the author drew a step cannot be tuned into looking right: shallow it
+# vanishes, deep it reads as a hard dark band laid on top of the glass, and
+# every value in between reads as a soft smudge - which is exactly the
+# sequence of owner reports it produced ("нет кончика внутреннего", then
+# "мега резкая тень", then "линия была линией, а не тенью непонятной"). The
+# depth/hw0 tuning that answered each of those was moving along the wrong
+# axis; none of it survives here.
+#
+# UpArrow/Wait/AppStarting keep the trough parameters, and for them it is not
+# a misreading: their own art carries no fold at all this close to the point
+# (it only exists past t~0.8, near the tail notch - off this band and off the
+# straight chord besides; `_fold_offsets` tracks the real departure there and
+# would be the way to reach it, not attempted here). What their entries do is
+# replace the band with a flattened, mean-anchored version of itself, which
+# is what a shallow trough degenerates to, and that matters: the AI master
 # invents a fold of its own here that the author never drew (confirmed on
 # Wait - see NEXT.md item 7, the render splits into two lobes even with every
 # stage in this file that touches the point switched off, so it is baked into
 # `src/ai512`). Flattening the band erases that invented split instead of
 # adding a second one on top of it.
-# hw0 is 0.0 on every entry, not just the flat ones: the groove has to reach
-# an actual zero half-width at the point itself, or its own flat floor sits
-# there as a blunt, offset shape instead of a point - measured 2026-08-09 as
-# the cause of a visible split between the alpha silhouette's apex and the
-# colour band's own "point" (owner report: two/three internal tips). hw_grow
-# is what gives Arrow/Hand their width away from the point.
 #
-# hw_grow is capped well under _TIP_RELIGHT_LATERAL (2.2), not close to it.
-# First cut used 2.3 - past the band's own reach - so the flat core filled
-# almost the entire replaced strip, leaving only a sliver of low-weight blend
-# at the band's edge where the master's own rim highlight bled back through
-# mostly unreplaced. Two dark, high-contrast edges that close together (the
-# core's own edge and the master's rim starting right where the blend weight
-# collapses) is exactly what reads as two separate tips. Kept comfortably
-# smaller here so a real margin of smooth blend-out always separates the
-# core from the band's edge.
-# along_flat/along/taper override the module defaults per cursor.
-#
-# UpArrow/Wait/AppStarting first got a short along/along_flat (cut at t=0.3)
-# on the theory that their own art has no fold before that and a real one
-# only past t~0.8, so the correction should just stay out of the real fold's
-# way. Measured true, but a hard cut at t=0.3 traded one visible seam for
-# another: the master's fold does not switch on at t=0.3, it grows in from
-# nothing, and cutting our flat patch off there means the master's own
-# (already partway open) fold starts right where our patch stops - a step,
-# not a taper, which is what the owner meant by "it doesn't narrow into the
-# point, it gets cut off" (2026-08-09).
-#
-# Fix: give them a real groove of their own, the same kind Arrow/Hand have,
-# instead of a flat patch that just ends. depth/hw_grow are deliberately
-# smaller than Arrow/Hand's - their own art carries much less fold near the
-# point than Arrow/Hand's does - and `taper` (which lengths hw's own growth
-# distance, default _TIP_RELIGHT_TAPER) is stretched to most of the band's
-# whole reach instead of the first 1.2 units, so the groove widens gradually
-# the entire way down rather than snapping to full width almost immediately
-# and then sitting flat, which is what a short taper did on Arrow/Hand too
-# (see the hw_grow history above) - just less visible there because their
-# groove was already meant to hold a fairly constant width.
-#
-# Arrow/Hand themselves needed the same `taper` stretch. At the default 1.2
-# units, `taper_frac` (and with it `hw`) reaches its full value by t=1.2/22.9
-# = 0.05 - five hundredths of the chord, a couple of device pixels at 512.
-# The wedge itself is barely wider than the fully-open groove there, so the
-# flat core (`shade` at full `depth`, no facet either side of it) fills the
-# entire cross-section: no two facets left to read as a point, just one flat
-# patch, right at the apex the eye looks at first (owner report 2026-08-XX,
-# "нет кончика внутреннего... в сужении" - after the wobble fix above made
-# the flat patch itself visible instead of hiding it under an S-kink).
-# Stretched to 5.0 units, same as the other three, `hw` opens gradually
-# enough that the groove stays a fraction of the (also still narrow) wedge
-# width all the way into the last few pixels, so a thin dark line survives
-# converging on the point instead of a flat wash swallowing it.
-#
-# depth raised 55 -> 90 for the same three (was pushed to 150 first, see
-# below). A groove this narrow (hw_grow 0.4, the width that keeps it reading
-# as a line rather than a patch at 512 - see the taper history above) is only
-# two or three device pixels wide by the time it reaches the shipped sizes:
-# at 32px each pixel's own anti-aliasing with its solid-glass neighbours eats
-# most of a 55-level swing before the eye ever sees it, so a groove that read
-# clearly at a 512px crop went nearly flat at the size the cursor is actually
-# used at (owner report 2026-08-XX, "в сужении нет кончика внутреннего...
-# незаметно на сером курсоре").
-#
-# First cut pushed depth to 150 to compensate, tuned by eye at 32px alone
-# against a transparent checker background. Composited over an opaque
-# mid-grey desktop-like background instead (how the owner actually saw it)
-# and checked at the sizes in between - 128 was a hard near-black stripe the
-# whole visible length of the groove, not the thin native-art shading every
-# other correction on this cursor stays under (owner report 2026-08-XX, "мега
-# резкая тень"). The 32px-only check missed it because at 32px the groove is
-# already anti-aliased down to a couple of pixels regardless of depth, so 150
-# and 90 look almost the same there - the harshness only shows up once the
-# groove is wide enough (96-256px) to render as a solid band instead of a
-# blended sliver. 90 was found by walking depth back down while checking
-# 48/64/96/128/256 against a grey background each time, not just 32 and 512:
-# it is the highest value before the 128px crop stops reading as a hard edge.
-#
-# hw0 given a small floor (0.06) on these three alone, where every other
-# entry keeps it at the true zero the taper-history comment above argues for.
-# That argument still holds for `hw` reaching zero at the apex - the point
-# where the two facets meet does have to close to nothing, or the fill's own
-# "point" sits blunt and offset from the traced corner (the original two/
-# three-tips defect). What a true zero does *not* survive is the corner's own
-# antialiasing: the first pixel or two off a sharp point carry maybe 30-50%
-# coverage on this raster (measured on Arrow's own apex, alpha 121 then 91),
-# and at `hw=0` the groove's only width there is the 2-device-pixel floor
-# `width` keeps for its own sake - split across a half-covered pixel, blended
-# toward the base colour by the same fraction, it reads as a short stretch of
-# plain lit glass before the crease "catches up" to the point, like the line
-# stopped short of the vertex it is drawn to converge on (owner report
-# 2026-08-XX, "она должна сходиться до вершины"). A groove doesn't blunt from
-# holding a couple of hundredths of a logical unit of width at full coverage
-# - that is still sub-pixel at every shipped size - it only fixed the visible
-# gap because it gives the antialiased corner pixels enough weight to read as
-# part of the line instead of bare glass.
+# `taper` is shared by both shapes: it is how far back from the point the
+# transition (or the groove's half-width) takes to open to full size, so the
+# fold converges to a true line at the traced apex instead of arriving there
+# already at full width - the original two/three-tips defect.
 _TROUGH_PARAMS = {
-    "Arrow":       dict(hw0=0.06, hw_grow=0.4, depth=90.0, taper=5.0),
-    "Hand":        dict(hw0=0.06, hw_grow=0.4, depth=90.0, taper=5.0),
-    "Arrow_Down":  dict(hw0=0.06, hw_grow=0.4, depth=90.0, taper=5.0),
+    "Arrow":       dict(diff=58.0, edge=0.5, taper=5.0),
+    "Hand":        dict(diff=58.0, edge=0.5, taper=5.0),
+    "Arrow_Down":  dict(diff=58.0, edge=0.5, taper=5.0),
     "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "AppStarting": dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
@@ -1683,16 +1604,25 @@ def _tip_relight(rgb, name, idx, size):
                                             # keeps its own floor below, which is
                                             # a separate anti-alias concern, not
                                             # a substitute for hw reaching zero.
-    width = np.maximum(_TIP_RELIGHT_RIDGE_W * taper_frac, 2.0 / L)
-                                            # floored so the step always spans a
-                                            # couple of pixels - sub-pixel-wide, it
-                                            # is a knife edge on the sampling grid
-                                            # and reads as speckle, not a ridge
     lum = rgb.mean(-1)
-    hw = p["hw0"] + p["hw_grow"] * taper_frac
-    d = np.abs(s - _TIP_RELIGHT_BIAS)
-    core = np.clip(1.0 - (d - hw) / width, 0.0, 1.0)
-    shade = -p["depth"] * core
+    if "diff" in p:
+        # A step: one lit facet, one shaded facet, meeting on the chord - the
+        # shape the author actually drew (see _TROUGH_PARAMS). `edge` is how
+        # wide the transition is away from the point; `taper_frac` closes it
+        # toward zero at the apex so the two facets converge to a line there
+        # rather than arriving already separated. Floored at a couple of
+        # device pixels: sub-pixel-wide it is a knife edge on the sampling
+        # grid and reads as speckle rather than as a drawn line.
+        width = np.maximum(p["edge"] * taper_frac, 2.0 / L)
+        shade = -0.5 * p["diff"] * np.clip(s / width, -1.0, 1.0)
+    else:
+        # A trough - see _TROUGH_PARAMS for why the three sheen cursors keep
+        # this shape (they carry no fold here at all; a shallow one degenerates
+        # to flattening the band, which is the point).
+        width = np.maximum(_TIP_RELIGHT_RIDGE_W * taper_frac, 2.0 / L)
+        hw = p["hw0"] + p["hw_grow"] * taper_frac
+        d = np.abs(s - _TIP_RELIGHT_BIAS)
+        shade = -p["depth"] * np.clip(1.0 - (d - hw) / width, 0.0, 1.0)
     band_sum = band.sum()
     shade = shade - float((shade * band).sum() / band_sum) + float((lum * band).sum() / band_sum)
     new_lum = lum * (1.0 - band) + shade * band
