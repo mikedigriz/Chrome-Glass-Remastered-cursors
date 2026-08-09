@@ -1513,10 +1513,24 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
 # and then sitting flat, which is what a short taper did on Arrow/Hand too
 # (see the hw_grow history above) - just less visible there because their
 # groove was already meant to hold a fairly constant width.
+#
+# Arrow/Hand themselves needed the same `taper` stretch. At the default 1.2
+# units, `taper_frac` (and with it `hw`) reaches its full value by t=1.2/22.9
+# = 0.05 - five hundredths of the chord, a couple of device pixels at 512.
+# The wedge itself is barely wider than the fully-open groove there, so the
+# flat core (`shade` at full `depth`, no facet either side of it) fills the
+# entire cross-section: no two facets left to read as a point, just one flat
+# patch, right at the apex the eye looks at first (owner report 2026-08-XX,
+# "нет кончика внутреннего... в сужении" - after the wobble fix above made
+# the flat patch itself visible instead of hiding it under an S-kink).
+# Stretched to 5.0 units, same as the other three, `hw` opens gradually
+# enough that the groove stays a fraction of the (also still narrow) wedge
+# width all the way into the last few pixels, so a thin dark line survives
+# converging on the point instead of a flat wash swallowing it.
 _TROUGH_PARAMS = {
-    "Arrow":       dict(hw0=0.0, hw_grow=0.4, depth=55.0),
-    "Hand":        dict(hw0=0.0, hw_grow=0.4, depth=55.0),
-    "Arrow_Down":  dict(hw0=0.0, hw_grow=0.4, depth=55.0),
+    "Arrow":       dict(hw0=0.0, hw_grow=0.4, depth=55.0, taper=5.0),
+    "Hand":        dict(hw0=0.0, hw_grow=0.4, depth=55.0, taper=5.0),
+    "Arrow_Down":  dict(hw0=0.0, hw_grow=0.4, depth=55.0, taper=5.0),
     "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "AppStarting": dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
