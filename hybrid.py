@@ -1551,10 +1551,29 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
 # blended sliver. 90 was found by walking depth back down while checking
 # 48/64/96/128/256 against a grey background each time, not just 32 and 512:
 # it is the highest value before the 128px crop stops reading as a hard edge.
+#
+# hw0 given a small floor (0.06) on these three alone, where every other
+# entry keeps it at the true zero the taper-history comment above argues for.
+# That argument still holds for `hw` reaching zero at the apex - the point
+# where the two facets meet does have to close to nothing, or the fill's own
+# "point" sits blunt and offset from the traced corner (the original two/
+# three-tips defect). What a true zero does *not* survive is the corner's own
+# antialiasing: the first pixel or two off a sharp point carry maybe 30-50%
+# coverage on this raster (measured on Arrow's own apex, alpha 121 then 91),
+# and at `hw=0` the groove's only width there is the 2-device-pixel floor
+# `width` keeps for its own sake - split across a half-covered pixel, blended
+# toward the base colour by the same fraction, it reads as a short stretch of
+# plain lit glass before the crease "catches up" to the point, like the line
+# stopped short of the vertex it is drawn to converge on (owner report
+# 2026-08-XX, "она должна сходиться до вершины"). A groove doesn't blunt from
+# holding a couple of hundredths of a logical unit of width at full coverage
+# - that is still sub-pixel at every shipped size - it only fixed the visible
+# gap because it gives the antialiased corner pixels enough weight to read as
+# part of the line instead of bare glass.
 _TROUGH_PARAMS = {
-    "Arrow":       dict(hw0=0.0, hw_grow=0.4, depth=90.0, taper=5.0),
-    "Hand":        dict(hw0=0.0, hw_grow=0.4, depth=90.0, taper=5.0),
-    "Arrow_Down":  dict(hw0=0.0, hw_grow=0.4, depth=90.0, taper=5.0),
+    "Arrow":       dict(hw0=0.06, hw_grow=0.4, depth=90.0, taper=5.0),
+    "Hand":        dict(hw0=0.06, hw_grow=0.4, depth=90.0, taper=5.0),
+    "Arrow_Down":  dict(hw0=0.06, hw_grow=0.4, depth=90.0, taper=5.0),
     "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "AppStarting": dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
