@@ -16,25 +16,25 @@
   "tip_wobble": 0.348949
  },
  "Arrow": {
-  "delta_e": 3.071176,
+  "delta_e": 3.197273,
   "density": 2.496296,
   "fold_gap": 0.25,
   "fold_jag": 35.533333,
   "fold_luma_step": 1.083333,
-  "fold_wander": 0.006987,
+  "fold_wander": 0.007159,
   "scale_drift": 0.141077,
-  "tip_contrast": 0.171257,
+  "tip_contrast": 0.214564,
   "tip_convergence": 0.9
  },
  "Arrow_Down": {
-  "delta_e": 3.81287,
+  "delta_e": 3.879008,
   "density": 2.496296,
   "fold_gap": 0.5,
-  "fold_jag": 84.7,
+  "fold_jag": 84.466667,
   "fold_luma_step": 9.65,
-  "fold_wander": 0.460068,
+  "fold_wander": 0.459855,
   "scale_drift": 0.141077,
-  "tip_contrast": 0.124014,
+  "tip_contrast": 0.165352,
   "tip_convergence": 1.3
  },
  "Cross": {
@@ -49,8 +49,8 @@
   "tip_convergence": 0.0
  },
  "Hand": {
-  "cadence": 1.03471,
-  "delta_e": 3.255427,
+  "cadence": 1.030195,
+  "delta_e": 3.448296,
   "density": 2.496296,
   "fold_gap": 0.25,
   "fold_jag": 44.833333,
@@ -59,10 +59,10 @@
   "ghost_rgb": 2.1e-05,
   "inner_jitter": 0.045195,
   "scale_drift": 0.141077,
-  "temporal_fold": 0.994702,
-  "tip_contrast": 0.179131,
+  "temporal_fold": 1.001415,
+  "tip_contrast": 0.220469,
   "tip_convergence": 1.1,
-  "tip_sheen": 4.553565,
+  "tip_sheen": 4.515512,
   "tip_wobble": 0.313835
  },
  "Handwriting": {
