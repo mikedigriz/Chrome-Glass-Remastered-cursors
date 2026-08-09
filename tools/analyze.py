@@ -323,14 +323,37 @@ def _interior(a):
     return al, lum
 
 
-def _fold_track(name, idx, size, ref=None, win=None, get=frame):
+def _prominence(seg, k):
+    """How far a cross-section has to climb out of seg[k] to reach anything
+    lower - the standard reading of how much of a dip a minimum is.
+
+    What it is for: telling a fold from a wobble in flat glass. The test it
+    replaces compared the whole window's range against _FOLD_DEPTH, and the
+    window has the lit sheet in it, so a 78-level range cleared it on every row
+    whether or not there was a fold in that row. On UpArrow at 256 two rows out
+    of forty came back 1.6 logical units off the line, on a 0.7-level dimple in
+    the cream sheet that the row-wide minimum happened to land on; the fold's
+    own dip, where it is still readable, is six levels and up. Same constant,
+    now read off the dip rather than off the sheet beside it."""
+    left = seg[:k].max() if k else seg[k]
+    right = seg[k + 1:].max() if k + 1 < len(seg) else seg[k]
+    return float(min(left, right) - seg[k])
+
+
+def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
     """Column of the fold (darkest interior pixel) per row.
 
     A plain row-wide argmin is bimodal - the wedge has a dark seam and a dark
     outer flank, and which of them wins flips between frames, so the raw track
     reports 100px jumps that no eye ever sees. Given a reference track the
     search is confined to a window around it, which pins the metric to one and
-    the same feature in every frame."""
+    the same feature in every frame.
+
+    `strict` is the prominence test below, and it is off for the pass that only
+    locates the run. That pass reduces the whole track to one median offset, and
+    a median is not the thing a stray row hurts; what it does need is to stay
+    the same anchor it has always been, so that a change to the reading is a
+    change to the reading and not a window that has quietly moved."""
     a = get(name, idx, size)
     al, lum = _interior(a)
     track = np.full(size, np.nan)
@@ -359,14 +382,21 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame):
         # A row with no fold in it has no business being measured: where the
         # glass is flat the minimum lands on whichever end of the search window
         # is darker and flips between the two as the sweep passes, which reads
-        # as an 8px step in a cursor whose outline never moved.
-        if k in (0, len(seg) - 1) or seg.max() - seg.min() < _FOLD_DEPTH:
+        # as an 8px step in a cursor whose outline never moved. The row is
+        # dropped rather than re-pointed at the next candidate along: the deepest
+        # dip in the window is often the rim grazing it, and picking that one
+        # walks the track off the fold at exactly the rows near the tail cutout
+        # where the old rule was right to give up.
+        if k in (0, len(seg) - 1):
+            continue
+        if strict and _prominence(seg, k) < _FOLD_DEPTH:
+            continue
+        if not strict and seg.max() - seg.min() < _FOLD_DEPTH:
             continue
         # sub-pixel: parabolic fit through the minimum and its neighbours
-        if 0 < k < len(seg) - 1:
-            a0, b0, c0 = seg[k - 1], seg[k], seg[k + 1]
-            den = a0 - 2 * b0 + c0
-            k = k + (0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0)
+        a0, b0, c0 = seg[k - 1], seg[k], seg[k + 1]
+        den = a0 - 2 * b0 + c0
+        k = k + (0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0)
         track[y] = lo + k
     return track
 
@@ -377,13 +407,27 @@ def inner_jitter(name):
     Only meaningful where the silhouette itself is frozen (AppStarting, Hand,
     Wait): there the outline is one static polygon in every frame, so any
     movement of the fold is the shading wobbling, not the cursor animating.
-    Anchored on the cycle's own median track so the measurement follows one
-    feature instead of hopping between two dark ones."""
+
+    Anchored on the chord, the same line fold_profile anchors on, plus one
+    offset for the whole cycle. It used to anchor on the median of the
+    unanchored tracks, and those are not one feature: measured across the nine
+    frames at 256, a row's unanchored track spans 143px on Wait and 151px on
+    AppStarting, because it hops between the fold, the rim and the flank. A
+    median over three features is a fourth thing, and which rows survived the
+    windowed pass afterwards was decided by that. The offset is one number per
+    cycle, not per frame - a per-frame anchor would follow the very movement
+    this is here to measure."""
     n = nframes(name)
-    raw = np.array([_fold_track(name, i, JITTER_SIZE) for i in range(n)])
+    ref = _chord_ref(name, 0, JITTER_SIZE)
+    if ref is None:
+        return None
+    wide = _JAG_BAND * JITTER_SIZE / 32.0
     with warnings.catch_warnings():        # rows outside the cursor are all-NaN
         warnings.simplefilter("ignore", RuntimeWarning)
-        ref = np.nanmedian(raw, axis=0)
+        off = np.nanmedian([_fold_track(name, i, JITTER_SIZE, ref, wide, strict=False) - ref
+                            for i in range(n)])
+    if np.isfinite(off):
+        ref = ref + off
     win = 0.5 * JITTER_SIZE / 32.0
     T = np.array([_fold_track(name, i, JITTER_SIZE, ref, win) for i in range(n)])
     ok = ~np.isnan(T).any(0)
@@ -449,19 +493,19 @@ def fold_profile(name, idx, size, get=frame):
     # Two passes. The chord comes from the outline and the crease it stands for
     # is allowed to sit a little off it; with the window centred on the chord
     # the rim falls inside it on some rows and wins the argmin there, which
-    # reads as the line jumping. Re-centring on the run's own median offset pins
-    # the search to one feature, the way inner_jitter pins it across frames.
+    # reads as the line jumping. Re-centring on where the first pass found the
+    # fold pins the search to one feature, the way inner_jitter pins it across
+    # frames.
     #
     # Measured on Arrow, whose fold is the same line at every size: 0.001
     # logical units of curvature at 128, 0.016 at 384, 0.035 at 512 - and 0.941
     # at 256, from four rows out of forty-one. A defect that exists at one rung
     # and at none of its neighbours is the reading, not the render.
-    t = _fold_track(name, idx, size, ref, win, get=get)
+    t = _fold_track(name, idx, size, ref, win, get=get, strict=False)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         off = np.nanmedian(t - ref)
-    if np.isfinite(off):
-        t = _fold_track(name, idx, size, ref + off, win, get=get)
+    t = _fold_track(name, idx, size, ref + (off if np.isfinite(off) else 0.0), win, get=get)
     rows = np.nonzero(~np.isnan(t))[0]
     if len(rows) < _FOLD_ROWS:
         return None
@@ -1135,6 +1179,14 @@ def gate(rep, base=None):
         ij = e.get("inner_jitter")
         if ij and ij["p95"] > T["inner_jitter"]:
             fail(name, "inner_jitter_p95", ij["p95"], ">", T["inner_jitter"], "inner_jitter")
+        elif ij is None and name in H.INTERP and any(
+                getattr(H.C, "CURSOR_TOPOLOGY", {}).get(name, {}).get("fold", [])):
+            # Same rule as fold_unmeasured, for the same reason. AppStarting's
+            # crease is four to seven levels deep where Arrow's is eighteen to
+            # twenty-three, so few enough rows resolve that this returns nothing
+            # at all - and nothing at all must not read as a pass.
+            bad.append(f"{name:12s} {'jitter_unmeasured':18s} "
+                       f"fewer than ten rows of fold resolved across the cycle")
         mo, mo0 = e.get("morph"), e.get("morph_orig")
         if mo and mo0:
             if mo["iou_min"] < mo0["iou_min"] * T["morph_iou"]:

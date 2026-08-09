@@ -303,6 +303,26 @@ def _dominant_hue_dir(rgb, a):
     return mean_dir / n if n > 1e-6 else None
 
 
+def _hue_outlier_weight(name, idx, rgb, sat_floor, sat_span, cos_thresh, cos_span):
+    """0..1 per pixel: how far its chroma has swung from the frame's own hue.
+
+    Shared by _declutter_hue_outliers and the ringing guard in _master_rgb -
+    the same test, tuned to how far a defect has to swing before it is worth
+    desaturating over."""
+    ref_dir = _dominant_hue_dir(_orig(_key(name, idx))[..., :3], _orig(_key(name, idx))[..., 3])
+    if ref_dir is None:
+        return None
+    lum = rgb @ _LUMA
+    chroma = rgb - lum[..., None]
+    sat = np.linalg.norm(chroma, axis=2)
+    cos = np.zeros(sat.shape)
+    nz = sat > 1e-6
+    cos[nz] = (chroma[nz] @ ref_dir) / sat[nz]
+    outlier = (np.clip((sat - sat_floor) / sat_span, 0, 1)
+              * np.clip((cos_thresh - cos) / cos_span, 0, 1))
+    return lum, chroma, outlier
+
+
 def _declutter_hue_outliers(name, idx, rgb):
     """Real-ESRGAN is blind to alpha, and can invent a stray colour cast right
     at a high-contrast silhouette edge - Arrow_Down (blue glass) got a thin
@@ -313,16 +333,10 @@ def _declutter_hue_outliers(name, idx, rgb):
     its own luminance, feathered so the correction has no hard edge.
     Genuinely neutral cursors have no dominant hue to compare against and are
     left untouched."""
-    ref_dir = _dominant_hue_dir(_orig(_key(name, idx))[..., :3], _orig(_key(name, idx))[..., 3])
-    if ref_dir is None:
+    got = _hue_outlier_weight(name, idx, rgb, 10.0, 30.0, 0.3, 0.6)
+    if got is None:
         return rgb
-    lum = rgb @ _LUMA
-    chroma = rgb - lum[..., None]
-    sat = np.linalg.norm(chroma, axis=2)
-    cos = np.zeros(sat.shape)
-    nz = sat > 1e-6
-    cos[nz] = (chroma[nz] @ ref_dir) / sat[nz]
-    outlier = np.clip((sat - 10) / 30.0, 0, 1) * np.clip((0.3 - cos) / 0.6, 0, 1)
+    lum, chroma, outlier = got
     # no blur here: outlier is already a smooth per-pixel function of sat/cos,
     # and blurring it would dilute exactly the worst case - a single hallucinated
     # pixel (e.g. AppStarting's tip) - below its own correction strength.
@@ -368,12 +382,17 @@ def _declutter_engraved_detail(name, idx, rgb, size):
 
 
 _SHEEN_SMOOTH = (1.0, 2.0, 1.0)   # circular temporal kernel over an animation's colour
-_STILL_TIP_R = 6.0                # logical units around a corner whose shading is frozen.
-                                  # Wide enough to cover the whole neighbourhood
-                                  # _tip_pinch reads its edge colour from, or the pinch
-                                  # brings moving sheen into a point that is meant to
-                                  # stand still and the tip beats over the cycle:
-                                  # measured, its luma swung 8..12 levels at radius 4.
+_STILL_TIP_R = 1.75               # logical units around a corner whose shading is frozen.
+                                  # Was 6.0, wide enough to cover the neighbourhood
+                                  # _tip_pinch read its edge colour from - but _tip_pinch
+                                  # is gone (see DEAD_ENDS.md), and at 6.0 the sweep never
+                                  # reached the points at all: AppStarting/Hand/Wait's own
+                                  # cycle swing inside the tip_sheen disc measured near
+                                  # zero (0.02, 0.00, 0.04 luma levels) against the
+                                  # author's 14.7/13.6/10.7. At 1.75 the swing matches his
+                                  # (15.2/12.8/10.6) and the wobble it was guarding against
+                                  # stays below his own (0.32/0.29/0.30 vs 0.39/0.34/0.34) -
+                                  # the point does not visibly lean as the sweep crosses it.
 _STILL_TIP_FEATHER = 2.0          # logical units of blend back into the moving body
 
 
@@ -1388,6 +1407,233 @@ def _bevel_shading(name, idx, size):
     return shade
 
 
+# The paper-plane cursors: a straight fold from the point to the tail notch,
+# on a silhouette the master's own upscale mis-lights right at the point (see
+# DEAD_ENDS.md, "The red tip"). Owner's call, 2026-08-08: relight the point
+# analytically rather than keep fighting the master's own colour there, the
+# same trade _SYNTH_BEVEL already made for the seven flat cursors - narrower
+# in reach, so the rest of the glass keeps the AI sheen.
+_WEDGE_TIPS = {"Arrow", "Arrow_Down", "Hand", "UpArrow", "Wait", "AppStarting"}
+
+_TIP_RELIGHT_DIFF = 34.0     # luma swing between the two facets the relight paints
+_TIP_RELIGHT_RIDGE_W = 0.35  # logical units the transition spans, away from the point
+_TIP_RELIGHT_TAPER = 1.2     # logical units back from the point the ridge takes to
+                             # open to its full width - narrower nearer the point,
+                             # the way the author's own rim does
+_TIP_RELIGHT_BIAS = 0.0      # logical units the ridge sits off the tip-notch chord,
+                             # toward the rim. Was 1.0: narrowed the lit core toward
+                             # the author's thin rim strip, but the ridge no longer
+                             # converged on the traced apex, and the owner read that
+                             # as the opaque fill's own point pulling off the visible
+                             # silhouette corner. On the chord it converges cleanly;
+                             # the lit-core width is owner-rejected as a fix for this.
+_TIP_RELIGHT_LATERAL = 2.6   # logical units either side of the chord the
+                             # relight replaces at full weight (see `lateral`
+                             # below - a plateau, not a ramp from the centre).
+                             # Covers the AI master's own second invented dark
+                             # line on Arrow/Hand, measured 2026-08-09 at
+                             # |s|~2.0-2.5.
+_TIP_RELIGHT_LATERAL_FALLOFF = 1.2  # logical units past _TIP_RELIGHT_LATERAL
+                             # the blend weight takes to reach zero
+_TIP_RELIGHT_ALONG_FLAT = 0.25  # share of the chord replaced at full weight
+                             # before along starts fading - was a straight
+                             # ramp from t=0, so by t=0.24 (about where the
+                             # owner's close-up crops end) the master was
+                             # already back to 59% strength, and its own
+                             # bright rim bled through right where the eye
+                             # was looking, reading as a second point forking
+                             # off the first (measured 2026-08-09).
+_TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
+                             # reaches down in total (flat part plus fade),
+                             # before it fades back to the AI master
+
+# Per-cursor groove shape, measured off the author's own 32px art on
+# 2026-08-09 (see NEXT.md item 3): a flat-bottomed valley for Arrow/Hand, a
+# sharp V for Arrow_Down, and no fold at all this close to the point for
+# UpArrow/Wait/AppStarting (their fold only exists past t=0.8, near the tail
+# notch - outside this band, and off the straight chord besides; see item 3's
+# "not sent" note. `_fold_offsets` tracks the real departure there and would
+# be the way to reach it, not attempted here).
+#
+# depth=0.0 for the last three is not "no correction" - it still replaces the
+# band with its own flattened, mean-anchored version (see _tip_relight), which
+# is what a depth-zero groove degenerates to. That matters: the AI master
+# invents a fold of its own here that the author never drew (confirmed on
+# Wait - see NEXT.md item 7, the render splits into two lobes even with every
+# stage in this file that touches the point switched off, so it is baked into
+# `src/ai512`). Flattening the band erases that invented split instead of
+# adding a second one on top of it.
+# hw0 is 0.0 on every entry, not just the flat ones: the groove has to reach
+# an actual zero half-width at the point itself, or its own flat floor sits
+# there as a blunt, offset shape instead of a point - measured 2026-08-09 as
+# the cause of a visible split between the alpha silhouette's apex and the
+# colour band's own "point" (owner report: two/three internal tips). hw_grow
+# is what gives Arrow/Hand their width away from the point.
+#
+# hw_grow is capped well under _TIP_RELIGHT_LATERAL (2.2), not close to it.
+# First cut used 2.3 - past the band's own reach - so the flat core filled
+# almost the entire replaced strip, leaving only a sliver of low-weight blend
+# at the band's edge where the master's own rim highlight bled back through
+# mostly unreplaced. Two dark, high-contrast edges that close together (the
+# core's own edge and the master's rim starting right where the blend weight
+# collapses) is exactly what reads as two separate tips. Kept comfortably
+# smaller here so a real margin of smooth blend-out always separates the
+# core from the band's edge.
+# along_flat/along/taper override the module defaults per cursor.
+#
+# UpArrow/Wait/AppStarting first got a short along/along_flat (cut at t=0.3)
+# on the theory that their own art has no fold before that and a real one
+# only past t~0.8, so the correction should just stay out of the real fold's
+# way. Measured true, but a hard cut at t=0.3 traded one visible seam for
+# another: the master's fold does not switch on at t=0.3, it grows in from
+# nothing, and cutting our flat patch off there means the master's own
+# (already partway open) fold starts right where our patch stops - a step,
+# not a taper, which is what the owner meant by "it doesn't narrow into the
+# point, it gets cut off" (2026-08-09).
+#
+# Fix: give them a real groove of their own, the same kind Arrow/Hand have,
+# instead of a flat patch that just ends. depth/hw_grow are deliberately
+# smaller than Arrow/Hand's - their own art carries much less fold near the
+# point than Arrow/Hand's does - and `taper` (which lengths hw's own growth
+# distance, default _TIP_RELIGHT_TAPER) is stretched to most of the band's
+# whole reach instead of the first 1.2 units, so the groove widens gradually
+# the entire way down rather than snapping to full width almost immediately
+# and then sitting flat, which is what a short taper did on Arrow/Hand too
+# (see the hw_grow history above) - just less visible there because their
+# groove was already meant to hold a fairly constant width.
+_TROUGH_PARAMS = {
+    "Arrow":       dict(hw0=0.0, hw_grow=1.6, depth=40.0),
+    "Hand":        dict(hw0=0.0, hw_grow=1.6, depth=40.0),
+    "Arrow_Down":  dict(hw0=0.0, hw_grow=0.4, depth=55.0),
+    "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
+    "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
+    "AppStarting": dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
+}
+
+
+def _tip_relight(rgb, name, idx, size):
+    """Repaint the wedge point analytically, in a band along its own fold chord.
+
+    Luma only - chroma stays the AI master's, so the colour family does not
+    jump at the seam. The groove is a smooth flat-bottomed valley across the
+    band (`_TROUGH_PARAMS`, one shape per cursor), narrow near the point and
+    opening out down the chord, which is what keeps it converging cleanly to a
+    single point rather than blooming (dead end: `_draw_tip`, see
+    DEAD_ENDS.md) - there is no hard edge for the pixel grid to alias against,
+    and no second edge for the eye to read as a second point.
+
+    The whole band is replaced, not shaded on top of what the master painted -
+    luma and chroma both, anchored to the AI master's own weighted-mean over
+    the band so it sits at the band's general level and colour rather than
+    introducing one of its own, but the per-pixel pattern underneath is
+    discarded entirely. That is the only way to guarantee one feature - adding
+    a groove on top of whatever the master already drew there cannot undo a
+    split the master invented (see `_TROUGH_PARAMS` and NEXT.md item 7);
+    replacing it can, and it takes both channels: the master carries its
+    second point as a colour streak as much as a brightness one. Same reason
+    _bevel_shading mean-subtracts over the whole mask - this is that idea
+    applied to a strip instead of the whole cursor, because unlike the seven
+    _SYNTH_BEVEL shapes these silhouettes are traced from raster art with far
+    more vertices, and lighting the true distance-to-outline field on them
+    facets visibly (see DEAD_ENDS.md for the render this produced): the chord
+    is two points and carries none of that."""
+    if name not in _TROUGH_PARAMS:
+        return rgb
+    p = _TROUGH_PARAMS[name]
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (tx, ty), (nx_, ny_) = ch
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
+    dx, dy = nx_ - tx, ny_ - ty
+    seg_len = float(np.hypot(dx, dy))
+    if seg_len < 1e-6:
+        return rgb
+    ux, uy = dx / seg_len, dy / seg_len
+    relx, rely = px - tx, py - ty
+    s = relx * (-uy) + rely * ux           # signed distance to the chord line
+    t = (relx * ux + rely * uy) / seg_len  # 0 at the point, 1 at the notch
+
+    # The chord is straight; the fold the master actually drew is not - it
+    # bends away from the chord the same way `_fold_offsets` measures for the
+    # divider-line straightening elsewhere. Our own groove was drawn dead
+    # straight along the chord, so past the point the two paths separate, and
+    # both stayed visible: ours where we painted it, the master's own where it
+    # had already drifted off our line - two dark lines forking from the one
+    # apex (owner report 2026-08-09). Bending our centreline the same way the
+    # real fold bends keeps the two coincident all the way down, not just at
+    # the point.
+    fo = _fold_offsets(name, idx)
+    if fo is not None:
+        ts_, offs_, _ = fo
+        s = s - np.interp(t, ts_, offs_, left=0.0, right=0.0)
+
+    # Coverage is the silhouette itself, not a lateral distance from the
+    # chord: bending the centreline (above) narrowed the gap between our line
+    # and the master's own, but did not close it, because the master's second
+    # line does not track the chord's bend at a constant offset either - nudging
+    # the centreline chases a moving target. Replacing every pixel actually
+    # inside the wedge near the point, instead of a band of some width around
+    # a line, leaves nothing of the master's own competing structure to bleed
+    # through at all - there is no pixel left unreplaced for a second line to
+    # be made of. `along` alone still limits how far down the chord this
+    # reaches and fades it back to the AI master past that.
+    along_flat = p.get("along_flat", _TIP_RELIGHT_ALONG_FLAT)
+    along_end = p.get("along", _TIP_RELIGHT_ALONG)
+    tc = np.clip(t, 0.0, 1.0)
+    along = np.clip(1.0 - (tc - along_flat) / (along_end - along_flat), 0.0, 1.0)
+    band = along * (_mask(name, idx, size) / 255.0)
+    if band.max() < 1e-6:
+        return rgb
+
+    taper_dist = p.get("taper", _TIP_RELIGHT_TAPER)
+    taper_frac = np.clip(t * seg_len / taper_dist, 0.0, 1.0)
+                                            # true 0 at the point itself, not
+                                            # floored at 0.05 - that floor used
+                                            # to hold the groove's own half-width
+                                            # open a few pixels wide right at the
+                                            # apex, which is what read as a blunt,
+                                            # offset "second point" instead of a
+                                            # convergence to the traced corner
+                                            # (owner report 2026-08-09). `width`
+                                            # keeps its own floor below, which is
+                                            # a separate anti-alias concern, not
+                                            # a substitute for hw reaching zero.
+    width = np.maximum(_TIP_RELIGHT_RIDGE_W * taper_frac, 2.0 / L)
+                                            # floored so the step always spans a
+                                            # couple of pixels - sub-pixel-wide, it
+                                            # is a knife edge on the sampling grid
+                                            # and reads as speckle, not a ridge
+    lum = rgb.mean(-1)
+    hw = p["hw0"] + p["hw_grow"] * taper_frac
+    d = np.abs(s - _TIP_RELIGHT_BIAS)
+    core = np.clip(1.0 - (d - hw) / width, 0.0, 1.0)
+    shade = -p["depth"] * core
+    band_sum = band.sum()
+    shade = shade - float((shade * band).sum() / band_sum) + float((lum * band).sum() / band_sum)
+    new_lum = lum * (1.0 - band) + shade * band
+
+    # Chroma flattened the same way luma is, not carried over raw: the master
+    # carries its own colour streak here as well as its own brightness one -
+    # a saturation/hue line independent of luma, invisible to every check
+    # above because they only ever looked at luma. Preserving chroma read as
+    # "the colour family does not jump at the seam" when the band was narrow,
+    # but now that the band covers the whole cross-section, raw chroma means
+    # carrying the master's second line through untouched in colour even
+    # after luma stopped having one - which is exactly the second point the
+    # owner kept seeing (measured 2026-08-09: a 0.4-14 magnitude chroma
+    # streak tracking the same path as the luma artefact, band-anchored luma
+    # alone cannot touch it). Anchored to the band's own weighted-mean chroma,
+    # same as luma, so the seam still sits at the band's general colour.
+    chroma = rgb - lum[..., None]
+    band_w = band[..., None]
+    mean_chroma = (chroma * band_w).sum((0, 1)) / max(float(band_w.sum()), 1e-6)
+    new_chroma = chroma * (1.0 - band_w) + mean_chroma * band_w
+    return np.clip(new_lum[..., None] + new_chroma, 0, 255)
+
+
 # Frames whose colour master is not usable. Real-ESRGAN, given a frame that is
 # nearly transparent to begin with, does not upscale it - it invents a sheet of
 # glass plates with hard cracks between them, and Handwriting's middle three are
@@ -1415,6 +1661,35 @@ def _master_rgb(name, idx, size):
     rgb, _ = _resize(np.dstack([m_rgb, m_a]), size)
     if size > anchor:                                  # only when past native detail
         rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
+    else:
+        # _resize's Lanczos has negative side-lobes, and premultiplying does
+        # not cancel them: each channel rings by its own amount, set by how
+        # much that channel swings across the edge being resized. At a sharp
+        # point three edges meet in a handful of pixels (rim, lit core,
+        # transparency) and every channel swings hard, so at 512 -> 32 the R
+        # channel of this glass - always the largest swing, rim to core - can
+        # ring negative and clip to zero while B, which barely moves in the
+        # true image, keeps a small positive remainder. Divided back through
+        # alpha that remainder survives as a blue fleck on an otherwise warm
+        # rim: measured on Wait's own point, (0, 0, 22) at 44% alpha where the
+        # source either side is a warm near-black. Only visible at 32px, where
+        # the point is a couple of pixels wide and every channel is ringing at
+        # once; not worth guarding every resize against for that.
+        # _declutter_hue_outliers already exists for a stray hue the master
+        # invents (see there) and needs nothing new to catch this one too - a
+        # channel clipped by ringing is exactly a pixel whose chroma has
+        # swung away from the frame's own colour. Tuned stronger than the
+        # 512-anchor pass: that one runs on a frame where the worst it is
+        # guarding against is a thin hallucinated fringe several pixels wide,
+        # here the whole defect is one or two pixels at a silhouette point,
+        # already at the size it ships at - there is no second pass downstream
+        # to catch what this one leaves. Measured on Wait's own point at 32px,
+        # (0, 0, 22) at 44% alpha: the default threshold only pulls it to
+        # (1, 1, 16), still visibly blue; this one reaches (2, 2, 7).
+        got = _hue_outlier_weight(name, idx, rgb, 4.0, 15.0, 0.5, 1.0)
+        if got is not None:
+            lum, chroma, outlier = got
+            rgb = lum[..., None] + chroma * (1 - outlier)[..., None]
     return rgb
 
 
@@ -1453,6 +1728,60 @@ def _freeze_lines(rgb, name, idx, size):
                    + (ref - _smooth3(ref, _FREEZE_UNIT, size)), 0, 255)
 
 
+_LEVEL_CAP = 12.0        # levels the whole-glass author-level correction may
+                         # move a pixel, before smoothing - a cap, not a target,
+                         # so it corrects where the master is genuinely off
+                         # without inventing contrast finer than his own pixels
+_LEVEL_SMOOTH = 4.5      # logical units the correction is blurred by on the
+                         # way back up from his 32px grid - narrower and it
+                         # reads as a stencil of his pixels and shows up as
+                         # fold-curvature noise where the tracker follows it.
+                         # Measured on UpArrow, the worst-hit cursor: fold_gap
+                         # regressed to 2.25 at smooth=3.0 (from 1.69 with the
+                         # correction off) and is back to 1.69 at 4.5, and
+                         # fold_wander drops from 0.236 to 0.198. 6.0 buys
+                         # little more wander (0.176) for worse colour
+                         # (delta_e 3.62 -> 3.70) - diminishing returns past 4.5.
+
+
+def _resample_signed(a, size):
+    """Plain float Lanczos resize, no clamp - for a signed correction field,
+    not a colour channel."""
+    if a.shape[0] == size:
+        return a
+    return np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
+                       .resize((size, size), Image.LANCZOS), dtype=np.float64)
+
+
+def _match_author_level(rgb, name, idx, size):
+    """Restore the author's own light level across the whole glass, not just
+    at the points: his 32px frame minus ours downsampled to it, capped at
+    _LEVEL_CAP levels, smoothed by _LEVEL_SMOOTH logical units on the way back
+    up, frozen per cycle (one keyframe's correction for the whole sheen loop,
+    the same idiom as _freeze_lines) so a sheen-only animation cannot pick up
+    a per-frame wobble from it.
+
+    This is what straightens the lit sheet's boundary - DEAD_ENDS.md, "The
+    line that slides right": the master crowds it against the rim near the
+    point and only opens out further down, which is what item 3 in NEXT.md
+    reads as the dividing chord failing to bisect the cursor. `_tip_relight`
+    already owns the point itself; this stays out of its band by running
+    first and letting the point's own weighted-mean anchor absorb whatever
+    shift landed there."""
+    if name not in _WEDGE_TIPS:
+        return rgb
+    src = 0 if name in INTERP else idx
+    key = _key(name, src)
+    m32 = _mask(name, src, 32) / 255.0
+    ours32, _ = _resize(np.dstack([_master_rgb(name, src, size), _mask(name, src, size)]), 32)
+    orig32 = np.asarray(original(name, src), dtype=np.float64)[..., :3]
+    diff32 = np.clip(orig32 - ours32, -_LEVEL_CAP, _LEVEL_CAP) * m32[..., None]
+    diff = np.dstack([_resample_signed(diff32[..., c], size) for c in range(3)])
+    diff = _smooth3(diff, _LEVEL_SMOOTH, size)
+    m = _mask(name, src, size) / 255.0
+    return np.clip(rgb + diff * m[..., None], 0, 255)
+
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -1469,6 +1798,8 @@ def frame_image(name, idx, size):
     if name in _SYNTH_BEVEL:
         rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
                       0, 255)
+    rgb = _match_author_level(rgb, name, idx, size)
+    rgb = _tip_relight(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #

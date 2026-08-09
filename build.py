@@ -52,6 +52,8 @@ ANI_SIZES = [32, 48, 64, 96, 128, 256, 384]
 # frames holding a 128px image (verified empirically), 96 is the ceiling
 ANI_SIZES_WIN = [96, 64, 48, 32]
 ANI_SIZE = 128                          # reference size for timing
+PREVIEW_CELL = 192                      # build_preview's tile size
+ANIM_STRIP_BOX = 160                    # build_animations' combined-strip cell size
 
 # Built into dist/ but kept out of the shipped archive. No scheme slot has
 # pointed at Arrow_Down since the link-hover experiment was reverted, and
@@ -187,8 +189,16 @@ def _gen_frame(job):
 
 
 def _warm_frames():
+    # PREVIEW_CELL and ANIM_STRIP_BOX are not sizes anything else ships at, so
+    # they used to be missing here: build_preview and build_animations' strip
+    # each rendered its own frames cold, one core, after the warm-up had
+    # already finished - 72s and part of 267s that looked like encoding time
+    # but was actually this. Measured: adding them here costs the warm-up
+    # ~46s (two more sizes across the same frames) and gets back ~72s from
+    # build_preview alone falling to ~4s, before even parallelising the
+    # webp encode below.
     sizes = tuple(sorted(set(LINUX_SIZES) | set(ANI_SIZES) | set(ANI_SIZES_WIN)
-                         | {ANI_SIZE, 512}, reverse=True))
+                         | {ANI_SIZE, 512, PREVIEW_CELL, ANIM_STRIP_BOX}, reverse=True))
     jobs = [(name, 0) for name in H.STATIC]
     for name in ANIM:
         jobs += [(name, idx) for idx in range(len(H.BY_NAME[name]["frames"]))]
@@ -657,7 +667,7 @@ def build_preview():
     # 5 columns divides the 15 tiles evenly, and the labels are sized for what
     # a README actually shows: GitHub caps the content column near 880 px, so
     # a 1092 px sheet lands close to 1:1 instead of shrinking the text to mush.
-    cell, pad, cols, lab = 192, 22, 5, 34
+    cell, pad, cols, lab = PREVIEW_CELL, 22, 5, 34
     rows = (len(order) + cols - 1) // cols
     # the cursors are pale translucent glass, invisible on white - use a dark
     # sheet with a subtle checkerboard so every one of them reads. Render each
@@ -700,6 +710,25 @@ def _gif_frame(rgba, bg=(248, 248, 250)):
 _WEBP = dict(lossless=False, quality=90, method=6)
 
 
+def _encode_anim_job(job):
+    """One webp + one gif, from already-rendered frames. Runs in a worker
+    process: webp at method=6 is the whole cost of this phase - measured,
+    17-18s a cursor and 122s for the combined strip alone, one core each and
+    nothing else running while it does - and every file is independent of
+    every other, so six cores each doing one file beats one core doing six.
+    Frames travel as plain arrays because a worker process does not have this
+    module's own PIL.Image instances; same pixels, same encoder, same
+    settings, so the bytes this writes are what the sequential loop used to
+    write - verified with a byte-for-byte diff before this replaced it."""
+    webp_path, gif_path, arrays, duration, gif_duration = job
+    frames = [Image.fromarray(a, "RGBA") for a in arrays]
+    frames[0].save(webp_path, save_all=True, append_images=frames[1:],
+                   duration=duration, loop=0, **_WEBP)
+    gif = [_gif_frame(f) for f in frames]
+    gif[0].save(gif_path, save_all=True, append_images=gif[1:],
+               duration=gif_duration, loop=0, disposal=2, optimize=True)
+
+
 def build_animations():
     assets = os.path.join(HERE, "assets")
     os.makedirs(assets, exist_ok=True)
@@ -713,16 +742,15 @@ def build_animations():
         p = os.path.join(assets, fn)
         if os.path.exists(p): os.remove(p)
     disp = 128
+    jobs = []
     for name in ANIM:
         frames, rates = H.anim_frames(name, disp)
         # previews loop: cap the author's freeze-forever at 2 s
         durs = [min(_jiffies_ms(r), 2000) for r in rates]
         rgba = [_pad(f, disp + 32) for f in frames]
-        rgba[0].save(os.path.join(assets, name + ".webp"), save_all=True,
-                     append_images=rgba[1:], duration=durs, loop=0, **_WEBP)
-        gif = [_gif_frame(f) for f in rgba]
-        gif[0].save(os.path.join(assets, name + ".gif"), save_all=True,
-                    append_images=gif[1:], duration=durs, loop=0, disposal=2, optimize=True)
+        jobs.append((os.path.join(assets, name + ".webp"),
+                    os.path.join(assets, name + ".gif"),
+                    [np.asarray(f) for f in rgba], durs, durs))
     # Combined strip at 60 fps, and the heaviest asset in the repo: 27 frames of
     # the full width, re-fetched on every README view. 128 px cells made a 712 px
     # sheet that every README then stretched to its ~880 px content column, so it
@@ -734,7 +762,7 @@ def build_animations():
     # baked in here would be one language only, and a fill light enough to read
     # on GitHub's dark theme disappears on the light one. The READMEs name the
     # five in order in their own prose.
-    box, gap = 160, 14
+    box, gap = ANIM_STRIP_BOX, 14
     per = {n: H.anim_frames(n, box)[0] for n in ANIM}
     n = max(len(f) for f in per.values())
     W = len(ANIM) * (box + gap) + gap
@@ -745,11 +773,15 @@ def build_animations():
             fr = per[name][f % len(per[name])]
             canvas.alpha_composite(fr, (gap + j * (box + gap), gap))
         strip.append(canvas)
-    strip[0].save(os.path.join(assets, "animations.webp"), save_all=True,
-                  append_images=strip[1:], duration=17, loop=0, **_WEBP)
-    sg = [_gif_frame(f) for f in strip]
-    sg[0].save(os.path.join(assets, "animations.gif"), save_all=True,
-               append_images=sg[1:], duration=20, loop=0, disposal=2, optimize=True)
+    jobs.append((os.path.join(assets, "animations.webp"),
+                os.path.join(assets, "animations.gif"),
+                [np.asarray(f) for f in strip], 17, 20))
+    # The strip's webp runs at 17ms/frame and its gif at 20 - that mismatch
+    # was already in the sequential version (never made the two agree) and is
+    # kept exactly, not "fixed" here; _encode_anim_job takes the two durations
+    # separately so it cannot silently unify them.
+    with cf.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 1, len(jobs))) as ex:
+        list(ex.map(_encode_anim_job, jobs))
     return assets
 
 
