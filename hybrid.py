@@ -1516,6 +1516,30 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
 # step, as `diff` (the luma swing across it) and `edge` (how wide the
 # transition is, in logical units, away from the point).
 #
+# `edge` 0.5 -> 0.12: at 0.5 the transition spanned 0.92 logical units, which
+# at 512px is seven device pixels of smooth ramp, and a ramp that wide between
+# two large flat facets reads as shading rather than as a drawn line - the
+# fold "practically invisible on the grey cursor" (owner, 2026-08-XX). Below
+# ~0.125 the `width` floor takes over anyway (it holds the step to two device
+# pixels at whatever size is being drawn, for anti-aliasing), so 0.12 is
+# simply "let the floor decide" - one crisp line, the same couple of pixels
+# wide at every size. Measured: the transition now resolves 1.8 device pixels
+# from where the silhouette itself begins at 512, i.e. the fold converges on
+# the traced apex as tightly as antialiasing permits, which is the other half
+# of the same report ("внутренние кончики должны быть сведены с внешним").
+#
+# `diff` 58 -> 85 is a deliberate departure from the author, asked for
+# directly ("есть смысл немного дорисовать эту складку"). 58 is his own swing,
+# and reproducing it exactly is not enough here: the mean-anchoring sets our
+# band to the AI master's level, which sits some 25 levels below his in this
+# region (our facets read 185/127 against his 210/152), so the same step
+# lands on a darker, muddier pair of facets and carries less apparent
+# contrast against the bright glass around it. 85 restores the fold to
+# something that reads at a glance; 110 was tried and makes the lit facet
+# look heavy. The cost is small and was measured: delta_e 3.07 -> 3.20 on
+# Arrow, 3.25 -> 3.45 on Hand, 3.81 -> 3.88 on Arrow_Down, against a
+# tolerance of 5.0.
+#
 # The trough model this replaced (hw0/hw_grow/depth: a dark valley with
 # brighter glass on *both* sides) was a misreading of the same art, and it is
 # what the whole 2026-08-XX run of reports was chasing. A valley painted
@@ -1545,9 +1569,9 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
 # fold converges to a true line at the traced apex instead of arriving there
 # already at full width - the original two/three-tips defect.
 _TROUGH_PARAMS = {
-    "Arrow":       dict(diff=58.0, edge=0.5, taper=5.0),
-    "Hand":        dict(diff=58.0, edge=0.5, taper=5.0),
-    "Arrow_Down":  dict(diff=58.0, edge=0.5, taper=5.0),
+    "Arrow":       dict(diff=85.0, edge=0.12, taper=5.0),
+    "Hand":        dict(diff=85.0, edge=0.12, taper=5.0),
+    "Arrow_Down":  dict(diff=85.0, edge=0.12, taper=5.0),
     "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "AppStarting": dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
