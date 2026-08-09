@@ -1448,12 +1448,24 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
                              # before it fades back to the AI master
 
 # Per-cursor groove shape, measured off the author's own 32px art on
-# 2026-08-09 (see NEXT.md item 3): a flat-bottomed valley for Arrow/Hand, a
-# sharp V for Arrow_Down, and no fold at all this close to the point for
-# UpArrow/Wait/AppStarting (their fold only exists past t=0.8, near the tail
-# notch - outside this band, and off the straight chord besides; see item 3's
-# "not sent" note. `_fold_offsets` tracks the real departure there and would
-# be the way to reach it, not attempted here).
+# 2026-08-09 (see NEXT.md item 3): a sharp V for Arrow/Hand/Arrow_Down, and no
+# fold at all this close to the point for UpArrow/Wait/AppStarting (their fold
+# only exists past t=0.8, near the tail notch - outside this band, and off the
+# straight chord besides; see item 3's "not sent" note. `_fold_offsets` tracks
+# the real departure there and would be the way to reach it, not attempted
+# here).
+#
+# Arrow/Hand first shipped with a wide flat-bottomed valley (hw_grow=1.6) on
+# the theory that the author's own art is flat-dark right at the point. It
+# is, but at the default taper (1.2 units) that width is reached almost
+# immediately, and 1.6 logical units is most of the wedge's own cross-section
+# that close to the apex - the "valley" was the whole glass, wall to wall,
+# with no facet left outside it to read against. Owner report 2026-08-09: the
+# interior point vanished into a flat grey/pale patch, in both the still
+# taper and the sheen animation. Arrow_Down's narrow V (hw_grow=0.4) never had
+# this problem - its groove stays a fraction of the wedge's width - and
+# Arrow/Hand's own art (see the 32px crop this was measured from) is a match
+# for the same shape, so they now share Arrow_Down's parameters exactly.
 #
 # depth=0.0 for the last three is not "no correction" - it still replaces the
 # band with its own flattened, mean-anchored version (see _tip_relight), which
@@ -1502,8 +1514,8 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
 # (see the hw_grow history above) - just less visible there because their
 # groove was already meant to hold a fairly constant width.
 _TROUGH_PARAMS = {
-    "Arrow":       dict(hw0=0.0, hw_grow=1.6, depth=40.0),
-    "Hand":        dict(hw0=0.0, hw_grow=1.6, depth=40.0),
+    "Arrow":       dict(hw0=0.0, hw_grow=0.4, depth=55.0),
+    "Hand":        dict(hw0=0.0, hw_grow=0.4, depth=55.0),
     "Arrow_Down":  dict(hw0=0.0, hw_grow=0.4, depth=55.0),
     "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
     "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
