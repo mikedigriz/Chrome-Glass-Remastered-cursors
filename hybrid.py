@@ -836,6 +836,12 @@ _TONE_LO = 0.08          # mid-tone fraction of a master that kept no translucen
 _TONE_HI = 0.20          # ...and of one that did (measured: NO[8..10] 0.02..0.07,
                          # every other master 0.29..0.99, so nothing sits between)
 _TONE_FLOOR = 0.90       # how far a master without mid-tones is still trusted
+_THIN_LEAN = 1.0         # how far to hand a pixel back to the Lanczos when the
+                         # alpha master runs thinner than it there. 1.0 = fully,
+                         # at the limit where the master has deleted the pixel
+                         # outright; the term is proportional, so a master that
+                         # is only a little thin is only nudged. See
+                         # _up_alpha_native for the failure this catches.
 
 
 @functools.lru_cache(maxsize=None)
@@ -951,6 +957,28 @@ def _up_alpha_native(key):
     ai = ai * _ai_scale(ref, ai)
     t = _ai_tonality(key)
     w = (_BLEND_AI * (t + (1.0 - t) * _TONE_FLOOR)) * (1.0 - _ai_dropout(key, native))
+    # Lean back toward the Lanczos wherever the master runs thinner than it,
+    # in proportion to how much thinner. _ai_dropout already does this for a
+    # master that binarised the frame - a hard crack with content either side
+    # of it - but the same net fails a second, softer way that no test here
+    # caught: it keeps the mid-tones (so _ai_tonality scores 1.00 and the
+    # median lands on the author's) while thinning the faint tail everywhere
+    # at once. Measured inside the traced mask at the author's own 32px, NO[7]
+    # came out at 115.7 against his 141.9 and Handwriting[6] at 134.9 against
+    # 161.0 - a sixth of his glass gone, on the two frames that carried the
+    # worst colour error in the set.
+    #
+    # This is a shape correction and has to be: the level matching below is a
+    # scalar, and a scalar cannot put back a crushed tail. Trying to make it -
+    # by matching the author's mask-weighted mean instead of his median - does
+    # land the total light, and pays for it twice over: the middle of the glass
+    # goes 25% past his own median at 128 and the shipped 512 frame lands 10.3%
+    # over at build.check_metrics' 8% limit, because a 512 frame's visible zone
+    # is nearly all interior where his 32px one is mostly antialiased edge.
+    # Correcting the distribution here instead leaves the level policy below
+    # untouched and drops that drift to 1.8%.
+    thin = np.clip((ref - ai) / np.maximum(ref, 1.0), 0.0, 1.0)
+    w = w * (1.0 - _THIN_LEAN * thin)
     a = np.clip((1.0 - w) * ref + w * ai, 0, 255)
     # Level held to the author's own median, once, at native resolution: a
     # scalar applied before any resampling cannot bring per-size drift back
@@ -958,6 +986,16 @@ def _up_alpha_native(key):
     # on the thin frames (Handwriting's pencil) the mask trims a different share
     # of the map than of the plain Lanczos, and matching the two maps bare left
     # that frame 9% out while every other one landed.
+    #
+    # Matching a mean here instead of this median was tried, on the argument
+    # that a mean is what delta_e reads after compositing. It does improve
+    # delta_e, and it moves the level statistic this whole file is gated on:
+    # both stages then read at the author's own 32px, and the shipped 512px
+    # frame - whose visible zone is nearly all interior where his is mostly
+    # antialiased edge - came out 10.3% over his median on Handwriting[6],
+    # past build.check_metrics' 8%. The thinning it was aimed at is a shape
+    # defect and is fixed above, by `thin`, where it lives; the level policy
+    # is left alone.
     _, name, idx = key.split("__")
     o = _orig(key)[..., 3]
     target = np.median(o[o > _VIS * o.max()])
@@ -1188,8 +1226,23 @@ _SYNTH_BEVEL = {"Cross", "SizeAll", "SizeNS", "SizeWE", "SizeNESW", "SizeNWSE", 
 _BEVEL_REF = 512         # size the distance field is measured at, once
 _BEVEL_LIGHT = (-0.6, -0.8, 0.55)   # from the upper left, as the author lit them
 _BEVEL_SLOPE = 1.6       # how steeply the glass rises from its edge
-_BEVEL_DIFF = 52.0       # luma swing between the facets
-_BEVEL_RIM = 26.0        # how much the outline's own dark edge darkens
+_BEVEL_DIFF = 31.0       # luma swing between the facets
+_BEVEL_RIM = 15.5        # how much the outline's own dark edge darkens
+# Both were 52.0/26.0, i.e. 1.67x these, and at that strength the synthetic
+# lighting was painting contrast the author never drew. Measured at 128px
+# against his own frames: our luma span across these seven ran 174..202 levels
+# where his is 101..130, 8.8% of the visible cursor came out darker than his
+# own darkest pixel (SizeWE 22.0%, and his floor there is 125 while ours
+# reached 81), and 3.3% of it clipped flat at 255 where he tops out at 226.
+# Inventing darkness below his floor and destroying highlight detail at the
+# ceiling are both defects however deliberate the departure from his pixels
+# is elsewhere - see the _SYNTH_BEVEL note above for why there is a departure
+# at all. At 0.6x the clipping is gone (0.4%), the sub-floor share is down to
+# 3.6%, and delta_e over the seven falls 5.51 -> 4.46 mean. Lower still keeps
+# improving delta_e - it would, since the limit is his own blurred frame - so
+# the stopping point is not that metric but the two invariants above, which
+# are met by 0.6 and only marginally better below it; the facets have to stay
+# facets.
 _BEVEL_RIM_W = 0.9       # logical units that edge is wide
 
 
