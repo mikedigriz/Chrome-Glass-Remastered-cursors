@@ -17,7 +17,7 @@ for:
 Every build prints superiority metrics against the original frames and warns
 when anything drifts out of tolerance.
 """
-import os, io, struct, gzip, tarfile, hashlib, time, shutil, sys, zipfile
+import os, io, json, struct, gzip, tarfile, hashlib, time, shutil, sys, zipfile
 import concurrent.futures as cf
 import numpy as np
 from PIL import Image, ImageDraw
@@ -948,10 +948,66 @@ def main():
     print("Checks:")
     check_packages(win)
     warns = check_metrics()
-    print("  metrics: %s" % ("all within tolerance" if not warns else f"{warns} warning(s)"))
+    print("  alpha/sat: %s" % ("within tolerance" if not warns else f"{warns} warning(s)"))
     if warns and os.environ.get("ALLOW_METRIC_WARN") != "1":
         raise SystemExit(f"check_metrics: {warns} warning(s) out of tolerance "
                           "(set ALLOW_METRIC_WARN=1 to ship anyway)")
+    check_quality()
+
+
+_BASELINE = os.path.join(HERE, "metrics-baseline.json")
+_KNOWN = os.path.join(HERE, "metrics-known-issues.json")
+
+
+def check_quality():
+    """The real gate: tools/analyze.py's own thresholds and ratchet.
+
+    check_metrics above reads exactly two things - median alpha drift and
+    saturation. It printed "metrics: all within tolerance" while the frames it
+    passed carried twelve of fifty-eight over the delta_e tolerance (NO[7] at
+    8.96 against a limit of 5.0), a fold that no size could resolve on one
+    cursor, and seven cursors rendering a fifth of their area darker than
+    anything in the author's own art. None of that is in its scope, and the
+    tool that does measure it was never run by the build - so "the build is
+    green" meant almost nothing.
+
+    analyze.gate already separates a regression from a known miss: `bad` is
+    something that got worse than the committed baseline (or broke an absolute
+    threshold the baseline has no entry for), `debt` is a target not yet met
+    but no worse than it was. Only `bad` stops a build; `debt` is printed with
+    its count so the standing gap stays visible instead of silently growing.
+
+    Skipped if the baseline is missing rather than treated as a failure - a
+    fresh clone should build - and overridable the same way check_metrics is."""
+    sys.path.insert(0, os.path.join(HERE, "tools"))
+    import analyze as A
+    if not os.path.exists(_BASELINE):
+        print("  quality : skipped, no metrics-baseline.json")
+        return
+    with open(_BASELINE) as fh:
+        base = json.load(fh)
+    known = set()
+    if os.path.exists(_KNOWN):
+        with open(_KNOWN) as fh:
+            known = {" ".join(x.split()) for x in json.load(fh)["accepted"]}
+    rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
+    bad, debt = A.gate(rep, base)
+    # The ratchet compares numbers, so a complaint that carries no number -
+    # "this could not be measured at all" - lands in `bad` on every run,
+    # baseline or not, and would wedge the build shut for good. Those are
+    # listed in metrics-known-issues.json with a note on each, so the standing
+    # ones are visible and only a new one stops a build.
+    new = [b for b in bad if " ".join(b.split()) not in known]
+    seen = len(bad) - len(new)
+    print("  quality : %s%s%s" % ("clean" if not new else f"{len(new)} REGRESSION(S)",
+                                  f", {seen} accepted" if seen else "",
+                                  f", {len(debt)} known debt" if debt else ""))
+    if new:
+        for b in new:
+            print("    " + b)
+        if os.environ.get("ALLOW_METRIC_WARN") != "1":
+            raise SystemExit(f"check_quality: {len(new)} regression(s) vs "
+                             "metrics-baseline.json (set ALLOW_METRIC_WARN=1 to ship anyway)")
 
 
 if __name__ == "__main__":

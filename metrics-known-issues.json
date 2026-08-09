@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Complaints from tools/analyze.py's gate that build.check_quality prints but",
+    "does not stop the build for. Everything here is a real defect - the point is",
+    "that it is a defect somebody has already looked at and decided to carry, not",
+    "one that appeared today.",
+    "",
+    "Only complaints the ratchet cannot express belong here. A number that got",
+    "worse is caught by metrics-baseline.json and must not be silenced by adding a",
+    "line to this file; these are the ones that carry no number, so they are raised",
+    "unconditionally on every run and would otherwise wedge the build shut for good.",
+    "",
+    "Matching ignores runs of whitespace, so the alignment analyze.py pads with does",
+    "not have to be reproduced exactly. Delete a line the day the defect is fixed -",
+    "a stale entry here is a hole in the gate."
+  ],
+  "accepted": [
+    "AppStarting  jitter_unmeasured  fewer than ten rows of fold resolved across the cycle"
+  ],
+  "notes": {
+    "AppStarting jitter_unmeasured": "Pre-existing, present before the 2026-08-XX audit (see NEXT.md item 9). AppStarting's fold is fainter than the tracker's rejection threshold on most rows, so the cycle never resolves the ten it needs to report inner_jitter. It is the measurement that is missing, not the fold - fold_gap/wander/jag all read on this cursor. Fixing it means making the tracker see a fold this faint, not changing the render."
+  }
+}
