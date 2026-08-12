@@ -2240,7 +2240,7 @@ _LEGACY_TEMPER = 0.5    # how much of _match_author_level/_tip_relight/_sat_matc
 
 
 _TEMPER_K = {"level": 1.0,
-             "relight": 1.0,
+             "relight": _LEGACY_TEMPER,
              "sat": _LEGACY_TEMPER}
 # Per-stage strength, split out of the single `_LEGACY_TEMPER` knob so the three
 # stages can be isolated: they were tempered together because they were measured
@@ -2275,16 +2275,18 @@ if os.environ.get("CGR_TEMPER"):
         _TEMPER_K[_s.strip()] = float(_v)
 
 
-_TEMPER_PER_CURSOR = {("Arrow_Down", "relight"): 0.5}
-# One exception to the strengths above, and it is the only cursor that lost a
-# passing point by them. Judged against the author's own apex - the reference
-# NEXT.md item 15 settles on - full-strength `relight` takes Arrow_Down from
-# 0.091 to 0.069 against his 0.088, the one wedge that goes from clearing him to
-# missing him. Held at 0.5 it reads 0.0915 and clears, and it costs 0.3 of
-# `fold_jag` (84.1 -> 84.4, against 84.467 in the baseline) and nothing else on
-# any cursor. Seven gate regressions instead of eight. Arrow keeps full strength
-# and clears him anyway (0.119); Hand and UpArrow miss him either way and are
-# better off at full, which is why the exception is one entry and not a table.
+_TEMPER_PER_CURSOR = {}
+# Empty, and the entry that was here is worth keeping as a warning. `relight`
+# was put to full strength on the numbers - it read closer to the author's apex
+# on three wedges of four and took two other failures off the gate - and
+# Arrow_Down, the one cursor the numbers said lost by it, got a half-strength
+# exception here. Both were wrong. At full strength the stage dissolves the
+# inner tip: the lit inner facet that carries its own sharp point, and the dark
+# line separating it from the outer silhouette, wash into one flat field. The
+# owner saw it on sight; no metric in tools/analyze.py did. `tip_contrast` rose
+# (UpArrow 0.049 -> 0.074), and the obvious sharpness proxy - mean luma-gradient
+# magnitude in the apex disc - rose too (UpArrow 0.32 -> 0.43). Both were
+# measuring a flat wash as an improvement. See NEXT.md item 22.
 
 
 def _temper(before, after, name, stage):
