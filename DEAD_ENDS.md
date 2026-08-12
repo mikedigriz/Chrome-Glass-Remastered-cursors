@@ -370,3 +370,34 @@ darkness is the author's own (29 against his 29, 7.8% against his 7.4%).
 Left alone. Every downstream lever pays more in fold and engraving than it buys
 at the edge, which is the same conclusion this file already reached for the tip
 lean - a master defect does not have a downstream fix.
+
+## `density_%`: three anchors for the alpha level, all worse (2026-08-12)
+
+The standing block nobody had touched - sixteen cursors of sixteen over the 2.0
+tolerance, worst Cross 6.16%. Diagnosed, not fixed.
+
+**The drift is made by the correction, not by the alpha.** Measured over the
+metric's own region, `_up_alpha_raw` is already scale-consistent: Arrow 0.10%,
+SizeNESW 0.57%, IBeam 0.66%, Cross 1.47%, all inside tolerance. The scalar level
+correction in `_up_alpha` takes Arrow from 0.10% to 2.50%. It holds the
+mask-weighted mean, and the mask's soft edge carries a share of that mean that
+collapses with size - a large fraction at 32, a sliver at 384 - so holding the
+whole-mask mean forces the interior up at the small end.
+
+- **Anchoring on solid pixels (`m > 250`) instead of the whole mask.** Helps the
+  thick cursors (Arrow 2.50% -> 1.20%, Help 2.29% -> 1.55%) and hurts the thin
+  ones (SizeNESW 3.20% -> 5.36%, Cross 6.16% -> 7.03%), because at 32px the
+  threshold only picks a thin cursor's brightest core - the anchor region itself
+  becomes size-dependent. This is the trap `_density_points` documents, walked
+  into from the other side.
+- **Anchoring on a region fixed once in logical units at `_LEVEL_REF`.** Worse
+  everywhere: worst 6.16% -> 7.38%, every cursor up.
+- **Dropping the correction altogether.** Density worst 6.16% -> 3.91%, still
+  over tolerance, and `scale_drift` worst 0.068 -> 0.172, through its own 0.10
+  threshold. So the correction is still earning its keep on coverage even after
+  the `_deburr` fix removed the other source.
+
+The two metrics are one axis under a scalar: coverage is held by moving the
+level, and moving the level is what density measures. Per rule 7 in NEXT.md a
+scalar cannot fix a distribution - if this is worth another pass it needs a
+per-pixel correction in the manner of `_THIN_LEAN`, not another anchor.
