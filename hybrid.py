@@ -2082,7 +2082,20 @@ def _band_level(field, band, size):
 # price of not having them read as broken glass.
 _BROKEN_COLOUR = {("Handwriting", 3), ("Handwriting", 4), ("Handwriting", 5)}
 
-_FREEZE_UNIT = 0.6       # logical units below which detail counts as a line
+_FREEZE_UNIT = 2.0       # logical units below which detail counts as a line.
+                         # Was 0.6, which froze hairlines and let every coarser
+                         # interior structure move. Mapped the same way the note
+                         # below describes - per-frame deviation from the cycle
+                         # mean - the author's motion is a ribbon on the outline
+                         # with flares at the points and a dark, still interior;
+                         # ours carried a web of moving lines right across the
+                         # body. That web is the "inner elements wobbling" the
+                         # owner reported. At 2.0 it goes and the ribbon stays:
+                         # the rendered frames still read alive side by side,
+                         # and the sweep keeps 0.80 of the author's own on Hand
+                         # (10.91 against 13.60), 0.86 on Wait, 0.89 on
+                         # AppStarting, all over the 0.75 the gate asks. Hand's
+                         # `temporal_fold` comes down 1.022 -> 1.005 with it.
 _FREEZE_RIM = 1.5        # logical units in from the silhouette's own edge that
                          # stay live - the author's sheen is a thin bright band
                          # travelling along the rim and over the points (mapped
