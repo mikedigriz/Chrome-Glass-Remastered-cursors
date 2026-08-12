@@ -2240,7 +2240,7 @@ _LEGACY_TEMPER = 0.5    # how much of _match_author_level/_tip_relight/_sat_matc
 
 
 _TEMPER_K = {"level": 1.0,
-             "relight": _LEGACY_TEMPER,
+             "relight": 1.0,
              "sat": _LEGACY_TEMPER}
 # Per-stage strength, split out of the single `_LEGACY_TEMPER` knob so the three
 # stages can be isolated: they were tempered together because they were measured
@@ -2256,7 +2256,19 @@ _TEMPER_K = {"level": 1.0,
 # moves the two tail corners by 0.06 and 0.07 levels on average (2.0 at the
 # single worst pixel), against the 6.15 levels tempering all three bought back.
 # So this stage was paying the fold's bill for a corner it does not touch.
-# `relight` and `sat` stay tempered - they are the two that do reach the corner.
+#
+# `relight` went back to full for the same reason, isolated the same way: at 1.0
+# it costs 0.00 levels at both of Arrow's tail corners - the crop the owner's
+# report was about - while clearing UpArrow's `tip_contrast` outright and taking
+# Hand's `temporal_fold` 1.022 -> 1.005 and Wait's `fold_jag` off the list. Its
+# whole cost is at the apex (4.6 levels on average there, and Arrow_Down's point
+# contrast 0.090 -> 0.069), which is the axis already under review in NEXT.md
+# item 15. Ten gate regressions down to eight.
+#
+# `sat` is the one that earns its temper and keeps it. It costs nothing at any
+# of Arrow's corners - `_sat_match` only runs on saturated cursors, so it never
+# reaches that render at all - but at full strength it puts two fold failures
+# back, Arrow_Down `fold_jag` 84.4 -> 89.1 and Wait 44.4 -> 44.8.
 if os.environ.get("CGR_TEMPER"):
     for _part in os.environ["CGR_TEMPER"].split(","):
         _s, _, _v = _part.partition(":")
