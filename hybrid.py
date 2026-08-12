@@ -1851,6 +1851,43 @@ _EDGE_SHADOW_DIP_CAP = 3.0 # luma levels a pixel may sit below the brightest
                            # 50-150 levels deep.
 
 
+_FOLD_KEEPOUT = 0.8      # logical units either side of the chord the edge-shadow
+_FOLD_KEEPOUT_RAMP = 0.3 # filter is held off, and the units it ramps back in over
+
+
+def _fold_keepout(name, idx, size):
+    """Weight that holds `_edge_shadow_declutter` off the fold itself.
+
+    The band it clears runs 0.7..1.9 units in from the silhouette, and where the
+    fold comes that close to the edge - the tail cutout on Wait, the notch on
+    Arrow - the max filter lifts the crease along with the master's spurious
+    line, because a max filter cannot tell one dark thing from another. The
+    fold's own dip is what every fold metric reads, so this showed up as the
+    line breaking (Wait `fold_gap` 0.875 -> 1.375) and its cross-section
+    flattening (Arrow `fold_luma_step` 1.083 -> 1.333, Arrow_Down 9.650 ->
+    9.850, AppStarting `fold_wander` 0.207 -> 0.210) - four gate regressions,
+    all of them exactly the pre-band readings once the crease is held out.
+
+    The spurious line the stage exists for runs parallel to the outline, not
+    along the chord, so keeping a strip around the chord out of the filter costs
+    it almost nothing: measured at 512 on grey, the share of the cursor below 70
+    luma moves 0.50% -> 0.56% on Arrow, 7.79% -> 7.82% on Wait, and not at all on
+    Hand. Cursors with no chord get a weight of one and are untouched."""
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return 1.0
+    (x0, y0), (x1, y1) = ch[0], ch[1]
+    L = size / V.LOGICAL
+    dx, dy = (x1 - x0) * L, (y1 - y0) * L
+    n = float(np.hypot(dx, dy))
+    if n < 1e-6:
+        return 1.0
+    ux, uy = dx / n, dy / n
+    ys, xs = np.mgrid[0:size, 0:size]
+    s = ((xs - x0 * L) * (-uy) + (ys - y0 * L) * ux) / L      # logical units
+    return np.clip((np.abs(s) - _FOLD_KEEPOUT) / _FOLD_KEEPOUT_RAMP, 0.0, 1.0)
+
+
 def _edge_shadow_declutter(rgb, name, idx, size):
     """Cap the AI master's second, spurious crease line that runs parallel to
     the outer silhouette edge on every wedge-shaped cursor.
@@ -1882,7 +1919,7 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     band = np.clip(np.minimum(d - _EDGE_SHADOW_D_LO,
                               _EDGE_SHADOW_D_HI - d) / 0.2, 0.0, 1.0)
     mask = _mask(name, idx, size) / 255.0
-    w = band * mask
+    w = band * mask * _fold_keepout(name, idx, size)
     if w.max() < 1e-6:
         return rgb
     r = max(1, int(round(_EDGE_SHADOW_REACH * size / V.LOGICAL)))
