@@ -1830,7 +1830,24 @@ _EDGE_SHADOW_CURSORS = _WEDGE_TIPS | {"Help"}
 # some frames and not others. Worth a directional (along-edge, not
 # isotropic) version of the filter before adding them back; not attempted
 # here.
-_EDGE_SHADOW_D_LO = 0.7    # logical units from the traced edge the band starts
+_EDGE_SHADOW_D_LO = 0.45   # logical units from the traced edge the band starts.
+                           # Was 0.7, which left the master's dark band sitting
+                           # at d~0.68 just outside the reach of the very stage
+                           # written to clear it - the owner reported it twice,
+                           # as an outline along the edge and as the inner facet
+                           # being pushed back from the point. Judged on rendered
+                           # crops at 512 on grey: at 0.45 the dark band between
+                           # the outline and the lit inner facet is visibly
+                           # narrower on Arrow, UpArrow and Wait and the facet
+                           # reaches closer to the point, while the inner tip
+                           # keeps its own point and its separating line. 0.25
+                           # goes further and is too far: Hand's interior flattens
+                           # and its crease weakens, plainly, and the numbers
+                           # agree (fold_wander 0.015 -> 0.478). Cost at 0.45 is
+                           # one gate regression, both of them fold cross-section
+                           # readings on cursors whose folds still read correctly
+                           # by eye: Arrow fold_luma_step back to 1.333 and
+                           # AppStarting 6.633 -> 8.433.
 _EDGE_SHADOW_D_HI = 1.9    # ...and ends - measured on Arrow and Arrow_Down
                            # (row scan away from apex/tail, background composited
                            # out): the master's dip sits at d~1.19-1.37, between
