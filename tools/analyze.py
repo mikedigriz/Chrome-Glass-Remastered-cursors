@@ -340,6 +340,39 @@ def _prominence(seg, k):
     return float(min(left, right) - seg[k])
 
 
+_OVERLAY_SAT = 0.35        # absolute saturation floor an overlay has to clear
+_OVERLAY_RATIO = 8.0       # ...and how many times the glass's own saturation
+
+
+def _without_overlay(a, al, lum):
+    """Luma with a coloured overlay's pixels put out of reach of the argmin.
+
+    NO is an arrow with a red forbidden sign drawn over it, and the sign is dark
+    in luma, so on the frames where it has grown over the fold the darkest pixel
+    in the search window is the sign's edge, not the crease. Measured on frame 3,
+    the last one whose fold `CURSOR_TOPOLOGY` declares: saturation along the
+    whole track reads 1.00 against 0.01 for the glass beside it, and the numbers
+    it produced - jag 193, luma_step 68 - are that edge, not a fold.
+
+    The test is relative so it cannot touch the cursors that are saturated all
+    over. Wait, UpArrow and AppStarting read a median saturation of 0.40..0.56
+    inside the silhouette, so their threshold lands above 1.0 and nothing is
+    excluded; NO's fold frames read 0.006..0.015, so theirs is the 0.35 floor and
+    only the sign clears it. Every grey cursor has no pixel over the floor at
+    all."""
+    rgb = a[..., :3]
+    mx, mn = rgb.max(-1), rgb.min(-1)
+    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
+    inside = al > 0.5
+    if inside.sum() < 50:
+        return lum
+    thr = max(_OVERLAY_SAT, _OVERLAY_RATIO * float(np.median(sat[inside])))
+    overlay = sat > thr
+    if not overlay.any():
+        return lum
+    return np.where(overlay, np.inf, lum)
+
+
 def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
     """Column of the fold (darkest interior pixel) per row.
 
@@ -356,6 +389,7 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
     change to the reading and not a window that has quietly moved."""
     a = get(name, idx, size)
     al, lum = _interior(a)
+    lum = _without_overlay(a, al, lum)
     track = np.full(size, np.nan)
     # The rim insets and the width a row must have are logical, not pixel:
     # written as the constants 6, 5 and 16 they were a quarter of the cursor at
@@ -379,6 +413,10 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
             continue
         seg = lum[y, lo:hi]
         k = int(np.argmin(seg))
+        # A window that is all overlay has no glass left to read a fold in, and
+        # an infinity anywhere in `seg` would defeat both depth tests below.
+        if not np.isfinite(seg[k]) or not np.isfinite(seg).all():
+            continue
         # A row with no fold in it has no business being measured: where the
         # glass is flat the minimum lands on whichever end of the search window
         # is darker and flips between the two as the sweep passes, which reads
