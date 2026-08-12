@@ -12,8 +12,6 @@
 
 Windows · Linux · macOS · 17 cursors · free
 
-#TODO: fix cursor vobling, join the ends 
-
 <img src="preview.png" alt="The set as still images: Arrow, Help, IBeam, Cross, SizeAll, the four resize arrows, UpArrow, Pin, Person, NO, Wait and AppStarting">
 
 </div>

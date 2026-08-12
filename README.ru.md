@@ -12,8 +12,6 @@
 
 Windows · Linux · macOS · 17 курсоров · бесплатно
 
-#TODO: fix cursor vobling, join the ends 
-
 <img src="preview.png" alt="Набор в статике: Arrow, Help, IBeam, Cross, SizeAll, четыре стрелки resize, UpArrow, Pin, Person, NO, Wait и AppStarting">
 
 </div>
