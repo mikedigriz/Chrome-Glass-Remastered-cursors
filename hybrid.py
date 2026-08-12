@@ -1424,7 +1424,17 @@ def _deburr(alpha, size):
     A grey closing at a fraction of a logical unit fills a spike that thin and
     is too small to touch anything drawn on purpose: the hole is twenty times
     wider, Help's engraved groove ten."""
-    r = max(1, int(round(_DEBURR_LOGICAL * size / V.LOGICAL)))
+    # No floor at one pixel. A pixel is not a fixed amount of cursor: at 32px it
+    # is a whole logical unit, seven times the burr this is allowed to close, and
+    # the closing fattened the silhouette by that much - the single largest
+    # source of `scale_drift` in the set. Measured with the floor in place, the
+    # mask times the alpha master drifts 0.016..0.075 across the ladder and
+    # `_deburr` takes that to 0.141 (Arrow) and 0.545 (Help); without it, 0.011
+    # and 0.037. Below ~114px the radius rounds to zero, and a burr thinner than
+    # one device pixel is not there to close.
+    r = int(round(_DEBURR_LOGICAL * size / V.LOGICAL))
+    if r < 1:
+        return alpha
     k = 2 * r + 1
     im = Image.fromarray(np.clip(alpha, 0, 255).astype(np.uint8), "L")
     closed = im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k))
@@ -2192,14 +2202,39 @@ _LEGACY_TEMPER = 0.5    # how much of _match_author_level/_tip_relight/_sat_matc
                          # own docstring), reintroduced.
 
 
-def _temper(before, after, name, k=_LEGACY_TEMPER):
-    """Blend a correction's output back toward its input by `_LEGACY_TEMPER`,
+_TEMPER_K = {"level": 1.0,
+             "relight": _LEGACY_TEMPER,
+             "sat": _LEGACY_TEMPER}
+# Per-stage strength, split out of the single `_LEGACY_TEMPER` knob so the three
+# stages can be isolated: they were tempered together because they were measured
+# together, not because they cost the same. `CGR_TEMPER=level:1,relight:0.5`
+# overrides for a measurement run without editing the file.
+#
+# `level` is back at full strength, isolated 2026-08-12. `_match_author_level`
+# is what straightens the fold, and halving it was the whole of the fold debt
+# the temper commit added: at 1.0 `fold_jag` leaves Arrow/Hand/Arrow_Down
+# outright and AppStarting's `fold_luma_step` drops 9.03 -> 6.63, sixteen wedge
+# failures down to fourteen. It was never what softened the tail corner the
+# owner reported - measured on the same crop the isolation used, going 0.5 -> 1.0
+# moves the two tail corners by 0.06 and 0.07 levels on average (2.0 at the
+# single worst pixel), against the 6.15 levels tempering all three bought back.
+# So this stage was paying the fold's bill for a corner it does not touch.
+# `relight` and `sat` stay tempered - they are the two that do reach the corner.
+if os.environ.get("CGR_TEMPER"):
+    for _part in os.environ["CGR_TEMPER"].split(","):
+        _s, _, _v = _part.partition(":")
+        _TEMPER_K[_s.strip()] = float(_v)
+
+
+def _temper(before, after, name, stage):
+    """Blend a correction's output back toward its input by `_TEMPER_K[stage]`,
     but only for the six wedge tips the isolation above was measured against -
     every other cursor (NO, Help, SizeAll, ...) keeps the full correction, it
     was never part of the `58a28b72` comparison and regressed when included.
     """
     if name not in _WEDGE_TIPS:
         return after
+    k = _TEMPER_K[stage]
     return before * (1.0 - k) + after * k
 
 
@@ -2273,8 +2308,8 @@ def frame_image(name, idx, size):
     if name in _SYNTH_BEVEL:
         rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
                       0, 255)
-    rgb = _temper(rgb, _match_author_level(rgb, name, idx, size), name)
-    rgb = _temper(rgb, _tip_relight(rgb, name, idx, size), name)
+    rgb = _temper(rgb, _match_author_level(rgb, name, idx, size), name, "level")
+    rgb = _temper(rgb, _tip_relight(rgb, name, idx, size), name, "relight")
     rgb = _edge_shadow_declutter(rgb, name, idx, size)
     rgb = _notch_declutter(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
@@ -2322,7 +2357,7 @@ def frame_image(name, idx, size):
     # floor) is left alone - scaling its near-zero chroma only invents colour.
     orig_sat = _sat_anchor(name, idx)
     if orig_sat >= 0.035:
-        rgb = _temper(rgb, _sat_match(rgb, alpha, orig_sat * 1.05), name)
+        rgb = _temper(rgb, _sat_match(rgb, alpha, orig_sat * 1.05), name, "sat")
     return _hide_ghost(_compose(rgb, alpha), name, size)
 
 

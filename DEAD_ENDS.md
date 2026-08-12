@@ -289,3 +289,84 @@ anywhere else.
   the upscale sculpts the apex - and correcting a master defect by painting over
   it downstream has now failed enough times to count as settled. If it is worth
   another attempt, it is at the upscale, not in hybrid.py.
+
+## Tempering `_match_author_level`, and `_LEVEL_CAP` as a tip knob (2026-08-12)
+
+- **Tempering `_match_author_level` along with the other two.** The three stages
+  were halved together because they were isolated together, not because they
+  cost the same. Measured separately: at 1.0 this one takes the wedges from
+  sixteen gate failures to fourteen (`fold_jag` leaves Arrow/Hand/Arrow_Down,
+  AppStarting's `fold_luma_step` 9.03 -> 6.63), and it moves the tail corner the
+  owner reported by 0.06 and 0.07 levels on average - against the 6.15 levels
+  tempering all three bought back there. It was paying the fold's bill for a
+  corner it does not touch. Reverted to full strength; `relight` and `sat` stay
+  at 0.5, they are the two that actually reach the corner.
+
+- **`_LEVEL_CAP` as a way to reach the apex.** The apex sits 30-odd levels
+  brighter than the author's and the cap is 12, so raising it looks like the
+  obvious lever. It is not: the correction is blurred over `_LEVEL_SMOOTH` (4.5
+  logical units) and the measured disc is 1.5, so what lands at the apex is its
+  neighbours, not the apex. 12 -> 24 -> 36 pulls UpArrow up (0.049, 0.054,
+  0.057) and pushes Hand down the whole way (0.062, 0.053, 0.045), and at 36 it
+  opens a new `tip_contrast` failure on Wait. Whole-glass corrections cannot
+  address a point defect. (It is a real point defect all the same - see the
+  correction below.)
+
+- **`_tip_relight`'s lateral confinement, its `taper_frac`, and
+  `_edge_shadow_declutter` as suspects for the apex contrast.** All three were
+  introduced in the same commit as the temper and all three were checked by
+  isolation. Lateral reach to infinity and `_edge_shadow_declutter` off each
+  move `tip_contrast` by less than 0.005 on every wedge; `taper` 5.0 -> 0 gets
+  Hand from 0.062 to 0.086 and UpArrow not at all. Swapping the whole of the old
+  `_tip_relight` back in reaches 0.120 and 0.099. Resolved: on Hand it is
+  `taper_frac` and the `_band_level` anchor together (0.062 -> 0.086 -> 0.121
+  reverting them one line at a time); on UpArrow it is none of the three - it is
+  the trough -> step parameter swap that came with the crack fix, and raising
+  the step's `diff` from 18 to 55 does not move it at all. Both causes are the
+  price of another accepted fix, so there is no free recovery here.
+
+  Method note: reverting `taper_frac` by setting `taper` near zero measures the
+  wrong thing - `taper_frac` also scales `width` and `hw`, so the constant
+  changes three places at once. Patch the one line.
+
+- **Reading the apex `tip_contrast` failures as a stale ratchet.** They are not.
+  `hybrid.py` from `02363b2` reproduces the recorded baseline exactly
+  (0.215 / 0.165 / 0.220 / 0.061), so the drop is a real regression in
+  `5a5f363`, and restoring it is not the rejected "match the author's dark
+  apex" direction - the old values sit well above his. See NEXT.md item 15.
+
+## The dark outline along the edge: three levers, all measured, all worse (2026-08-12)
+
+Owner report: a dark line like an outline, a couple of millimetres thick, most
+visible at large sizes. Real and localised - it sits 0.68 logical units in from
+the traced edge, 0.2..0.8 units wide, down to 22..29 luma composited on grey.
+
+**It is in the master, not in `hybrid.py`.** `src/ai512/cur__Arrow__0.png` reads
+a darkest pixel of 1 with 0.42% of the cursor below 70 luma, before any stage in
+this file runs; the shipped 512 render reads 22 and 0.50%. The pipeline lightens
+it slightly. It shows only at large sizes because downsampling to 32 averages the
+halo away - at 32 we read a darkest pixel of 100 against the author's 106, and
+neither has anything below 70. Wait is the exception and must be left alone: its
+darkness is the author's own (29 against his 29, 7.8% against his 7.4%).
+
+- **`_EDGE_SHADOW_D_LO` 0.7 -> 0.2.** Removes the line nearly completely (Arrow
+  342 dark pixels -> 0, Hand 102 -> 0). Gate 14 -> 16..17: Help picks up a
+  `tip_contrast` failure of its own (0.159 -> 0.125) and its engraved groove
+  opens (`fold_gap` 0.125 -> 0.375), AppStarting's `fold_luma_step` doubles,
+  Hand's `fold_jag` 45 -> 69. The 0.7 floor is what keeps the max filter off the
+  edge; the line sitting at 0.68 is a two-hundredth of a unit outside the band
+  written to remove it, and closing that gap costs the band's whole purpose.
+- **The master unsharp's `dark` 0.45 -> 0.** Shaves about a third (Arrow darkest
+  22 -> 31, share 0.50% -> 0.32%) and nothing at 0.25. Gate 14 -> **28**: Help's
+  `fold_gap` 0.125 -> 4.750, Handwriting's `fold_luma_step` 5.3 -> 18.2, Wait
+  gains `jitter_unmeasured`. The darkening half of the overshoot is what holds
+  every fold line and engraved detail together - attenuating it dissolves the
+  drawing. This is the same knob the `_master_raw` call already sets to 0.45 on
+  purpose; 0.45 is not a leftover, it is the setting.
+- **Regenerating the upscale.** Already settled above (2026-08-08): both weight
+  files give the same structure, the artefact enters at the 32-to-128 stage, and
+  redoing that moves `traced.json` and every silhouette with it.
+
+Left alone. Every downstream lever pays more in fold and engraving than it buys
+at the edge, which is the same conclusion this file already reached for the tip
+lean - a master defect does not have a downstream fix.
