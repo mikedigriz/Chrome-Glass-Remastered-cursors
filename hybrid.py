@@ -2275,6 +2275,18 @@ if os.environ.get("CGR_TEMPER"):
         _TEMPER_K[_s.strip()] = float(_v)
 
 
+_TEMPER_PER_CURSOR = {("Arrow_Down", "relight"): 0.5}
+# One exception to the strengths above, and it is the only cursor that lost a
+# passing point by them. Judged against the author's own apex - the reference
+# NEXT.md item 15 settles on - full-strength `relight` takes Arrow_Down from
+# 0.091 to 0.069 against his 0.088, the one wedge that goes from clearing him to
+# missing him. Held at 0.5 it reads 0.0915 and clears, and it costs 0.3 of
+# `fold_jag` (84.1 -> 84.4, against 84.467 in the baseline) and nothing else on
+# any cursor. Seven gate regressions instead of eight. Arrow keeps full strength
+# and clears him anyway (0.119); Hand and UpArrow miss him either way and are
+# better off at full, which is why the exception is one entry and not a table.
+
+
 def _temper(before, after, name, stage):
     """Blend a correction's output back toward its input by `_TEMPER_K[stage]`,
     but only for the six wedge tips the isolation above was measured against -
@@ -2283,7 +2295,7 @@ def _temper(before, after, name, stage):
     """
     if name not in _WEDGE_TIPS:
         return after
-    k = _TEMPER_K[stage]
+    k = _TEMPER_PER_CURSOR.get((name, stage), _TEMPER_K[stage])
     return before * (1.0 - k) + after * k
 
 
