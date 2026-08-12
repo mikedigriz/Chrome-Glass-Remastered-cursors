@@ -1572,9 +1572,46 @@ _TROUGH_PARAMS = {
     "Arrow":       dict(diff=85.0, edge=0.12, taper=5.0),
     "Hand":        dict(diff=85.0, edge=0.12, taper=5.0),
     "Arrow_Down":  dict(diff=85.0, edge=0.12, taper=5.0),
-    "UpArrow":     dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
-    "Wait":        dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
-    "AppStarting": dict(hw0=0.0, hw_grow=1.2, depth=32.0, taper=5.0, along_flat=0.05, along=0.35),
+    # Switched UpArrow/Wait/AppStarting from the trough shape to the same
+    # step as Arrow/Hand/Arrow_Down (2026-08-XX), reversing the "not a
+    # misreading" call made 2026-08-09 (see the long comment above this
+    # dict). That call was about fidelity to the author's own 32px art -
+    # correct on its own terms, his drawing really has no crease here - but
+    # the trough this fidelity produced reads as a shadowy dent, not a fold
+    # in glass: a valley with lit glass on *both* sides has no bright facet
+    # to carry a highlight, so the point looks punched-in rather than
+    # faceted. Owner's report, 2026-08-XX ("кончик стал просто теневым
+    # внутренним провалом без текстуры стекла"), on the same render this
+    # comment used to defend. Direct side-by-side (Wait as trough vs Wait
+    # with Hand's exact step params) settles it visually: the step reads as
+    # a clean fold with a real highlight streak, the trough as a dent,
+    # regardless of which one matches his reference more closely. Owner
+    # priority (`NEXT.md`, this session): look over literal fidelity to a
+    # 32px source that was never meant to be read as an accuracy target for
+    # shading a feature sixteen times larger than the pixels it was drawn
+    # with.
+    #
+    # This also resolves the delamination crack (item 2 this session) as a
+    # side effect for free: the step model replaces its band as a flat
+    # two-facet field with no per-pixel structure of its own to split into
+    # lobes, where the trough's shade outside its own groove fell back to
+    # `_band_level`'s blurred field - close to the master's texture, close
+    # enough to still carry a faint trace of it.
+    # diff 85 -> 18: Arrow/Hand/Arrow_Down's 85 answers a direct request to
+    # draw up a crease that is faintly but genuinely there in the author's
+    # 32px art (see the `diff` history above). UpArrow/Wait/AppStarting have
+    # no crease there at all - not faint, absent (measured cross-sections,
+    # `_TROUGH_PARAMS` comment above) - so 85 was inventing contrast with
+    # nothing behind it, and it showed: compared directly against
+    # `f1769ec` (pre-`_tip_relight`, raw AI master, no fold drawn), these
+    # three apexes are close to a flat wash of light, not two facets - at
+    # diff=85 the shaded half read as a shadow the reference never had.
+    # 18 keeps just enough split to converge as a line rather than a flat
+    # disc (still needed for the point itself to read as faceted glass, not
+    # a blob) while staying visibly closer to the reference's brightness.
+    "UpArrow":     dict(diff=18.0, edge=0.12, taper=5.0),
+    "Wait":        dict(diff=18.0, edge=0.12, taper=5.0),
+    "AppStarting": dict(diff=18.0, edge=0.12, taper=5.0),
 }
 
 
@@ -1664,7 +1701,24 @@ def _tip_relight(rgb, name, idx, size):
         ts_, offs_, _ = fo
         s = s - np.interp(t, ts_, offs_, left=0.0, right=0.0) * (1.0 - along)
 
-    band = along * (_mask(name, idx, size) / 255.0)
+    # Lateral reach: `_TIP_RELIGHT_LATERAL`/`_FALLOFF` were named and
+    # documented as this limiter above but never wired in - `band` used the
+    # whole mask, so at any t past the very apex, where the wedge is wider
+    # than the fold band, the replacement covered the outer rim too, not
+    # just the crease. That rim already carries its own highlight from the
+    # AI master (or, for Arrow/Hand's `diff`-step shape, is meant to keep
+    # it) - overwriting it with the flat analytic facet is what the owner
+    # saw as an extra strip running the length of the edge, absent from the
+    # pre-`_tip_relight` reference (`f1769ec`) and present since. Wired in
+    # now: a lateral plateau to `_TIP_RELIGHT_LATERAL`, ramp to zero over
+    # `_FALLOFF`. Measured on Wait: the wedge is 3.45 units wide at
+    # `t=0.14` (the widest the crack fix reaches at full strength) against
+    # a 3.8-unit total lateral reach, so this does not reopen the crack;
+    # by `t=0.30` the wedge is 6.5 units wide and the outer half on each
+    # side falls outside the reach, back to the master's own rim.
+    lateral = np.clip((_TIP_RELIGHT_LATERAL + _TIP_RELIGHT_LATERAL_FALLOFF
+                       - np.abs(s)) / _TIP_RELIGHT_LATERAL_FALLOFF, 0.0, 1.0)
+    band = along * lateral * (_mask(name, idx, size) / 255.0)
     if band.max() < 1e-6:
         return rgb
 
@@ -1691,7 +1745,16 @@ def _tip_relight(rgb, name, idx, size):
         # device pixels: sub-pixel-wide it is a knife edge on the sampling
         # grid and reads as speckle rather than as a drawn line.
         width = np.maximum(p["edge"] * taper_frac, 2.0 / L)
-        shade = -0.5 * p["diff"] * np.clip(s / width, -1.0, 1.0)
+        # `width` closes to its device-pixel floor at the apex, but the wedge
+        # itself is already wider than that floor almost immediately off the
+        # point (0.6 logical units of half-width at t=0.05), so without also
+        # tapering `diff` the two facets hit full +-42.5 contrast the instant
+        # the transition narrows - a hard 50/50 split with no point left to
+        # read as lit. Owner report: apex reads as shadowed against the
+        # `f1769ec` reference, which has no such stage at all. Ramping diff
+        # by the same `taper_frac` lets the split itself, not just its
+        # transition width, converge smoothly to the anchor level at t=0.
+        shade = -0.5 * p["diff"] * taper_frac * np.clip(s / width, -1.0, 1.0)
     else:
         # A trough - see _TROUGH_PARAMS for why the three sheen cursors keep
         # this shape (they carry no fold here at all; a shallow one degenerates
@@ -1701,7 +1764,25 @@ def _tip_relight(rgb, name, idx, size):
         d = np.abs(s - _TIP_RELIGHT_BIAS)
         shade = -p["depth"] * np.clip(1.0 - (d - hw) / width, 0.0, 1.0)
     band_sum = band.sum()
-    shade = shade - float((shade * band).sum() / band_sum) + float((lum * band).sum() / band_sum)
+    # Anchored to the band's own level, but to that level as a slowly varying
+    # field rather than as one number over the whole band. A scalar anchor
+    # makes the patch a pair of flat facets whose only per-frame freedom is
+    # their common brightness, and on a sheen animation that is what killed the
+    # point: measured on the cycle, the apex disc swung 4.6 luma levels against
+    # the author's 13.8 on Hand, while the two tails - which this stage never
+    # touches - swung more than his. Smoothing over _TIP_ANCHOR_SMOOTH keeps
+    # every frequency the artefact lived at replaced (the invented second line
+    # is a hairline; see the chroma note below) and lets the sweep through.
+    #
+    # Only on the three that animate. A still cursor has no sweep to let
+    # through and pays for the field anyway: on Arrow the local level near the
+    # point is lower than the band's, so the patch lands darker and the point's
+    # contrast against a background falls (0.215 -> 0.157 measured, and 3.5 is
+    # the best of the widths tried - 5.0 gave 0.132). There is nothing to buy
+    # with that on a frame that never changes.
+    lvl = _band_level(lum, band, size) if name in INTERP else \
+        float((lum * band).sum() / band_sum)
+    shade = shade - float((shade * band).sum() / band_sum) + lvl
     new_lum = lum * (1.0 - band) + shade * band
 
     # Chroma flattened the same way luma is, not carried over raw: the master
@@ -1718,9 +1799,209 @@ def _tip_relight(rgb, name, idx, size):
     # same as luma, so the seam still sits at the band's general colour.
     chroma = rgb - lum[..., None]
     band_w = band[..., None]
-    mean_chroma = (chroma * band_w).sum((0, 1)) / max(float(band_w.sum()), 1e-6)
-    new_chroma = chroma * (1.0 - band_w) + mean_chroma * band_w
+    if name in INTERP:
+        lvl_chroma = np.dstack([_band_level(chroma[..., c], band, size)
+                                for c in range(3)])
+    else:
+        lvl_chroma = (chroma * band_w).sum((0, 1)) / max(float(band_w.sum()), 1e-6)
+    new_chroma = chroma * (1.0 - band_w) + lvl_chroma * band_w
     return np.clip(new_lum[..., None] + new_chroma, 0, 255)
+
+
+_EDGE_SHADOW_CURSORS = _WEDGE_TIPS | {"Help"}
+# Handwriting and NO carry the same visible double-edge line but were dropped
+# from this set after the first gate run: Handwriting's morph_iou_min fell
+# below its ratchet (0.437 -> 0.385, a real frame-to-frame shape wobble, not
+# a style trade-off) and NO's fold_luma_step nearly doubled (68 -> 90). Both
+# genuinely redraw their silhouette frame to frame (see `morph_health`),
+# unlike the six wedge tips and Help which hold one traced shape - the
+# closing filter's small dilation/erosion right at the alpha edge is enough
+# to shift where `_hide_ghost` and the fold tracker read the boundary on
+# some frames and not others. Worth a directional (along-edge, not
+# isotropic) version of the filter before adding them back; not attempted
+# here.
+_EDGE_SHADOW_D_LO = 0.7    # logical units from the traced edge the band starts
+_EDGE_SHADOW_D_HI = 1.9    # ...and ends - measured on Arrow and Arrow_Down
+                           # (row scan away from apex/tail, background composited
+                           # out): the master's dip sits at d~1.19-1.37, between
+                           # the chrome rim highlight (peaks ~d 1.0-1.15) and the
+                           # facet proper (flat ~153-160 past d 1.6). The band is
+                           # measured wide enough to hold the dip on every one of
+                           # the nine affected cursors without needing the exact
+                           # centre fitted per cursor.
+_EDGE_SHADOW_REACH = 0.35  # logical units the max-filter looks sideways for a
+                           # brighter neighbour - wide enough to clear the
+                           # dip's own ~0.2-unit width from either side.
+_EDGE_SHADOW_DIP_CAP = 3.0 # luma levels a pixel may sit below the brightest
+                           # pixel within _EDGE_SHADOW_REACH before it is lifted
+                           # to that brightest value. Small: flat glass either
+                           # side of the dip varies by only a couple of levels,
+                           # so little margin is needed to leave real shading
+                           # alone while still catching the artefact, which is
+                           # 50-150 levels deep.
+
+
+def _edge_shadow_declutter(rgb, name, idx, size):
+    """Cap the AI master's second, spurious crease line that runs parallel to
+    the outer silhouette edge on every wedge-shaped cursor.
+
+    Baked into src/ai512 before any stage in this file runs (present with
+    _tip_relight, _match_author_level and _notch_declutter all off): a thin
+    dark band sits a little over a logical unit in from the traced edge,
+    between the chrome rim highlight and the facet - the network's own
+    reading of a second bevel that the author's 32px art never drew (one
+    soft falloff, not two facets meeting at a hairline). It reads as a
+    second, floating outline sitting just inside the true one.
+
+    A smoothed-neighbourhood floor (`_notch_declutter`'s approach, immediately
+    below) was tried first and undershoots here: the averaging window that
+    builds the "local level" pulls in the dip itself, so the floor sags along
+    with the defect it is meant to correct, and a thin dark line survives at
+    reduced but still visible contrast. A max filter has the opposite bias -
+    it can only replace a pixel with the brightest one nearby, so the dip
+    cannot drag its own reference down - and reaches the same conclusion the
+    author's single soft falloff implies: nothing but the network's own
+    invention sits between the rim and the facet, so the brightest nearby
+    reading is the correct one."""
+    if name not in _EDGE_SHADOW_CURSORS:
+        return rgb
+    d = _edge_distance(name, idx)
+    if d.shape[0] != size:
+        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
+                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    band = np.clip(np.minimum(d - _EDGE_SHADOW_D_LO,
+                              _EDGE_SHADOW_D_HI - d) / 0.2, 0.0, 1.0)
+    mask = _mask(name, idx, size) / 255.0
+    w = band * mask
+    if w.max() < 1e-6:
+        return rgb
+    r = max(1, int(round(_EDGE_SHADOW_REACH * size / V.LOGICAL)))
+    k = 2 * r + 1
+
+    def _closed(chan):
+        im = Image.fromarray(np.clip(chan, 0, 255).astype(np.uint8))
+        return np.asarray(im.filter(ImageFilter.MaxFilter(k))
+                          .filter(ImageFilter.MinFilter(k)), dtype=np.float64)
+
+    lit = np.stack([_closed(rgb[..., c]) for c in range(3)], axis=-1)
+    lum, lit_lum = rgb.mean(-1), lit.mean(-1)
+    dip = np.clip((lit_lum - lum - _EDGE_SHADOW_DIP_CAP) / 20.0, 0.0, 1.0)
+    lift = _smooth1(dip * w, 0.2, size)
+    return rgb * (1.0 - lift[..., None]) + lit * lift[..., None]
+
+
+_NOTCH_RADIUS = 3.2    # logical units from the tail notch the correction reaches
+_NOTCH_FALLOFF = 0.6   # exponent on the radial weight - below 1 so the weight
+                       # stays high most of the way to _NOTCH_RADIUS instead of
+                       # tapering from the centre, because the defect itself
+                       # does not taper: it is close to full strength across
+                       # the whole disc and only stops at the edge.
+_NOTCH_DIP_CAP = 42.0  # luma levels the local facet colour may sit above a
+                       # pixel before the excess counts as the defect, not the
+                       # genuine crease. The author's own notch dips 20-30
+                       # levels away from t~0.6-0.9 and up to 55-90 right at
+                       # the notch (measured along _fold_chord, composited on
+                       # both a light and a dark background); 42 sits inside
+                       # that native range so a real crease survives and only
+                       # the overshoot past it is pulled back.
+_NOTCH_BLUR = 1.4      # logical units the local facet baseline is averaged
+                       # over - wide enough to bridge the crack itself (a unit
+                       # or less across) without reaching past the notch into
+                       # the other tail's own facet
+_NOTCH_T0 = 0.985      # share of the tip-to-notch chord the correction is held
+                       # off until. `tools/selftest.py`'s fold-jag probe plants
+                       # its defect on every row `_fold_track` resolves, which
+                       # on Arrow at 256px reaches t=0.959 - a disc keyed on
+                       # distance from the notch vertex alone reached back into
+                       # that band and absorbed the probe (selftest failed:
+                       # jag no longer moved on its own defect). Gating on t
+                       # as well keeps the correction out of ground the
+                       # tracker is already answering for.
+
+
+def _notch_declutter(rgb, name, idx, size):
+    """Cap how dark the tail notch is allowed to read, relative to its own
+    neighbourhood.
+
+    All six wedge cursors share one silhouette, and at the concave notch where
+    the two tails meet, the AI master exaggerates the fold into a near-black
+    wedge that runs several times deeper than the author's own art: measured
+    along `_fold_chord` near its notch end (t=0.99, composited on a light
+    background), the master's dip reaches 124-188 luma levels on Arrow, Hand
+    and Arrow_Down against the author's 22-30 there. It is baked into
+    `src/ai` before any stage in this file runs - present with `_tip_relight`
+    and `_match_author_level` both switched off - so it is corrected here the
+    same way `_tip_relight` corrects the master's invented second point: by
+    replacing, not shading on top.
+
+    Unlike `_tip_relight`, the region is not a band along a chord - the defect
+    sits off-axis from the tip-notch chord by up to a full logical unit
+    (measured on Arrow: the darkest pixels near the notch land at |s|~0.9-1.0,
+    not on the chord itself), which is the departure `_fold_offsets` already
+    tracks for the divider line elsewhere. A disc centred on the notch vertex
+    reaches the defect without needing that offset fitted a second time here;
+    `_NOTCH_T0` then trims the disc back on the apex-facing side so it starts
+    only past where the fold tracker's own band ends.
+
+    The correction is a floor, not a flat replacement: `_band_level` in
+    `_tip_relight` replaces its whole band outright because that band is
+    narrow enough that "the local level" and "the target" are the same
+    question. Here they are not - the notch spans a real light/dark facet
+    junction, and flattening it the same way would erase the genuine crease
+    along with the exaggeration. So only the excess past `_NOTCH_DIP_CAP`
+    below the pixel's own smoothed neighbourhood is pulled back; a pixel that
+    is merely darker than its neighbour, not darker than any pixel in this
+    drawing has a right to be, is left alone."""
+    if name not in _WEDGE_TIPS:
+        return rgb
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (tx, ty), (nx_, ny_) = ch
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
+    r = np.hypot(px - nx_, py - ny_)
+    dx, dy = nx_ - tx, ny_ - ty
+    seg = float(np.hypot(dx, dy))
+    if seg < 1e-6:
+        return rgb
+    ux, uy = dx / seg, dy / seg
+    t = ((px - tx) * ux + (py - ty) * uy) / seg
+    t_gate = np.clip((t - _NOTCH_T0) / (1.0 - _NOTCH_T0), 0.0, 1.0)
+    mask = _mask(name, idx, size) / 255.0
+    w = np.clip(1.0 - r / _NOTCH_RADIUS, 0.0, 1.0) ** _NOTCH_FALLOFF * t_gate * mask
+    if w.max() < 1e-6:
+        return rgb
+    lum = rgb.mean(-1)
+    weighted = lum * mask
+    base = _smooth1(weighted, _NOTCH_BLUR, size)
+    den = _smooth1(mask, _NOTCH_BLUR, size)
+    base = np.where(den > 1e-4, base / np.maximum(den, 1e-4), lum)
+    floor = base - _NOTCH_DIP_CAP
+    lift = np.clip(floor - lum, 0.0, None) * w
+    return np.clip(rgb + lift[..., None], 0, 255)
+
+
+_TIP_ANCHOR_SMOOTH = 3.5   # logical units the band's anchor level is smoothed
+                           # over. Wide enough that nothing structural survives
+                           # it - the fold this stage replaces is a hairline and
+                           # the master's invented second point beside it is
+                           # about a unit across - narrow enough that the sheen,
+                           # which sweeps over a third of the cursor, does.
+
+
+def _band_level(field, band, size):
+    """The band's own level as a smooth field: a band-weighted blur of `field`.
+
+    Written as a weighted blur rather than a plain one so the level does not
+    drift toward whatever the master painted outside the band - near the point
+    the band is a couple of units across and a plain blur of that radius is
+    mostly background inpainting."""
+    num = _smooth1(field * band, _TIP_ANCHOR_SMOOTH, size)
+    den = _smooth1(band, _TIP_ANCHOR_SMOOTH, size)
+    flat = float((field * band).sum() / max(float(band.sum()), 1e-6))
+    return np.where(den > 1e-4, num / np.maximum(den, 1e-4), flat)
 
 
 # Frames whose colour master is not usable. Real-ESRGAN, given a frame that is
@@ -1738,6 +2019,20 @@ def _tip_relight(rgb, name, idx, size):
 _BROKEN_COLOUR = {("Handwriting", 3), ("Handwriting", 4), ("Handwriting", 5)}
 
 _FREEZE_UNIT = 0.6       # logical units below which detail counts as a line
+_FREEZE_RIM = 1.5        # logical units in from the silhouette's own edge that
+                         # stay live - the author's sheen is a thin bright band
+                         # travelling along the rim and over the points (mapped
+                         # 2026-08-XX: per-frame deviation from the cycle mean,
+                         # his is a hairline on the outline, ours was a broad
+                         # smear over the body), which is detail finer than
+                         # _FREEZE_UNIT and so was exactly what the freeze held
+                         # still. Owner's call: the rim may jitter, the interior
+                         # may not.
+_FREEZE_RIM_FADE = 1.2   # logical units the release fades out over, so there is
+                         # no seam between the live rim and the frozen interior
+_FREEZE_FOLD = 1.2       # logical units either side of the fold chord that stay
+                         # frozen whatever the edge distance says - see
+                         # _freeze_weight
 
 
 @functools.lru_cache(maxsize=None)
@@ -1813,8 +2108,99 @@ def _freeze_lines(rgb, name, idx, size):
     if name not in INTERP or idx == 0:
         return rgb
     ref = _master_rgb(name, 0, size)
-    return np.clip(_smooth3(rgb, _FREEZE_UNIT, size)
-                   + (ref - _smooth3(ref, _FREEZE_UNIT, size)), 0, 255)
+    hold = _freeze_weight(name, idx, size)[..., None]
+    fine_ref = ref - _smooth3(ref, _FREEZE_UNIT, size)
+    fine_own = rgb - _smooth3(rgb, _FREEZE_UNIT, size)
+    return np.clip(rgb + hold * (fine_ref - fine_own), 0, 255)
+
+
+@functools.lru_cache(maxsize=None)
+def _freeze_weight(name, idx, size):
+    """How much of each pixel's fine detail is held to the reference frame.
+
+    One inside the glass, zero along the rim. The freeze was written against
+    line jitter in the interior and it works, but it is indiscriminate: it also
+    holds the one thing the animation is made of. The author's sheen, measured
+    as each frame's deviation from the cycle's own mean, is a hairline running
+    along the outline and flaring at the points - finer than _FREEZE_UNIT
+    everywhere, so all of it was being replaced by frame 0's. Ours came out at
+    a third of his swing on Hand and about three quarters on Wait and
+    AppStarting, and read dead at exactly the places the eye follows.
+
+    Releasing the rim and nothing else is the owner's own rule for this
+    ("внешние дрожания - ничего страшного, главное чтобы слои не дёргались
+    внутренние"): the fold, the lit facet and the points' inner fill are all
+    further in than _FREEZE_RIM and stay frozen."""
+    d = _edge_distance(name, idx)
+    if d.shape[0] != size:
+        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
+                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    hold = np.clip((d - _FREEZE_RIM) / _FREEZE_RIM_FADE, 0.0, 1.0)
+    # The fold is the one interior line that runs out to where the glass is
+    # thinner than _FREEZE_RIM - it ends in the tail notch - so a release keyed
+    # on edge distance alone lets go of its last stretch, and that is the line
+    # the whole freeze was written for. Measured: releasing it took Hand's
+    # fold_wander 0.015 -> 0.033 and temporal_fold 1.001 -> 1.043, Wait's
+    # fold_jag 44.4 -> 51.3. Held explicitly, by distance to its own chord.
+    ch = _fold_chord(name, idx)
+    if ch is not None:
+        (ax, ay), (bx, by) = ch
+        L = size / V.LOGICAL
+        ys, xs = np.mgrid[0:size, 0:size]
+        px, py = (xs + 0.5) / L, (ys + 0.5) / L
+        vx, vy = bx - ax, by - ay
+        den = vx * vx + vy * vy
+        t = np.clip(((px - ax) * vx + (py - ay) * vy) / max(den, 1e-9), 0.0, 1.0)
+        dist = np.hypot(px - (ax + t * vx), py - (ay + t * vy))
+        near = np.clip((_FREEZE_FOLD + _FREEZE_RIM_FADE - dist) / _FREEZE_RIM_FADE,
+                       0.0, 1.0)
+        hold = np.maximum(hold, near)
+    return hold
+
+
+_LEGACY_TEMPER = 0.5    # how much of _match_author_level/_tip_relight/_sat_match
+                         # survives. Isolated 2026-08-XX against `58a28b72`
+                         # (the render the owner asked to get back toward):
+                         # six post-master corrections were tried as suspects
+                         # for a softer tail-corner highlight the owner
+                         # reported (_match_author_level, _tip_relight,
+                         # _sat_match, _hide_ghost, _declutter_hue_outliers,
+                         # _declutter_engraved_detail). At full strength the
+                         # tail corner averages 12.2 levels away from that
+                         # render at the crop the owner pointed at; with all
+                         # six off, 0.1. No single stage moved the number much
+                         # alone (disabling any one dropped it only to ~11) -
+                         # the softening is the six compounding, not one bug.
+                         #
+                         # Tempering only these three reaches 5.8 of the same
+                         # 12.2, essentially the whole effect on its own
+                         # (checked: adding the other three at 0.5 too only
+                         # reached 6.1) - the other three barely touch this
+                         # corner (Arrow never reaches `_hide_ghost`'s
+                         # near-transparent band or Help's engraved detail).
+                         # They were tried at 0.5 regardless and reverted:
+                         # `_declutter_hue_outliers`/`_declutter_engraved_detail`
+                         # run inside `_master_raw` for every cursor, not just
+                         # the six wedge tips, and halving them let their own
+                         # defects back in where they had nothing to do with
+                         # this report - Help's fold_gap 0.125 -> 0.5 (the
+                         # engraved question mark softening), SizeAll's
+                         # fold_jag 53.7 -> 119.8. `_hide_ghost` at 0.5 failed
+                         # the gate outright: `ghost_rgb` up to 14..38 levels
+                         # against a 0.5 tolerance - the interpolated-frame
+                         # colour disagreement it exists to prevent (see its
+                         # own docstring), reintroduced.
+
+
+def _temper(before, after, name, k=_LEGACY_TEMPER):
+    """Blend a correction's output back toward its input by `_LEGACY_TEMPER`,
+    but only for the six wedge tips the isolation above was measured against -
+    every other cursor (NO, Help, SizeAll, ...) keeps the full correction, it
+    was never part of the `58a28b72` comparison and regressed when included.
+    """
+    if name not in _WEDGE_TIPS:
+        return after
+    return before * (1.0 - k) + after * k
 
 
 _LEVEL_CAP = 12.0        # levels the whole-glass author-level correction may
@@ -1887,8 +2273,10 @@ def frame_image(name, idx, size):
     if name in _SYNTH_BEVEL:
         rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
                       0, 255)
-    rgb = _match_author_level(rgb, name, idx, size)
-    rgb = _tip_relight(rgb, name, idx, size)
+    rgb = _temper(rgb, _match_author_level(rgb, name, idx, size), name)
+    rgb = _temper(rgb, _tip_relight(rgb, name, idx, size), name)
+    rgb = _edge_shadow_declutter(rgb, name, idx, size)
+    rgb = _notch_declutter(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #
@@ -1934,7 +2322,7 @@ def frame_image(name, idx, size):
     # floor) is left alone - scaling its near-zero chroma only invents colour.
     orig_sat = _sat_anchor(name, idx)
     if orig_sat >= 0.035:
-        rgb = _sat_match(rgb, alpha, orig_sat * 1.05)
+        rgb = _temper(rgb, _sat_match(rgb, alpha, orig_sat * 1.05), name)
     return _hide_ghost(_compose(rgb, alpha), name, size)
 
 
