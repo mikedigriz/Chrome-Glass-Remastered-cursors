@@ -438,3 +438,16 @@ touches it.
   move with the constant. Rendered at taper 2.0, 5.0 and 9.0 the bright sliver
   and the dark band beside it do not move at all. The division is in the master,
   as item 7 says; three render-side levers have now missed it.
+
+- **`_tip_realign` (2026-08-13), a fourth lever, on UpArrow rather than Wait.**
+  `_tip_realign` (NEXT.md 23.5) fixes a *lateral offset* - the master's fold
+  runs parallel to the chord, shifted sideways, and sliding it back onto the
+  chord before `_tip_relight` reads it removes the ghost second line on
+  Arrow/Hand/Arrow_Down/Wait/AppStarting. UpArrow was measured at only 0.05
+  units of that offset - next to nothing - and stayed a closed loop after the
+  fix. Cross-sections at t=0.12/0.16 explain why: 113, 42, 194, 149, 20, 88 -
+  a genuine bright core with dark flanks on *both* sides, the same "two
+  petals" shape as Wait's, not a single line sitting in the wrong place.
+  Sliding a shape sideways cannot fix a shape that is wrong to begin with.
+  Same root cause as this entry, same verdict: baked into `src/ai512`, out of
+  render code's reach.
