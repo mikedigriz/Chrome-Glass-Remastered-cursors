@@ -1984,6 +1984,37 @@ _EDGE_SHADOW_D_HI = 1.9    # ...and ends - measured on Arrow and Arrow_Down
 _EDGE_SHADOW_REACH = 0.35  # logical units the max-filter looks sideways for a
                            # brighter neighbour - wide enough to clear the
                            # dip's own ~0.2-unit width from either side.
+                           #
+                           # A max filter's smallest radius is one pixel, and
+                           # below 96px one pixel is wider than this reach: at
+                           # 32 it is 1.0 logical units, three times what was
+                           # measured, on a cursor whose entire dark outline is
+                           # one pixel. The stage used to floor the radius at
+                           # one and run anyway, and it ate the outline - that
+                           # is where the small sizes lost their weight against
+                           # a light desktop (p99 |luma-240| over the mask,
+                           # composited on 240, before the stage and after:
+                           # UpArrow 91 -> 75, AppStarting 165 -> 123, Arrow
+                           # 90 -> 81, against the author's own 32px art at
+                           # 102, 162 and 101). Every route that keeps the
+                           # stage's reach honest scored 92-97 on the same
+                           # three, so the reach was the whole of it - the
+                           # linear-light downsample was suspected first and
+                           # measured innocent (gamma-space averaging is worth
+                           # 2-4 levels, not 16).
+                           #
+                           # So it now declines below 96 rather than running
+                           # with a reach it was never measured with. Judged on
+                           # rendered crops at 32, 48, 64, 96 and 128 on both
+                           # grounds against the author's art: through 64 the
+                           # band it clears is sub-pixel and there is nothing
+                           # to see, the stage only lightens the true rim and
+                           # the author's is darker than either version. At 96
+                           # the second line is plainly there with the stage
+                           # off - a doubled outline inside the top-right edge
+                           # of Arrow, UpArrow, AppStarting, Hand and Help -
+                           # and the stage clears it. 96 is also exactly where
+                           # one pixel first fits inside the reach.
 _EDGE_SHADOW_DIP_CAP = 3.0 # luma levels a pixel may sit below the brightest
                            # pixel within _EDGE_SHADOW_REACH before it is lifted
                            # to that brightest value. Small: flat glass either
@@ -2054,6 +2085,8 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     reading is the correct one."""
     if name not in _EDGE_SHADOW_CURSORS:
         return rgb
+    if _EDGE_SHADOW_REACH * size / V.LOGICAL < 1.0:
+        return rgb
     d = _edge_distance(name, idx)
     if d.shape[0] != size:
         d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
@@ -2064,7 +2097,7 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     w = band * mask * _fold_keepout(name, idx, size)
     if w.max() < 1e-6:
         return rgb
-    r = max(1, int(round(_EDGE_SHADOW_REACH * size / V.LOGICAL)))
+    r = int(round(_EDGE_SHADOW_REACH * size / V.LOGICAL))
     k = 2 * r + 1
 
     def _closed(chan):
