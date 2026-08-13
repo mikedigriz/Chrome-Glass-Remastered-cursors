@@ -1908,18 +1908,34 @@ def _tip_relight(rgb, name, idx, size):
     return np.clip(new_lum[..., None] + new_chroma, 0, 255)
 
 
-_EDGE_SHADOW_CURSORS = _WEDGE_TIPS | {"Help"}
-# Handwriting and NO carry the same visible double-edge line but were dropped
-# from this set after the first gate run: Handwriting's morph_iou_min fell
-# below its ratchet (0.437 -> 0.385, a real frame-to-frame shape wobble, not
-# a style trade-off) and NO's fold_luma_step nearly doubled (68 -> 90). Both
-# genuinely redraw their silhouette frame to frame (see `morph_health`),
-# unlike the six wedge tips and Help which hold one traced shape - the
-# closing filter's small dilation/erosion right at the alpha edge is enough
-# to shift where `_hide_ghost` and the fold tracker read the boundary on
-# some frames and not others. Worth a directional (along-edge, not
-# isotropic) version of the filter before adding them back; not attempted
-# here.
+_EDGE_SHADOW_CURSORS = _WEDGE_TIPS | {"Help"} | {"Handwriting", "NO"}
+# Handwriting and NO were dropped from this set after the first gate run, on
+# two readings: Handwriting's morph_iou_min fell below its ratchet (0.437 ->
+# 0.385) and NO's fold_luma_step nearly doubled (68 -> 90). Added back
+# 2026-08-13, on the look and on a re-measurement.
+#
+# The look first. Their arrow frames carry the defect this stage exists for at
+# full strength - a black hairline the length of the top edge and down the
+# left, reading as a crack in the glass rather than a bevel - and they are the
+# only cursors that still do, so next to Hand, whose author frame 0 is the
+# same drawing pixel for pixel, they look broken. With the stage on the crack
+# is gone and the two match Hand.
+#
+# The morph reading no longer reproduces: iou_min is 0.448 with the stage on
+# and 0.448 with it off, unchanged to three decimals on every frame pair. That
+# regression belonged to the code as it stood then, not to this stage.
+#
+# The fold reading does reproduce, and it is the tracker reading the defect.
+# `_fold_track` takes the darkest interior pixel per row, the spurious line is
+# the darkest thing in its window, and `_fold_keepout` only protects a strip
+# 0.8 units either side of the chord. Measured at 256, the surviving track on
+# Handwriting frame 2 sits +0.95..+1.58 units off the chord - out in the
+# filter's own band, nowhere near the crease - and that frame is the whole
+# regression (fold_luma_step 0.0 -> 15.5, and the set worst 2.100 -> 15.500;
+# frames 0/1/5 move by tenths). Frame 0 on both cursors trades jag 15 -> 42
+# and 14 -> 41, which is where Arrow already sits (34) with the stage on.
+# Carried in metrics-baseline.json rather than defended: a hairline crack the
+# eye sees on every frame is not worth a number measured on that crack.
 _EDGE_SHADOW_D_LO = 0.45   # logical units from the traced edge the band starts.
                            # Was 0.7, which left the master's dark band sitting
                            # at d~0.68 just outside the reach of the very stage
