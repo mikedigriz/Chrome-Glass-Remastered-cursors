@@ -527,3 +527,36 @@ touches it.
   displaced edge makes a dipole in the difference, and a blur that wide cancels
   it: at sigma 1.0 / cap 25 nothing moves at all, at 0.7 / 10 the numbers move
   a little and the crop is unchanged.
+
+- Two ways of re-weighting `_up_alpha`'s level normaliser (2026-08-13), both
+  aimed at `density_%`, which misses its 2.0 target on all sixteen cursors.
+  Printing the ladder makes it one defect rather than sixteen: 32 sits +1.7 to
+  +4.7 per cent above the cursor's own mean and 64 upward is a gentle 1 per cent
+  decline. The normaliser holds the *mask-weighted* mean equal across the ladder
+  and the mask's antialiased rim is one device pixel wide - a whole logical unit
+  at 32, a sixteenth at 512 - so at 32 the rim carries a large share of the
+  weight and the scalar pushes the interior up to compensate. `density` measures
+  the interior.
+
+  *Weighting on solid pixels only* (mask at 255, full mask as fallback below 16
+  solid pixels). Right in principle, and it overcorrects where it matters: a
+  thin cursor's solid interior at 32 is a handful of unrepresentative pixels.
+  The wedges improve slightly (2.50 -> 2.12) and the thin ones collapse -
+  SizeAll 3.55 -> 18.07, SizeNS 2.51 -> 10.32, SizeWE 2.66 -> 10.06, IBeam
+  4.98 -> 7.37.
+
+  *Switching the normaliser off altogether.* This is the one worth knowing
+  about, because it works on the metric it was aimed at and fails on the other
+  side of the same trade. `density_%` collapses - Arrow 2.50 -> 0.10, Help
+  2.29 -> 0.09, Cross 6.16 -> 1.47, IBeam 4.98 -> 0.66, twelve of sixteen under
+  target - and `scale_drift` goes from 0.011..0.068 to 0.124..0.172 against a
+  threshold of 0.10, so all sixteen fail it instead. That is the normaliser's
+  own docstring measured from the other end: it trades 0.15 logical units of
+  coverage drift for 2..4 per cent of interior level. Coverage drift is the
+  cursor changing size with the size it is drawn at, which the eye sees;
+  2.5 per cent of interior opacity, on an eroded interior, it does not.
+
+  So the sixteen `density_%` debts are one deliberate trade, not sixteen
+  defects, and the 2.0 target is unreachable while `scale_drift` is held under
+  0.10. Whether they should be reclassified from debt to accepted is a
+  bookkeeping call for the owner, not a rendering fix.
