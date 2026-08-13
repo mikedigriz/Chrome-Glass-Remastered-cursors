@@ -1505,6 +1505,19 @@ def _bevel_shading(name, idx, size):
 # analytically rather than keep fighting the master's own colour there, the
 # same trade _SYNTH_BEVEL already made for the seven flat cursors - narrower
 # in reach, so the rest of the glass keeps the AI sheen.
+#
+# Handwriting and NO are not here, and were tried here 2026-08-13. Their
+# opening frames are this same wedge - frame 0 of each is Hand's author art
+# pixel for pixel, `_fold_chord` resolves on Handwriting 0-3 and 5 and on NO
+# 0-3 - and with the full treatment their fold does read as a line to the point
+# instead of dissolving a third of the way down, plainest on Handwriting frame
+# 2. It costs the point: `tip_contrast` 0.242 -> 0.145 and 0.244 -> 0.155,
+# against Hand's own treated 0.062. The reason this set exists is a master that
+# mis-lights the point; these two do not have that master, so the relight is
+# fighting paint that was already right, and 40 per cent of the point's
+# contrast is what that costs. Left out. The knob to try next is
+# `_TEMPER_PER_CURSOR` on "relight" rather than the whole stage at full
+# strength - see NEXT.md 23.9.
 _WEDGE_TIPS = {"Arrow", "Arrow_Down", "Hand", "UpArrow", "Wait", "AppStarting"}
 
 _TIP_RELIGHT_DIFF = 34.0     # luma swing between the two facets the relight paints
@@ -1669,6 +1682,12 @@ _TROUGH_PARAMS = {
 _TIP_REALIGN = {
     "Arrow": 0.27, "Hand": 0.25, "Wait": 0.23, "Arrow_Down": 0.15,
     "UpArrow": 0.05, "AppStarting": 0.05,
+    # Handwriting and NO are not in this table because they are not in
+    # `_WEDGE_TIPS` (see the note there). Their offsets are measured, for
+    # whoever picks that up: same reading, on the frames that have a chord,
+    # Handwriting +0.15 / +0.21 (frames 0/1), NO +0.21 / +0.31 / +0.29
+    # (frames 0/1/2). The later morph frames throw single stations of two
+    # units either way - the tracker losing a line that is being redrawn.
 }
 _TIP_REALIGN_START = 0.2   # share of the chord the shift starts ramping in
                             # from - the measurement (t=0.35/0.45/0.55) says
@@ -2285,6 +2304,16 @@ def _band_level(field, band, size):
 # it comes from 32px, but whole. At the shipped sizes the difference does not
 # show; past 256 these three read softer than their neighbours, which is the
 # price of not having them read as broken glass.
+#
+# Adding `_bevel_shading` on top of that colour - the same trade `_SYNTH_BEVEL`
+# makes for the seven flat cursors, and it is keyed per frame so it drops
+# straight in - was tried 2026-08-13 and is out. At 256 it does put a ridge and
+# two facets back into frames 3 and 4, which is a fair reading of the glass
+# beside them. At 512 the interior fills with straight creases meeting at
+# angles: these outlines are traced from raster art and carry far more vertices
+# than a `_SYNTH_BEVEL` shape, so the distance field ridges at every one of
+# them. That is the facet dead end recorded against `_tip_relight`, reached
+# from the other side, and crumpled paper is worse than soft glass.
 _BROKEN_COLOUR = {("Handwriting", 3), ("Handwriting", 4), ("Handwriting", 5)}
 
 _FREEZE_UNIT = 2.0       # logical units below which detail counts as a line.
