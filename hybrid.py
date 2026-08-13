@@ -2692,6 +2692,37 @@ _LEVEL_SMOOTH = 4.5      # logical units the correction is blurred by on the
                          # fold_wander drops from 0.236 to 0.198. 6.0 buys
                          # little more wander (0.176) for worse colour
                          # (delta_e 3.62 -> 3.70) - diminishing returns past 4.5.
+_LEVEL_CAP_NATIVE = 40.0 # ...and the cap on his own grid, where neither guard
+                         # above has anything to guard against. Both of them
+                         # exist for one reason - the correction is measured on
+                         # his 32px pixels and then stretched over ours, so a
+                         # loose cap or a sharp edge stamps his grid onto a
+                         # render several times finer. At 32 there is no stretch:
+                         # his pixel is our pixel, "finer than his own pixels"
+                         # is not a thing that can happen, and there is no
+                         # stencil to blur out.
+                         #
+                         # What the two guards were costing there is the dark
+                         # outline. His 32px art carries a full logical unit of
+                         # near-black around the silhouette; ours inherits a
+                         # fifth of a unit from src/ai512 and averages it away
+                         # on the trip down, so the darkest pixel over the mask
+                         # composited on 240 came out 145 against his 106 and
+                         # the cursor read washed out on a light desktop. 12
+                         # levels cannot cross a 40-level gap and a 4.5-unit
+                         # blur cannot rebuild a 1-unit rim.
+                         #
+                         # So both relax toward his grid, on the same ramp:
+                         # nothing changes at 64 and above, 48 gets half, and 32
+                         # is corrected at his own resolution. Judged at 32 on
+                         # both grounds beside his art, eight wedge cursors: the
+                         # rim arrives where his is and nowhere else, and no
+                         # cursor picks up a stencil. p99 |luma-240| over the
+                         # mask, shipped -> corrected against his own: Arrow
+                         # 89.8 -> 98.9 (101.3), UpArrow 90.6 -> 100.3 (102.4),
+                         # Hand 87.7 -> 101.5 (101.3), Wait 159.0 -> 166.5
+                         # (167.1). 60 levels buys another point on Arrow and
+                         # overshoots Wait past him, 20 gets half the rim.
 
 
 def _resample_signed(a, size):
@@ -2725,9 +2756,12 @@ def _match_author_level(rgb, name, idx, size):
     m32 = _mask(name, src, 32) / 255.0
     ours32, _ = _resize(np.dstack([_master_rgb(name, src, size), _mask(name, src, size)]), 32)
     orig32 = np.asarray(original(name, src), dtype=np.float64)[..., :3]
-    diff32 = np.clip(orig32 - ours32, -_LEVEL_CAP, _LEVEL_CAP) * m32[..., None]
+    # how far above his grid this size is: 0 on it, 1 at twice it and beyond
+    up = min(max((size - 32) / 32.0, 0.0), 1.0)
+    cap = _LEVEL_CAP_NATIVE + (_LEVEL_CAP - _LEVEL_CAP_NATIVE) * up
+    diff32 = np.clip(orig32 - ours32, -cap, cap) * m32[..., None]
     diff = np.dstack([_resample_signed(diff32[..., c], size) for c in range(3)])
-    diff = _smooth3(diff, _LEVEL_SMOOTH, size)
+    diff = _smooth3(diff, _LEVEL_SMOOTH * up, size)
     m = _mask(name, src, size) / 255.0
     return np.clip(rgb + diff * m[..., None], 0, 255)
 
