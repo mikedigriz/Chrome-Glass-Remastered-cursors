@@ -401,3 +401,31 @@ The two metrics are one axis under a scalar: coverage is held by moving the
 level, and moving the level is what density measures. Per rule 7 in NEXT.md a
 scalar cannot fix a distribution - if this is worth another pass it needs a
 per-pixel correction in the manner of `_THIN_LEAN`, not another anchor.
+
+## Wait's split apex: two more render-side attempts (2026-08-13)
+
+NEXT.md item 7 settles this as a master defect - the network invented a crease
+at an apex where the author's own 32px art has one smooth peak. Two levers that
+did not exist when that entry was written were tried against it, and neither
+touches it.
+
+- **Putting the three sheen cursors back on the trough.** `_TROUGH_PARAMS` was
+  written to flatten this band ("they carry no fold here at all"), and
+  `5a5f363` swapped them to a `diff` step that paints one, so restoring the
+  trough looked like the obvious undo. Rendered side by side at 512 on grey, the
+  bright sliver and the dark band beside it are identical under both. It also
+  costs UpArrow's fold badly (`fold_luma_step` 13 -> 19, `fold_jag` 78 -> 98).
+
+- **Releasing `_fold_keepout` near the apex so `_edge_shadow_declutter` can
+  reach the crack.** Principled on paper: the keepout holds the max filter off
+  ±0.8 units around the chord, the crack sits there, and per NEXT.md item 1 the
+  three sheen cursors carry no real fold near the apex to protect. Ramping the
+  keepout in from t=0 over t=0.25 and t=0.45 changes the render by nothing the
+  eye can find.
+
+  The measurement says why. Cross-sections at t=0.10/0.15/0.20 read one
+  continuous bright core (91..147 luma) flanked by darker facets on both sides -
+  there is no narrow dark line *across* the wedge for a max filter to bridge.
+  The two "petals" are separated along the wedge, not across it, and
+  `_edge_shadow_declutter` is keyed to distance from the outline, so it cannot
+  address that shape at all.
