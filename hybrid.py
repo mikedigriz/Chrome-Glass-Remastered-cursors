@@ -790,6 +790,35 @@ def _cycle_mean(name):
     return sum(_lin_master(name, i) for i in range(n)) / n
 
 
+# UpArrow's apex is measured, and no stage here moves it. Kept as a note so the
+# next reader does not re-derive it (full working in NEXT.md 23.6, rejected
+# levers in DEAD_ENDS.md).
+#
+# Brightest sample per cross-section, walking down the fold chord from the
+# point, stations 0.25 .. 2.5 logical units, finished 512 render. The healthy
+# wedges ramp into their lit facet; UpArrow holds one flat value for two units
+# and then steps sixty levels in a single station:
+#
+#     Arrow       134 137 140 150 159 190 210 213 211
+#     Arrow_Down  123 125 127 130 133 142 178 182 195
+#     UpArrow     142 143 145 145 146 145 144 203 204
+#
+# The ramp is in what the network was fed (`_base128`: UpArrow `115 116 120 136
+# 125 149 160 229`, Arrow_Down `110 111 113 116 114 150 153 210`) and only
+# UpArrow's is gone from what came back. Same net, same input shape, only the
+# hue differs - and three different fills of the transparent zone reproduce the
+# flat slab to within two levels, so it is not the margin either.
+#
+# Moving it from this side does not work. Scaling the master about the traced
+# point (the wedge is a cone, so the flanks map onto themselves and only the
+# misplaced facet travels) does put the step at 1.67 units, and it drags the
+# master's own dark rim into the apex with it: the rim compresses tangentially
+# by the same factor and arrives as a hard shadow hugging the lit facet on both
+# flanks, where before there was none. Owner saw it immediately. Blending the
+# 128 base back in instead recovers the ramp and smears the point into a glow.
+# Whatever is done about this belongs upstream of `src/ai512`.
+
+
 @functools.lru_cache(maxsize=None)
 def _master_raw(name, idx):
     """Colour master -> (rgb HxWx3 float, anchor px), sharpened once at the anchor.
@@ -2108,6 +2137,105 @@ def _notch_declutter(rgb, name, idx, size):
     return np.clip(rgb + lift[..., None], 0, 255)
 
 
+# Only the three the measurement puts far from the author. Hook at t=0.98,
+# render against the same track on his own 32px frame resampled to 512: Hand
+# -1.10 against -1.00, Arrow_Down 0.72 against -0.74, Arrow 1.44 against -1.00
+# (the sign flips where the tracker takes the far side of the notch; the
+# magnitude is the reading). Those three already end their fold where he does.
+# Wait -1.44 against -0.22, AppStarting -1.62 against -0.22, UpArrow -1.62
+# against -0.74 - six to seven times his own departure, and the same three
+# cursors the upscale mangles at the apex. Run on all six, the cap washes out
+# Arrow's notch crease, which is his drawing, not the network's.
+_NOTCH_AUTHOR_CURSORS = {"Wait", "AppStarting", "UpArrow"}
+_NOTCH_AUTHOR_FULL = 2.0   # logical units from the notch vertex the author's own
+                           # paint is used outright
+_NOTCH_AUTHOR_FADE = 4.0   # and where it has faded back to the master entirely
+_NOTCH_AUTHOR_CAP = 25.0   # levels the master may sit away from the author's own
+                           # paint inside that disc before the excess is pulled
+                           # back. His own art swings 40 levels between
+                           # neighbouring pixels here, so a cap under that
+                           # leaves his drawing intact and catches only the
+                           # network's overshoot (measured 70-80 levels)
+
+
+def _notch_from_author(rgb, name, idx, size):
+    """Hand the tail notch back to the author's own frame, upsampled.
+
+    Every level tool in this file measures itself against his 32px art after
+    downsampling ours onto his grid, and at the notch that comparison comes
+    back clean - the two agree. The whole defect is how the network
+    redistributed light *inside* one of his pixels: measured across the chord
+    at t=0.97 on Wait, his own art interpolates as one smooth valley
+    (143 131 124 118 109 93 75 62 40 18 3 16 34 50 61 67 74) where the master
+    paints a plateau, a cliff and a black floor that never recovers
+    (181 183 190 190 91 11 17 20 22 23 25 27 26 27 27 30 59). It is the same
+    disease as the apex - a ramp flattened into a step - and it reads as the
+    fold turning off its own chord and running along the tail spike (owner
+    report 23.3; measured hook at t=0.98 is 1.4-1.6 units against the author's
+    0.2 on Wait/AppStarting/UpArrow).
+
+    So there is no reference finer than his pixels, and every author-anchored
+    correction here is blind by construction: `_match_author_level` sees a
+    12-level cap on an error that vanishes at 32px, `_edge_shadow_declutter`'s
+    closing filter cannot bridge a dark region four units wide, and
+    `_notch_declutter`'s local baseline sags into the same dark it is meant to
+    lift. Tried, measured, none of them moves it (DEAD_ENDS.md).
+
+    What is left is his own paint, resampled - not as a replacement but as a
+    ceiling on how far the master may depart from it. Replacing the disc
+    outright does land on his numbers exactly, and it hands the notch his 32px
+    blur: a soft smudge sitting in otherwise crisp glass, plain to see at 128
+    and 256. A cap leaves every pixel that already agrees with him alone, so
+    the texture stays, and pulls back only the excursions - which here are the
+    whole defect.
+
+    Pulled back by blending toward his paint entire, not by a luma offset:
+    moving luma and keeping the master's chroma left a green-yellow streak
+    along the boundary, and scaling both blew the near-black into a red one.
+    His paint carries its own colour, so a step toward it invents no hue.
+
+    What it costs, so the trade is on the record. The fold tracker reads the
+    darkest interior pixel per row, and the hook is dark, so some of what it
+    was tracking was the defect: measured at 256, Wait resolved t=0.618..0.969
+    before and t=0.618..0.844 after (fold_gap 0.875 -> 1.875), and
+    AppStarting, whose entire six-row reading sat at t=0.852..0.969, resolves
+    nothing at any size afterwards (`fold_unmeasured`, carried in
+    metrics-known-issues.json). Against that, Wait's two standing failures
+    clear - fold_luma_step 4.667 -> 2.333, fold_jag 44.0 -> 8.8 - and UpArrow
+    goes 30.3 -> 1.0 and 98.5 -> 12.8. The author's own frames score no better
+    than unmeasurable here either: `fold_profile` on `orig_frame` returns None
+    for all six wedges at every size, so a fold this soft has never had a
+    number behind it.
+
+    Three narrower shapes were tried first and none of them works. A keep-out
+    strip along the chord (correct only where the crease has already left it)
+    keeps every tracker row and leaves the hook plainly visible, because the
+    hook starts inside the strip. Capping only the positive deviation - the
+    bright rim along the tail spike, which is what the eye first picks out -
+    moves nothing: the rim is within 25 levels of his own paint. Adding back
+    the difference blurred at 0.7-1.0 units, which would move the crease
+    without softening it, cancels the dipole a displaced edge makes and leaves
+    the hook where it was.
+    """
+    if name not in _NOTCH_AUTHOR_CURSORS:
+        return rgb
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (_, _), (nx_, ny_) = ch
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    r = np.hypot((xs + 0.5) / L - nx_, (ys + 0.5) / L - ny_)
+    w = np.clip((_NOTCH_AUTHOR_FADE - r) / (_NOTCH_AUTHOR_FADE - _NOTCH_AUTHOR_FULL),
+                0.0, 1.0) * (_mask(name, idx, size) / 255.0)
+    if w.max() < 1e-6:
+        return rgb
+    ref, _ = _resize(_orig(_key(name, idx)), size)
+    dev = rgb.mean(-1) - ref.mean(-1)
+    pull = np.clip(1.0 - _NOTCH_AUTHOR_CAP / np.maximum(np.abs(dev), 1e-6), 0.0, 1.0)
+    return np.clip(rgb + (ref - rgb) * (pull * w)[..., None], 0, 255)
+
+
 _TIP_ANCHOR_SMOOTH = 3.5   # logical units the band's anchor level is smoothed
                            # over. Wide enough that nothing structural survives
                            # it - the fold this stage replaces is a hairline and
@@ -2467,6 +2595,7 @@ def frame_image(name, idx, size):
     rgb = _temper(rgb, _tip_relight(rgb, name, idx, size), name, "relight")
     rgb = _edge_shadow_declutter(rgb, name, idx, size)
     rgb = _notch_declutter(rgb, name, idx, size)
+    rgb = _notch_from_author(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #

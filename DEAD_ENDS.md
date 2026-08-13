@@ -451,3 +451,79 @@ touches it.
   Sliding a shape sideways cannot fix a shape that is wrong to begin with.
   Same root cause as this entry, same verdict: baked into `src/ai512`, out of
   render code's reach.
+
+- **Regenerating `src/ai512` with a different fill of the transparent zone
+  (2026-08-13), to un-flatten UpArrow's apex.** The best remaining theory after
+  four render-side misses: `upscale_lib.bleed_extend` inpaints the transparent
+  margin with TELEA before the RGB-only net sees it, and a soft inpainted
+  gradient wrapped around a sharp point is exactly the thing that would make a
+  network round it off. Reran the 128 -> 512 pass on UpArrow's own base three
+  ways: the shipped TELEA inpaint, a nearest-visible-pixel clamp (so the
+  wedge's own colour runs straight past its point instead of dissolving into an
+  average of both flanks), and no fill at all.
+
+  All three come out the same. Cross-section maxima down the chord, stations
+  0.25..2.5 logical units from the point: TELEA `112 113 114 115 117 118 120
+  121 235`, nearest `113 114 115 116 117 118 120 121 237`, raw `116 116 118 118
+  120 121 122 122 238`. Two levels apart, same flat slab, same cliff. Side by
+  side at 5x the three crops are indistinguishable. It is how the net reads
+  this wedge, not what surrounds it - and the same net, fed Arrow_Down's
+  near-identical 128 base (`110 111 113 116 114 150 153 210`), keeps the ramp
+  (`107 108 109 113 140 190 216`). Only the hue differs between them.
+
+- **Blending the 128px base back into the master around the point
+  (2026-08-13).** The ramp the net dropped is still in its own input, so
+  reading the master back toward `_base128` in a disc around the traced point
+  looked like recovering data rather than inventing it - and near the point the
+  master is a flat slab, so there is no network detail to lose. It does restore
+  the ramp on paper (`144 150 146 172 193 199 204` against `146 145 144 203`),
+  and it looks worse: the 128 base upsampled is soft, and what arrives is the
+  lit facet dissolving into a glow around the point instead of converging. Blur
+  is on the owner's own reject list. `_tip_advance` (NEXT.md 23.6) reaches the
+  same station by resampling the master's own pixels, which keeps the edge.
+
+- **Scaling the master about the traced point to advance the lit facet
+  (`_tip_advance`, 2026-08-13).** The fifth lever on UpArrow, and the one whose
+  geometry was actually right: the wedge is a cone with its apex on the traced
+  point, so a radial scale about that point maps each flank onto itself and
+  moves only what lies along the axis. It does what it says - the facet's step
+  goes from 2.25 logical units to 1.67, where the healthy wedges start theirs,
+  the profile takes the right shape, and no other cursor changes by a level.
+
+  It also drags the master's dark rim in with the facet. A radial contraction
+  compresses tangentially by the same factor, so the rim arrives at the point
+  narrower, denser and darker, sitting on both flanks of the lit facet as a
+  hard shadow that was not there before (max darkening 43 levels; on a signed
+  difference map the red line hugs the blue region on both sides). The owner
+  saw it on the first crop. Same trade as `_draw_tip` and
+  `_match_author_at_tips`: one defect removed, another drawn.
+
+  `tip_contrast` objected too (0.049 -> 0.032 against a 0.046 floor, and
+  1.15/1.20/1.25 give 0.041/0.040/0.045, so no factor clears it), but that is
+  not what decided it - the shadow is.
+
+- **Three narrower shapes for the tail notch (2026-08-13).** All three were
+  tried before `_notch_from_author` settled on a plain deviation cap over a
+  disc, and each looked like it should cost less.
+
+  *A keep-out strip along the chord* - cap the deviation only where the crease
+  has already left the chord, so the part the fold tracker reads is untouched.
+  It does keep every tracker row (Wait `fold_gap` stays 0.875, AppStarting keeps
+  its size), and the hook is still plainly there on the crop: it starts inside
+  the strip, at s = -0.20 by t = 0.93, and only reaches -0.90 by t = 0.97.
+  Worse, correcting right up against a protected strip puts a step at the
+  boundary - AppStarting `fold_luma_step` 10.97 -> 25.37, UpArrow 30.3 -> 46.1.
+
+  *Capping only the positive deviation* - the thing the eye picks out first is
+  a bright rim curling along the top edge of the tail spike, so pull down only
+  what the render made brighter than the author. It changes almost nothing: at
+  cap 25 every fold number is the baseline to three decimals except UpArrow's
+  jag, and the crop still has the curl. The rim is within 25 levels of his own
+  paint - it is not a level error, it is an edge in the wrong place.
+
+  *Adding back the difference blurred at 0.7-1.0 logical units* - move the
+  local mean toward the author while leaving every high frequency the render
+  has, so the crease keeps its gradient and only its position shifts. A
+  displaced edge makes a dipole in the difference, and a blur that wide cancels
+  it: at sigma 1.0 / cap 25 nothing moves at all, at 0.7 / 10 the numbers move
+  a little and the crop is unchanged.
