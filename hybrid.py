@@ -1625,6 +1625,67 @@ _TROUGH_PARAMS = {
 }
 
 
+# The master's own fold does not sit on the chord - it runs parallel to it,
+# offset sideways (measured 2026-08-13, cross-sections at t=0.35/0.45/0.55,
+# darkest-gradient crossing per row): Arrow 0.25-0.30, Hand 0.25, Wait
+# 0.20-0.25, Arrow_Down 0.10-0.20, UpArrow/AppStarting under 0.1. That offset,
+# not a shortfall of `_tip_relight`'s own blend strength, is what read as a
+# second line merging into the outline near the point: at partial temper
+# strength the master's real (but sideways) fold shows through next to the
+# synthetic one on the chord, and full strength only hides the seam by
+# discarding the master's own facet along with it (see `_TEMPER_PER_CURSOR`
+# above - flattens instead of merging). Sliding the master's pixels sideways
+# by the measured amount before either stage runs puts its facet back on the
+# chord, so the two agree instead of competing, at every temper strength.
+_TIP_REALIGN = {
+    "Arrow": 0.27, "Hand": 0.25, "Wait": 0.23, "Arrow_Down": 0.15,
+    "UpArrow": 0.05, "AppStarting": 0.05,
+}
+_TIP_REALIGN_START = 0.2   # share of the chord the shift starts ramping in
+                            # from - the measurement (t=0.35/0.45/0.55) says
+                            # nothing about closer to the point, and starting
+                            # the ramp at 0 reached into `tip_contrast`'s own
+                            # disc (1.5 logical units, close to the apex on a
+                            # short chord) and softened its one sharp pixel
+_TIP_REALIGN_FLAT = 0.35   # share of the chord shifted at full weight
+_TIP_REALIGN_END = 0.6     # share of the chord the shift reaches by, fading
+                            # in over START..FLAT and out over FLAT..END -
+                            # same reach as `_tip_relight`'s own band, since
+                            # past it nothing here is being prepared for
+
+
+def _tip_realign(rgb, name, idx, size):
+    """Slide the master sideways near the point so its own fold sits on the
+    chord instead of beside it (see `_TIP_REALIGN` for the measurement)."""
+    shift = _TIP_REALIGN.get(name, 0.0)
+    if shift < 1e-6:
+        return rgb
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (tx, ty), (nx_, ny_) = ch
+    L = size / V.LOGICAL
+    dx, dy = nx_ - tx, ny_ - ty
+    seg_len = float(np.hypot(dx, dy))
+    if seg_len < 1e-6:
+        return rgb
+    ux, uy = dx / seg_len, dy / seg_len
+    ys, xs = np.mgrid[0:size, 0:size]
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
+    relx, rely = px - tx, py - ty
+    t = (relx * ux + rely * uy) / seg_len
+    tc = np.clip(t, 0.0, 1.0)
+    w = np.clip((tc - _TIP_REALIGN_START) / (_TIP_REALIGN_FLAT - _TIP_REALIGN_START), 0.0, 1.0) * \
+        np.clip(1.0 - (tc - _TIP_REALIGN_FLAT) / (_TIP_REALIGN_END - _TIP_REALIGN_FLAT), 0.0, 1.0)
+    # Sample from `+shift*w` along the chord's own left normal: the seam
+    # measured to the right of the chord (positive `s`), so each output pixel
+    # takes the colour that currently sits `shift` further right of it,
+    # pulling that content onto the chord instead of moving the chord to it.
+    sx = xs + shift * w * (-uy) * L
+    sy = ys + shift * w * ux * L
+    return _sample(rgb, sx, sy)
+
+
 def _tip_relight(rgb, name, idx, size):
     """Repaint the wedge point analytically, in a band along its own fold chord.
 
@@ -2402,6 +2463,7 @@ def frame_image(name, idx, size):
         rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
                       0, 255)
     rgb = _temper(rgb, _match_author_level(rgb, name, idx, size), name, "level")
+    rgb = _tip_realign(rgb, name, idx, size)
     rgb = _temper(rgb, _tip_relight(rgb, name, idx, size), name, "relight")
     rgb = _edge_shadow_declutter(rgb, name, idx, size)
     rgb = _notch_declutter(rgb, name, idx, size)
