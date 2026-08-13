@@ -2748,16 +2748,27 @@ def _match_author_level(rgb, name, idx, size):
     reads as the dividing chord failing to bisect the cursor. `_tip_relight`
     already owns the point itself; this stays out of its band by running
     first and letting the point's own weighted-mean anchor absorb whatever
-    shift landed there."""
-    if name not in _WEDGE_TIPS:
+    shift landed there.
+
+    Two jobs, two guards. Straightening the boundary is a wedge-tip job and runs
+    at every size on `_WEDGE_TIPS`, as it always has. Restoring his dark rim is a
+    small-size job (see `_LEVEL_CAP_NATIVE`) and belongs to any wedge-bodied
+    cursor whose master washes out on the way down, so the other three get it
+    only where the correction is still near his own grid. Letting them have it
+    everywhere was tried and costs six fold readings and buys nothing: Help
+    `fold_luma_step` 20.500 -> 22.867 and `fold_wander` 0.274 -> 0.275,
+    Handwriting `fold_wander` 0.225 -> 0.287, NO 0.014 -> 0.020 and
+    `fold_luma_step` 1.433 -> 1.667. That is the stencil the blur exists to
+    prevent, on three cursors it was never tuned for."""
+    # how far above his grid this size is: 0 on it, 1 at twice it and beyond
+    up = min(max((size - 32) / 32.0, 0.0), 1.0)
+    if name not in (_WEDGE_TIPS if up >= 1.0 else _EDGE_SHADOW_CURSORS):
         return rgb
     src = 0 if name in INTERP else idx
     key = _key(name, src)
     m32 = _mask(name, src, 32) / 255.0
     ours32, _ = _resize(np.dstack([_master_rgb(name, src, size), _mask(name, src, size)]), 32)
     orig32 = np.asarray(original(name, src), dtype=np.float64)[..., :3]
-    # how far above his grid this size is: 0 on it, 1 at twice it and beyond
-    up = min(max((size - 32) / 32.0, 0.0), 1.0)
     cap = _LEVEL_CAP_NATIVE + (_LEVEL_CAP - _LEVEL_CAP_NATIVE) * up
     diff32 = np.clip(orig32 - ours32, -cap, cap) * m32[..., None]
     diff = np.dstack([_resample_signed(diff32[..., c], size) for c in range(3)])
