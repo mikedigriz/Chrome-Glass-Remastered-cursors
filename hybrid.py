@@ -2079,6 +2079,74 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     return rgb * (1.0 - lift[..., None]) + lit * lift[..., None]
 
 
+_EDGE_COMB_CURSORS = _EDGE_SHADOW_CURSORS
+_EDGE_COMB_REACH = 0.5    # logical units either way along the edge that are
+                          # averaged. 0.75 cleans a little further and starts
+                          # costing fold cross-sections near the tail (NO's jag
+                          # 8.0 -> 21.8); 0.5 leaves those alone.
+_EDGE_COMB_DEPTH = 0.7    # how far in from the traced edge the smoothing runs
+_EDGE_COMB_FADE = 0.4     # and the units it fades out over
+_EDGE_COMB_KEEP = 2.0     # radius round each traced corner it is held off in,
+_EDGE_COMB_RAMP = 1.5     # and the units it ramps back in over
+
+
+def _edge_comb(rgb, name, idx, size):
+    """Smooth the edge band *along* the outline, never across it.
+
+    The author's shaded side is one soft dark line the whole length of the
+    wedge. Ours is that line broken into flecks - dark brown, near black, grey,
+    a red pixel - one per pixel, because the master's texture survives in a
+    feature about a pixel wide and every pixel takes a different sample of it.
+    Composited and magnified at 32 and 64, where that line *is* the edge, it
+    reads as dirt rather than as glass (owner report, 2026-08-13).
+
+    It is not a level error and no author-anchored correction touches it: the
+    line's own darkness is close to his (measured across the side at 128 on
+    Wait, station 0.5 in from the edge, on grey: 84 against his 93). What is
+    wrong is that it is not the same colour twice running.
+
+    Smoothing across the edge would soften the silhouette, which is the one
+    thing the vector trace exists to keep sharp. Along it costs nothing: the
+    tangent is perpendicular to grad(`_edge_distance`), so every sample stays
+    at the same depth and the profile across the edge comes out unchanged.
+
+    Held off the traced corners, where two edges meet and "the" tangent means
+    nothing - smoothing along it there runs straight across the point, and the
+    points lose most of their contrast (Arrow 0.129 -> 0.038, Hand 0.062 ->
+    0.038, Arrow_Down 0.092 -> 0.036)."""
+    if name not in _EDGE_COMB_CURSORS:
+        return rgb
+    d = _edge_distance(name, idx)
+    if d.shape[0] != size:
+        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
+                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    L = size / V.LOGICAL
+    # `_fold_keepout` for the same reason `_edge_shadow_declutter` takes it:
+    # where the fold runs close to the outline - the tail cutout - averaging
+    # along the edge averages along the crease too. Without it UpArrow's
+    # fold_gap goes 1.250 -> 2.250.
+    w = np.clip((_EDGE_COMB_DEPTH - d) / _EDGE_COMB_FADE, 0.0, 1.0) * \
+        (_mask(name, idx, size) / 255.0) * _fold_keepout(name, idx, size)
+    ys, xs = np.mgrid[0:size, 0:size]
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
+    for cx, cy in _sharp_corners(name, idx):
+        w *= np.clip((np.hypot(px - cx, py - cy) - _EDGE_COMB_KEEP)
+                     / _EDGE_COMB_RAMP, 0.0, 1.0)
+    if w.max() < 1e-6:
+        return rgb
+    gy, gx = np.gradient(d)
+    n = np.hypot(gx, gy)
+    ok = n > 1e-6
+    tx = np.where(ok, -gy / np.maximum(n, 1e-6), 0.0)
+    ty = np.where(ok, gx / np.maximum(n, 1e-6), 0.0)
+    steps = np.arange(-_EDGE_COMB_REACH, _EDGE_COMB_REACH + 1e-9, 0.25)
+    acc = np.zeros_like(rgb)
+    for k in steps:
+        acc += _sample(rgb, xs + tx * k * L, ys + ty * k * L)
+    acc /= len(steps)
+    return rgb + (acc - rgb) * w[..., None]
+
+
 _NOTCH_RADIUS = 3.2    # logical units from the tail notch the correction reaches
 _NOTCH_FALLOFF = 0.6   # exponent on the radial weight - below 1 so the weight
                        # stays high most of the way to _NOTCH_RADIUS instead of
@@ -2651,6 +2719,7 @@ def frame_image(name, idx, size):
     rgb = _tip_realign(rgb, name, idx, size)
     rgb = _temper(rgb, _tip_relight(rgb, name, idx, size), name, "relight")
     rgb = _edge_shadow_declutter(rgb, name, idx, size)
+    rgb = _edge_comb(rgb, name, idx, size)
     rgb = _notch_declutter(rgb, name, idx, size)
     rgb = _notch_from_author(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
