@@ -2141,6 +2141,13 @@ def _notch_declutter(rgb, name, idx, size):
     below the pixel's own smoothed neighbourhood is pulled back; a pixel that
     is merely darker than its neighbour, not darker than any pixel in this
     drawing has a right to be, is left alone."""
+    # Handwriting and NO were let in here 2026-08-13 and taken straight back
+    # out. Their notch bar is thicker than this stage's own reference can
+    # survive: `_NOTCH_BLUR` is 1.4 units and the bar is about 1, so the
+    # smoothed neighbourhood sags into it and the floor comes down with the
+    # defect - the failure the docstring above credits to the smoothed-baseline
+    # approach in general. Measured, the crop does not move. `_notch_from_author`
+    # is the stage that does not sag, and it has them.
     if name not in _WEDGE_TIPS:
         return rgb
     ch = _fold_chord(name, idx)
@@ -2181,7 +2188,12 @@ def _notch_declutter(rgb, name, idx, size):
 # against -0.74 - six to seven times his own departure, and the same three
 # cursors the upscale mangles at the apex. Run on all six, the cap washes out
 # Arrow's notch crease, which is his drawing, not the network's.
-_NOTCH_AUTHOR_CURSORS = {"Wait", "AppStarting", "UpArrow"}
+#
+# Handwriting and NO added the same day, on the crop rather than that table:
+# neither is in `_WEDGE_TIPS`, so neither gets `_notch_declutter` either, and
+# their notch carries a solid dark bar about a unit thick and four long where
+# the author has soft grey - worse than any of the six ever were.
+_NOTCH_AUTHOR_CURSORS = {"Wait", "AppStarting", "UpArrow", "Handwriting", "NO"}
 _NOTCH_AUTHOR_FULL = 2.0   # logical units from the notch vertex the author's own
                            # paint is used outright
 _NOTCH_AUTHOR_FADE = 4.0   # and where it has faded back to the master entirely
