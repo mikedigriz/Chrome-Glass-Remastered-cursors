@@ -429,3 +429,12 @@ touches it.
   The two "petals" are separated along the wedge, not across it, and
   `_edge_shadow_declutter` is keyed to distance from the outline, so it cannot
   address that shape at all.
+
+- **`taper` as the seam between the painted apex facet and the master's body.**
+  Third attempt at Wait's split, from the cross-section finding that the two
+  petals are divided along the wedge rather than across it: `_tip_relight` ramps
+  in over `taper` logical units from the point, so a mismatch where its
+  influence ends would read as exactly that seam, and the boundary would then
+  move with the constant. Rendered at taper 2.0, 5.0 and 9.0 the bright sliver
+  and the dark band beside it do not move at all. The division is in the master,
+  as item 7 says; three render-side levers have now missed it.
