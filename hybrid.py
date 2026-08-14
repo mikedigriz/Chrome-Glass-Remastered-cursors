@@ -584,9 +584,7 @@ def _fold_offsets(name, idx):
     # fifths of the peak excluded the interior itself, every cross-section came
     # back mostly empty, and the whole correction silently measured zero on
     # every cursor in the set.
-    inset = np.asarray(Image.fromarray(_edge_distance(name, src).astype(np.float32),
-                                       mode="F").resize((size, size), Image.BILINEAR),
-                       dtype=np.float64)
+    inset = _edge_distance_at(name, src, size)
     solid = (_mask(name, src, size) > 250) & (inset > 0.4)
     lum = rgb @ _LUMA
     qs = np.arange(-_FOLD_BAND, _FOLD_BAND + 1e-9, 0.1)
@@ -1330,7 +1328,31 @@ def _chamfer(inside):
 
 
 def _edge_distance(name, idx):
-    return _edge_distance_geom(name, _geom(name, idx))
+    """Depth inside the silhouette at _BEVEL_REF, zero outside."""
+    return np.maximum(_edge_distance_geom(name, _geom(name, idx)), 0.0)
+
+
+@functools.lru_cache(maxsize=None)
+def _edge_distance_at(name, idx, size):
+    """The same field at `size`, resampled from the one measured at _BEVEL_REF.
+
+    Resamples the *signed* field and clips afterwards, which is not the order
+    the five call sites used to do it in. Depth-with-a-floor is convex at the
+    contour - it falls to zero and stays there - so interpolating it between a
+    pixel just inside and one just outside averages a positive against a zero
+    and returns something positive, and the field's own zero drifts inward by
+    about half of whatever the step is. Signed distance is linear straight
+    through the contour, so the same interpolation lands on the contour.
+    Measured on Arrow at 512: the field's zero sits 0.0097 logical units off
+    the drawn edge clipped, 0.0042 signed.
+
+    Cached per size for the same reason _mask_geom is: the build asks for the
+    same rung of the same frame from five different stages."""
+    d = _edge_distance_geom(name, _geom(name, idx))
+    if d.shape[0] != size:
+        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
+                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    return np.maximum(d, 0.0)
 
 
 @functools.lru_cache(maxsize=None)
@@ -1348,12 +1370,18 @@ def _edge_distance_geom(name, idx):
     Measured to _mask_prims, the same geometry the silhouette is rasterised
     from. Measuring to the raw traced vertices instead put the zero of this
     field up to a third of a unit off the edge the mask actually draws, and on
-    SizeAll three quarters of one."""
+    SizeAll three quarters of one.
+
+    Signed: positive inside, negative outside. Callers that want depth take
+    _edge_distance or _edge_distance_at, both of which clip - and the clip has
+    to happen after any resampling, which is the whole reason the sign is kept
+    this far."""
     size = _BEVEL_REF
     inside = _mask(name, idx, size) > 127
     prims = _mask_prims(name, idx) if name in C.TRACED else ()
     if not prims:
-        return _chamfer(inside) / (size / V.LOGICAL)
+        c = _chamfer(inside) / (size / V.LOGICAL)
+        return np.where(inside, c, -c)
     L = size / V.LOGICAL
     ys, xs = np.mgrid[0:size, 0:size]
     px, py = (xs + 0.5) / L, (ys + 0.5) / L
@@ -1373,7 +1401,7 @@ def _edge_distance_geom(name, idx):
             t = np.clip(((px - a[0]) * ab[0] + (py - a[1]) * ab[1]) / den, 0.0, 1.0)
             best = np.minimum(best, np.hypot(px - (a[0] + t * ab[0]),
                                              py - (a[1] + t * ab[1])))
-    return np.where(inside, best, 0.0)
+    return np.where(inside, best, -best)
 
 
 _BEVEL_SMOOTH = 0.3     # logical units the field is smoothed by before differencing
@@ -1499,10 +1527,7 @@ def _deburr(alpha, size):
 
 def _bevel_shading(name, idx, size):
     """Luma to add so a flat wedge reads as bevelled glass."""
-    d = _edge_distance(name, idx)
-    if d.shape[0] != size:
-        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
-                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    d = _edge_distance_at(name, idx, size)
     L = size / V.LOGICAL
     # The field is grown a whole pixel at a time, so it climbs in steps; its
     # gradient turns those steps into a diagonal hatch across the facets, plain
@@ -2114,10 +2139,7 @@ def _edge_shadow_declutter(rgb, name, idx, size):
         return rgb
     if _EDGE_SHADOW_REACH * size / V.LOGICAL < 1.0:
         return rgb
-    d = _edge_distance(name, idx)
-    if d.shape[0] != size:
-        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
-                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    d = _edge_distance_at(name, idx, size)
     band = np.clip(np.minimum(d - _EDGE_SHADOW_D_LO,
                               _EDGE_SHADOW_D_HI - d) / 0.2, 0.0, 1.0)
     mask = _mask(name, idx, size) / 255.0
@@ -2176,10 +2198,7 @@ def _edge_comb(rgb, name, idx, size):
     0.038, Arrow_Down 0.092 -> 0.036)."""
     if name not in _EDGE_COMB_CURSORS:
         return rgb
-    d = _edge_distance(name, idx)
-    if d.shape[0] != size:
-        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
-                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    d = _edge_distance_at(name, idx, size)
     L = size / V.LOGICAL
     # `_fold_keepout` for the same reason `_edge_shadow_declutter` takes it:
     # where the fold runs close to the outline - the tail cutout - averaging
@@ -2582,10 +2601,7 @@ def _freeze_weight(name, idx, size):
     ("внешние дрожания - ничего страшного, главное чтобы слои не дёргались
     внутренние"): the fold, the lit facet and the points' inner fill are all
     further in than _FREEZE_RIM and stay frozen."""
-    d = _edge_distance(name, idx)
-    if d.shape[0] != size:
-        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
-                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    d = _edge_distance_at(name, idx, size)
     hold = np.clip((d - _FREEZE_RIM) / _FREEZE_RIM_FADE, 0.0, 1.0)
     # The fold is the one interior line that runs out to where the glass is
     # thinner than _FREEZE_RIM - it ends in the tail notch - so a release keyed
