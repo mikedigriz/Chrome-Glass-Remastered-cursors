@@ -594,7 +594,163 @@ def straighten_runs(poly, flags, eps, tol=STRAIGHT_TOL, minlen=STRAIGHT_MIN):
     return back
 
 
-def trace_frame(key, eps=0.7):
+# Axes the author drew these cursors symmetric about. Kept here rather than
+# imported because trace.py is upstream of tools/ and must run on its own.
+#
+# A subset of analyze.SYMMETRY, which measures two more. SizeNS and SizeWE are
+# measured but not corrected: averaging their outlines works on the silhouette
+# and lands both on the author's own asymmetry, but it costs the tip. SizeNS
+# reads 0.037 -> 0.021 of tip_contrast at full pull and 0.030 at a third of it,
+# and the loss is entirely in the shading - alpha, silhouette width across the
+# bisector at 0.25/0.5/1.0/2.0 and the tip angle all hold, while the luma under
+# the point goes 112.7 -> 119.3 against a ground of 128. The tip is where the
+# master's dark core is, and moving the outline off it lightens the point
+# without blunting it. That is a render-side coupling, not something the vector
+# can settle.
+SYMMETRY = {"Cross": ("lr", "ud", "t"), "SizeAll": ("lr", "ud", "t"),
+            "IBeam": ("lr", "ud")}
+SYM_PULL = 1.0           # share of the way to the symmetric mean a vertex moves
+SYM_MAX = 1.0            # logical: a vertex further than this from its mirror
+                         # image is not the same feature, and the whole cursor is
+                         # left alone rather than half-averaged into a chimera.
+                         #
+                         # It has to be well clear of the asymmetry itself or it
+                         # refuses exactly the cursors that need the work. The
+                         # mismatch these outlines actually carry is a median of
+                         # 0.07 to 0.50 and a maximum of 0.84, all of it the
+                         # defect; features, meanwhile, sit whole logical units
+                         # apart. At 0.6 this rejected Cross, SizeNS and SizeWE
+                         # outright.
+
+
+def _sym_ops(axes, cx=16.0, cy=16.0):
+    """Close the axes into the group they generate, as (a,b,c,d,e,f) maps.
+
+    The default centre is the frame's, logical 16.0, and that is measured rather
+    than assumed. Sub-pixel search for the offset that minimises the author's own
+    |alpha - mirrored alpha| on his 32px art puts every axis of every cursor in
+    SYMMETRY between 15.40 and 15.60 in pixel coordinates, against a frame centre
+    of 15.50 - within a tenth of a pixel, on ten independent readings.
+
+    Deriving the centre from our own outline instead was tried and is wrong in a
+    way worth recording: the polygon's asymmetry *is* the defect, so its centroid
+    is displaced by roughly half of it, and the area centroid landed 0.13 to 0.34
+    logical units off the author's axis. Symmetrising about that squares the
+    shape up around the wrong line. The mean of the vertices is worse still -
+    vertices crowd where the outline has detail, and it missed by up to 0.9."""
+    gen = {"lr": (-1, 0, 2.0 * cx, 0, 1, 0.0),
+           "ud": (1, 0, 0.0, 0, -1, 2.0 * cy),
+           "t": (0, 1, cx - cy, 1, 0, cy - cx)}
+    ops = {(1, 0, 0.0, 0, 1, 0.0)}
+    frontier = [g for k, g in gen.items() if k in axes]
+    ops.update(frontier)
+    for _ in range(3):                          # D4 closes well inside three
+        grown = set()
+        for a in ops:
+            for b in frontier:
+                grown.add((a[0] * b[0] + a[1] * b[3], a[0] * b[1] + a[1] * b[4],
+                           a[0] * b[2] + a[1] * b[5] + a[2],
+                           a[3] * b[0] + a[4] * b[3], a[3] * b[1] + a[4] * b[4],
+                           a[3] * b[2] + a[4] * b[5] + a[5]))
+        if grown <= ops:
+            break
+        ops |= grown
+    return sorted(ops)
+
+
+def _apply(op, p):
+    a, b, c, d, e, f = op
+    return (a * p[0] + b * p[1] + c, d * p[0] + e * p[1] + f)
+
+
+def _near_seg(p, q0, q1):
+    """Closest point to p on the segment q0-q1."""
+    dx, dy = q1[0] - q0[0], q1[1] - q0[1]
+    n = dx * dx + dy * dy
+    if n < 1e-12:
+        return q0
+    t = max(0.0, min(1.0, ((p[0] - q0[0]) * dx + (p[1] - q0[1]) * dy) / n))
+    return (q0[0] + t * dx, q0[1] + t * dy)
+
+
+def _image_of(p, corner, rings):
+    """Where p lands on the nearest of rings.
+
+    A flagged corner is matched to the nearest flagged corner, everything else
+    to the nearest point on the outline. That distinction is the whole reason
+    this is not just a nearest-point projection: SizeAll's four tips differ by
+    11.5 degrees, and a tip pulled onto the flank of its mirror image instead of
+    onto the mirror tip would average the spread into a smear rather than out of
+    existence."""
+    best, bd = None, float("inf")
+    for pts, fl in rings:
+        if corner:
+            for q, f in zip(pts, fl):
+                if not f:
+                    continue
+                d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2
+                if d < bd:
+                    best, bd = q, d
+        else:
+            m = len(pts)
+            for i in range(m):
+                q = _near_seg(p, pts[i], pts[(i + 1) % m])
+                d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2
+                if d < bd:
+                    best, bd = q, d
+    if best is None:
+        return None, float("inf")
+    return best, math.sqrt(bd)
+
+
+def symmetrize(polys, flags, axes):
+    """Average a cursor's outline with its own reflections.
+
+    The asymmetry this removes is in the vector, not the render: measured with
+    mirror_asym, ours runs about twice the author's own and grows with the size
+    it is drawn at, because rasterising a lopsided outline more finely
+    reproduces the lopsidedness rather than averaging it away. Cross reads 32.6
+    against his 16.1 at 512, IBeam 42.5 against 21.6.
+
+    Unlike straightening, this cannot invent a shape or bridge a curve: every
+    vertex moves toward the mean of where it and its mirror images already are,
+    so a feature the author drew stays, and only the disagreement between its
+    copies goes. Corners are matched corner-to-corner rather than to the nearest
+    point on the outline, so tips are averaged with tips.
+
+    Refuses the whole cursor when any vertex sits further than SYM_MAX from its
+    image. That means the reflection found no counterpart - a genuinely
+    asymmetric detail, or an axis that does not hold - and averaging across it
+    would build a shape the author never drew."""
+    rings = [([(float(x), float(y)) for x, y in p], f)
+             for p, f in zip(polys, flags)]
+    ident = (1, 0, 0.0, 0, 1, 0.0)
+    ops = [o for o in _sym_ops(axes) if o != ident]
+    if not ops:
+        return polys
+    acc = [[[p[0], p[1], 1] for p in pts] for pts, _ in rings]
+    for op in ops:
+        moved = [([_apply(op, q) for q in pts], f) for pts, f in rings]
+        for pi, (pts, fl) in enumerate(rings):
+            for vi, (p, corner) in enumerate(zip(pts, fl)):
+                img, d = _image_of(p, corner, moved)
+                if img is None or d > SYM_MAX:
+                    return polys                # not the same drawing, hands off
+                acc[pi][vi][0] += img[0]
+                acc[pi][vi][1] += img[1]
+                acc[pi][vi][2] += 1
+    out = []
+    for pi, (pts, _) in enumerate(rings):
+        ring = []
+        for vi, p in enumerate(pts):
+            sx, sy, k = acc[pi][vi]
+            ring.append((p[0] + SYM_PULL * (sx / k - p[0]),
+                         p[1] + SYM_PULL * (sy / k - p[1])))
+        out.append(ring)
+    return out
+
+
+def trace_frame(key, eps=0.7, name=None):
     """key like 'cur__Arrow__0' -> {"polys": [...], "_apex": [...]}."""
     im = Image.open(os.path.join(SRC, key + ".png")).convert("RGBA")
     if im.size != (SRC_PX, SRC_PX):
@@ -629,6 +785,11 @@ def trace_frame(key, eps=0.7):
             polys.append(poly)
             corner_flags.append(flags)
             apex_idx.append(apexes)
+
+    # after every component is in hand: the axes of Cross and SizeAll carry one
+    # arm onto another, so the reflection has to see the whole frame at once
+    if name in SYMMETRY and polys:
+        polys = symmetrize(polys, corner_flags, SYMMETRY[name])
 
     return {
         "polys": [[[round(x, 2), round(y, 2), bool(c)] for (x, y), c in zip(poly, flags)]
@@ -690,13 +851,14 @@ def snap_corners(frames):
 def main():
     out = {}
     for name in STATIC:
-        out[name] = {"frames": [trace_frame(f"cur__{name}__0")]}
+        out[name] = {"frames": [trace_frame(f"cur__{name}__0", name=name)]}
         snap_corners(out[name]["frames"])
         fr = out[name]["frames"][0]
         print("traced", name, len(fr["polys"]), "components,",
               sum(len(p) for p in fr["polys"]), "pts")
     for name, n in ANI.items():
-        out[name] = {"frames": [trace_frame(f"ani__{name}__{i}") for i in range(n)]}
+        out[name] = {"frames": [trace_frame(f"ani__{name}__{i}", name=name)
+                                for i in range(n)]}
         snap_corners(out[name]["frames"])
         print("traced", name, "x", n)
     with open(os.path.join(HERE, "traced.json"), "w", encoding="utf-8") as f:
