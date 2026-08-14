@@ -1343,18 +1343,27 @@ def _edge_distance_geom(name, idx):
     fine terracing; differentiating it to light the bevel turns that terracing
     into a speckled crest along the medial ridge - the fold came out as a dotted
     line rather than a drawn one. The distance to a line segment is a closed
-    form, so there is no reason to approximate it."""
+    form, so there is no reason to approximate it.
+
+    Measured to _mask_prims, the same geometry the silhouette is rasterised
+    from. Measuring to the raw traced vertices instead put the zero of this
+    field up to a third of a unit off the edge the mask actually draws, and on
+    SizeAll three quarters of one."""
     size = _BEVEL_REF
     inside = _mask(name, idx, size) > 127
-    polys = C.TRACED[name]["frames"][idx].get("polys") if name in C.TRACED else None
-    if not polys:
+    prims = _mask_prims(name, idx) if name in C.TRACED else ()
+    if not prims:
         return _chamfer(inside) / (size / V.LOGICAL)
     L = size / V.LOGICAL
     ys, xs = np.mgrid[0:size, 0:size]
     px, py = (xs + 0.5) / L, (ys + 0.5) / L
     best = np.full((size, size), np.inf)
-    for poly in polys:
-        pts = np.array([(p[0], p[1]) for p in poly], dtype=np.float64)
+    for kind, geom in prims:
+        if kind == "dot":
+            cx, cy, r = geom
+            best = np.minimum(best, np.abs(np.hypot(px - cx, py - cy) - r))
+            continue
+        pts = np.array([(p[0], p[1]) for p in geom], dtype=np.float64)
         for i in range(len(pts)):
             a, b = pts[i], pts[(i + 1) % len(pts)]
             ab = b - a
