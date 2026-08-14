@@ -1308,6 +1308,21 @@ def _flat(e):
     }
 
 
+_KNOWN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "metrics-known-issues.json")
+
+
+def _known_issues(path):
+    """Accepted numberless complaints, whitespace-normalised for matching.
+
+    Same file and same normalisation build.check_quality uses, so the two gates
+    accept exactly the same set. Missing file means nothing is accepted."""
+    if not path or not os.path.exists(path):
+        return set()
+    with open(path) as fh:
+        return {" ".join(x.split()) for x in json.load(fh).get("accepted", [])}
+
+
 def show(rep, base=None):
     cols = [("drift(L)", "scale_drift", 10, ".3f"), ("dens%", "density", 7, ".2f"),
             ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_contrast", 7, ".3f"),
@@ -1348,6 +1363,9 @@ def main():
     ap.add_argument("--only", metavar="NAME", action="append", help="restrict to these cursors")
     ap.add_argument("--jobs", metavar="N", type=int, default=1,
                     help="cursors to measure in parallel (one process each)")
+    ap.add_argument("--known", metavar="FILE", default=_KNOWN,
+                    help="complaints that carry no number and are already "
+                         "accepted (default: metrics-known-issues.json)")
     args = ap.parse_args()
 
     sizes = LADDER_FAST if args.fast else LADDER_FULL if args.full else LADDER
@@ -1377,10 +1395,26 @@ def main():
 
     if args.check is not None:
         bad, debt = gate(rep, base)
+        # The same subtraction build.check_quality does, for the same reason:
+        # a complaint that carries no number ("this could not be measured at
+        # all") cannot be ratcheted, so it lands in `bad` on every run and would
+        # wedge the gate shut for good. Those are listed in
+        # metrics-known-issues.json with a note on each. Reading it here is what
+        # makes CI and the local build gate say the same thing - without it the
+        # two disagreed, and the workflow that runs this command was red on
+        # exactly the entries build.py had already accepted.
+        known = _known_issues(args.known)
+        accepted = [b for b in bad if " ".join(b.split()) in known]
+        bad = [b for b in bad if " ".join(b.split()) not in known]
         if debt:
             print(f"\ndebt ({len(debt)}) - misses the target, no worse than the baseline")
             for d in debt:
                 print("  " + d)
+        if accepted:
+            print(f"\naccepted ({len(accepted)}) - carried in "
+                  f"{os.path.basename(args.known)}, no number to ratchet")
+            for a in accepted:
+                print("  " + a)
         print()
         if bad:
             print(f"FAIL ({len(bad)})")
