@@ -110,20 +110,38 @@ def _geom(name, idx):
 
 
 @functools.lru_cache(maxsize=None)
-def _mask_geom(name, idx, size):
-    """Crisp silhouette from the traced outline, white on transparent."""
-    fr = C.TRACED[name]["frames"][idx]
-    white = (255, 255, 255, 255)
-    prims = []
-    for poly in fr["polys"]:
+def _mask_prims(name, idx):
+    """The geometry the silhouette is drawn from, as primitives in logical
+    units: ("dot", (cx, cy, r)) or ("poly", points).
+
+    One place derives the contour, and everything that needs to know where the
+    contour is asks here. It used to be derived twice: _mask_geom rounded the
+    small islands and ran C.smooth, while _edge_distance_geom measured to the
+    raw traced vertices. Two routes to one contour, and they disagreed - the
+    distance field read zero up to a third of a logical unit away from where
+    the silhouette actually got drawn, 5 px at 512 and 12 on SizeAll, wandering
+    along the outline. Every band keyed off that field - the bevel rim, the
+    edge shadow, the hole finder - was laid down beside the edge it was meant
+    to sit on."""
+    out = []
+    for poly in C.TRACED[name]["frames"][idx]["polys"]:
         # A small round island is rendered as the circle it is: nine traced
         # vertices read as a circle at 32px and as an octagon at 512.
         if name in C.HELP_ROUND_ISLANDS and len(poly) <= 12:
             got = C._round_island(poly)
             if got is not None:
-                prims.append({"dot": got, "fill": white})
+                out.append(("dot", got))
                 continue
-        prims.append({"poly": C.smooth([tuple(p) for p in poly]), "fill": white})
+        out.append(("poly", tuple(C.smooth([tuple(p) for p in poly]))))
+    return tuple(out)
+
+
+@functools.lru_cache(maxsize=None)
+def _mask_geom(name, idx, size):
+    """Crisp silhouette from the traced outline, white on transparent."""
+    white = (255, 255, 255, 255)
+    prims = [{kind: geom, "fill": white}
+             for kind, geom in _mask_prims(name, idx)]
     img = V.render(prims, size)
     return np.asarray(img, dtype=np.float64)[..., 3]
 
