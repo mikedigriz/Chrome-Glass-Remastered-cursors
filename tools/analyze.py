@@ -433,14 +433,14 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
             lo = max(lo, int(ref[y] - win))
             hi = min(hi, int(ref[y] + win) + 1)
 
-        # At tail junction, aggressive inset can collapse the window to < 3px
-        # This causes tracking to fail or jump to wrong feature. If window is tiny
-        # but the reference exists, loosen the inset instead of rejecting the row.
-        if hi - lo < 3 and ref is not None and not np.isnan(ref[y]):
-            # Loosen inset: reduce by half at this row
-            lo = max(on.min() + ins_lo//2, int(ref[y] - win))
-            hi = min(on.max() - ins_hi//2, int(ref[y] + win) + 1)
-
+        # A row whose window has collapsed used to have its inset halved so it
+        # could be measured anyway. That is the window moving to suit the row it
+        # is measuring, which is rule 1 ("any quantity fitted to the thing being
+        # measured") applied to the instrument instead of the render. It was
+        # added for one row at the tail junction, where the silhouette narrows
+        # from 207px to 196px and there genuinely is no room left between the
+        # rim insets - and where the honest answer is that this row carries no
+        # readable fold, which `min_span` below already says.
         if hi - lo < min_span:
             continue
         seg = lum[y, lo:hi]
@@ -534,7 +534,15 @@ def _chord_ref(name, idx, size):
     rows on Wait, and as Cross, which has no fold at all, reporting one.
     inner_jitter anchors on the cycle's median track, which a static cursor
     does not have. The chord hybrid already derives from the outline does not
-    move at all, and it is the same line the shading is built on."""
+    move at all, and it is the same line the shading is built on.
+
+    A `- 0.5 * L` used to be subtracted here. Its commit message named Arrow but
+    the code was unconditional, so it moved the anchor for `fold_wander`,
+    `fold_jag`, `fold_gap` and `inner_jitter` on all sixteen at once - eight
+    pixels at 512, and leftward, the opposite direction from the master's own
+    measured offset. Half a *pixel* is `- 0.5`; `- 0.5 * L` is half a logical
+    unit. Neither belongs here: `_fold_track` returns `lo + k`, a pixel index
+    into the same grid this builds, so the two conventions already agree."""
     ch = H._fold_chord(name, idx)
     if ch is None:
         return None
@@ -545,7 +553,7 @@ def _chord_ref(name, idx, size):
     ys = (np.arange(size) + 0.5) / L
     ref = np.full(size, np.nan)
     m = (ys >= min(y0, y1)) & (ys <= max(y0, y1))
-    ref[m] = (x0 + (x1 - x0) * (ys[m] - y0) / (y1 - y0)) * L - 0.5 * L
+    ref[m] = (x0 + (x1 - x0) * (ys[m] - y0) / (y1 - y0)) * L
     return ref
 
 
