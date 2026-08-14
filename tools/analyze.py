@@ -38,18 +38,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import hybrid as H  # noqa: E402
 
-LADDER = [32, 48, 64, 96, 128, 256, 384]
-LADDER_FULL = LADDER + [512]
+LADDER = [32, 48, 64, 96, 128, 256, 384, 512]
+LADDER_FULL = LADDER
 LADDER_FAST = [32, 128, 256]       # enough rungs to read a drift, few enough to iterate on
 JITTER_SIZE = 256
 
+# 512 is in the default ladder, and it did not use to be - it sat in a --full
+# variant nobody runs, so the gate was blind at the one size the owner actually
+# looks at. What that hid, measured the day it was let in: NO's fold_jag reads
+# 8.0 over the rungs up to 256 and 42.6 at 512, five times worse; Handwriting's
+# 103.8 against 134.0; Hand's fold_gap 0.250 against 0.625. All three are the
+# fold breaking up at the size the set is judged at, and none of them could fail
+# a gate that stopped at 384.
+#
+# It costs one render per cursor per frame. Measured over the whole set at eight
+# jobs, the full check runs in 2m18s, which is not a reason to keep a blind spot.
+
 # The sizes every geometric defect is looked for at. A cursor is shipped at 15
 # fixed sizes on Windows and at whatever the compositor asks for on Linux, so a
-# seam that only shows at 96 is still a seam. These are all rungs of LADDER
-# already, which is why the sweep costs almost nothing: 512 is the one render
-# it adds, and only under --full.
-VALIDATE_SIZES = (32, 64, 128, 256)
-VALIDATE_SIZES_FULL = VALIDATE_SIZES + (512,)
+# seam that only shows at 96 is still a seam.
+VALIDATE_SIZES = (32, 64, 128, 256, 512)
+VALIDATE_SIZES_FULL = VALIDATE_SIZES
 _JAG_BAND = 2.0            # logical units either side of the fold a step is looked for in
 _DE_NATIVE = 256           # size the colour is judged at, box-averaged 8:1 down to 32
 _FOLD_ROWS = 6             # rows a fold reading needs before it means anything
