@@ -342,38 +342,29 @@ def _prominence(seg, k):
 
 _OVERLAY_SAT = 0.35        # absolute saturation floor an overlay has to clear
 _OVERLAY_RATIO = 8.0       # ...and how many times the glass's own saturation
-_GRADIENT_FALLBACK = True  # use gradient detection when argmin prominence fails
 
-
-def _fold_gradient_peak(seg, ref_offset=None):
-    """Find fold edge as steepest brightness gradient, returns column or None.
-
-    When fold cross-section varies wildly (high jag), darkest pixel criterion
-    becomes unstable. Fold is by definition a transition: find steepest edge.
-    If ref_offset provided, constrain search to ±30% around reference to avoid
-    detecting secondary features (notch, shadow)."""
-    if len(seg) < 3:
-        return None
-
-    grad = np.abs(np.diff(seg))
-    if len(grad) == 0:
-        return None
-
-    k = int(np.argmax(grad))
-    if k <= 0 or k >= len(grad) - 1:
-        return None
-
-    # Reject if peak too far from reference
-    if ref_offset is not None:
-        ref_k = int(ref_offset)
-        search_radius = max(3, int(len(seg) * 0.3))  # 30% of segment, min 3
-        if abs(k - ref_k) > search_radius:
-            return None
-
-    a0, b0, c0 = grad[k-1], grad[k], grad[k+1]
-    den = a0 - 2*b0 + c0
-    offset = 0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0
-    return k + offset
+# A gradient fallback used to run here: where the prominence test said there is
+# no fold in this row, it took the steepest edge in the window instead and wrote
+# that into the track. It is out, on three readings.
+#
+# It defeats the metric it feeds. `fold_gap` is the longest run of *unresolved*
+# rows (see `_longest_run` and `fold_profile`), so filling the rows the
+# prominence test rejected is exactly the case a broken fold reads as a
+# continuous one. `_fold_track`'s own docstring below, PLAN.md 36 and the
+# standing rule "a silent zero is worse than no measurement" all say the same
+# thing: a row with no fold in it has no business being measured.
+#
+# It was also half a sample out. It returned `k` indexed into `np.diff(seg)`,
+# where `grad[k] = seg[k+1] - seg[k]` puts the edge at `k + 0.5`, while every
+# other branch here returns an index into `seg` itself.
+#
+# And the leash meant to contain it was mis-scaled. It read `5.0 * L` with
+# `L = size / 256.0`, documented as "~80px at 512px": it is 10px, eight times
+# tighter than claimed, and tighter than `hybrid._FOLD_CAP` (1.2 logical units)
+# allows the render's own fold to sit from the chord, so it rejected honest rows.
+#
+# If a fallback is ever wanted again it needs a selftest that plants a fold-free
+# stretch and asserts `fold_gap` survives it.
 
 
 def _without_overlay(a, al, lum):
@@ -474,31 +465,14 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
 
         prom = _prominence(seg, k)
         prom_ok = prom >= _FOLD_DEPTH if strict else seg.max() - seg.min() >= _FOLD_DEPTH
-
         if not prom_ok:
-            if _GRADIENT_FALLBACK:
-                ref_offset_in_seg = ref[y] - lo if ref is not None and not np.isnan(ref[y]) else None
-                grad_offset = _fold_gradient_peak(seg, ref_offset_in_seg)
-                if grad_offset is not None:
-                    candidate = lo + grad_offset
-                    # Reject if candidate too far from reference (avoid jumping to secondary features)
-                    if ref is not None and not np.isnan(ref[y]) and abs(candidate - ref[y]) > 5.0 * L:
-                        pass  # Don't add to track
-                    else:
-                        track[y] = candidate
             continue
 
         # Subpixel refinement of the darkest pixel
         a0, b0, c0 = seg[k - 1], seg[k], seg[k + 1]
         den = a0 - 2 * b0 + c0
         k = k + (0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0)
-        candidate = lo + k
-
-        # Reject if candidate too far from reference (avoid jumping to rim or overlay)
-        if ref is not None and not np.isnan(ref[y]) and abs(candidate - ref[y]) > 5.0 * L:
-            pass  # Don't add to track
-        else:
-            track[y] = candidate
+        track[y] = lo + k
     return track
 
 
