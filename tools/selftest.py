@@ -43,6 +43,25 @@ def check(label, ok, detail):
         FAILED.append(label)
 
 
+def repoint():
+    """Drop every cached render, from analyze's frames down to hybrid's own
+    memoised geometry.
+
+    Swept rather than listed by name on purpose. The tests that damage the
+    traced outline need every layer between the polygon and the pixels to
+    forget what it knows, and a hand-written list goes stale silently: adding
+    _mask_prims between _mask_geom and the polygon left the list looking
+    complete while the damage stopped reaching the raster, and the straightness
+    control read the undamaged number and called it a pass. A control that
+    quietly stops controlling is worse than no control."""
+    A._frame_cache.clear()
+    for mod in (H, A):
+        for nm in dir(mod):
+            fn = getattr(mod, nm, None)
+            if hasattr(fn, "cache_clear"):
+                fn.cache_clear()
+
+
 def damaged(name, idx, size, fn):
     """Put a damaged copy of one frame into analyze's cache and hand back a
     restore callable. The cache is the seam every metric here goes through, so
@@ -123,10 +142,21 @@ def test_fold_wander():
 
 
 def test_fold_jag():
-    """Change the section's shape on alternate rows without moving it: deepen
-    the crease on one row, flatten it on the next. Sliding a whole row sideways
+    """Change the section's shape on alternate rows without moving it: a deeper
+    crease on one row, a shallower one on the next. Sliding a whole row sideways
     deliberately does not count here - the profiles are read relative to the
-    track, so a rigid shift is wander's business and not this one's."""
+    track, so a rigid shift is wander's business and not this one's.
+
+    Both factors stay above 1.0, and that is load-bearing. The control used to
+    alternate 1.7 against 0.4, and 0.4 does not make the crease shallow, it
+    erases it: prominence fell under _FOLD_DEPTH and the row left the track
+    altogether. Nineteen of thirty-nine rows went, and with them every adjacent
+    pair the jag reading is built from - so the number the control was reading
+    came from the only pair left, rows 145 and 146, which are past the tail
+    vertex and are the tracker sitting on a neighbouring facet rather than on
+    the fold at all. The control was green on an artefact, and it went red the
+    moment _fold_track stopped following the tracker off the crease. Damage
+    that destroys the track cannot test what the track measures."""
     rows, ref = fold_rows("Arrow", SIZE)
     clean = A.fold_profile("Arrow", 0, SIZE)
     b = max(2, int(round(A._JAG_BAND * SIZE / 32.0)))
@@ -137,7 +167,7 @@ def test_fold_jag():
             lo, hi = max(0, c - b), min(SIZE, c + b + 1)
             seg = a[y, lo:hi, :3]
             a[y, lo:hi, :3] = np.clip(
-                seg.mean() + (seg - seg.mean()) * (1.7 if n % 2 else 0.4), 0, 255)
+                seg.mean() + (seg - seg.mean()) * (1.7 if n % 2 else 1.1), 0, 255)
         return a
 
     restore = damaged("Arrow", 0, SIZE, reshape)
@@ -264,13 +294,6 @@ def test_edge_straight():
     poly = H.C.TRACED[name]["frames"][0]["polys"]
     clean = A.edge_straight(name)
     keep = json.loads(json.dumps(poly))
-
-    def refresh():
-        H._mask_geom.cache_clear()
-        H._edge_distance_geom.cache_clear()
-        H.frame_image.cache_clear()
-        A._frame_cache.clear()
-
     try:
         pts = [np.array(p[:2], dtype=np.float64)
                for p in H.C.smooth([tuple(p) for p in poly[0]])]
@@ -293,14 +316,14 @@ def test_edge_straight():
             s = amp if j % 2 == 0 else -amp
             poly[0][v] = [poly[0][v][0] + t[1] * s,
                           poly[0][v][1] - t[0] * s] + list(poly[0][v][2:])
-        refresh()
+        repoint()
         hurt = A.edge_straight(name)
         check("edge straightness", hurt["max"] > clean["max"] + 0.1,
               f"{clean['max']:.3f} -> {hurt['max']:.3f} logical units "
               f"({run} vertices sawtoothed by {amp:.2f})")
     finally:
         H.C.TRACED[name]["frames"][0]["polys"][:] = keep
-        refresh()
+        repoint()
 
 
 def test_mirror_asym():

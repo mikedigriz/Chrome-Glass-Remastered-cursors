@@ -472,6 +472,29 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
         a0, b0, c0 = seg[k - 1], seg[k], seg[k + 1]
         den = a0 - 2 * b0 + c0
         k = k + (0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0)
+
+        # Past the tail vertex the crease ends and a darker facet begins beside
+        # it, and the window is still wide enough to hold both - so the argmin
+        # walks off the fold onto the neighbour. Looked at on Arrow, Help and
+        # Hand: two to six rows at the very end of each track, always at the
+        # vertex, always on a different feature, and 40 to 90 levels darker than
+        # the fold they left.
+        #
+        # The render cannot put its fold there. H._FOLD_CAP is the most the
+        # renderer may displace the crease from the chord, so a reading further
+        # out than that is not the render's fold whatever it is, and the cap is
+        # taken from the render rather than restated here: a number tuned in
+        # this file would be a number fitted to the rows it is judging.
+        #
+        # This is not the leash removed in the Phase 0 cleanup. That one read
+        # `5.0 * L` with L = size/256, so it was ten pixels at 512 while its
+        # documentation claimed eighty, and it was tighter than the render's own
+        # cap - it clipped honest readings. This one is the render's cap in the
+        # render's units. Measured over all 92 tracks the split is clean:
+        # everything the fold does sits under 0.25 logical units of the chord,
+        # every excursion is 1.07 or beyond, and nothing lands between.
+        if ref is not None and abs((lo + k) - ref[y]) > H._FOLD_CAP * size / 32.0:
+            continue
         track[y] = lo + k
     return track
 
