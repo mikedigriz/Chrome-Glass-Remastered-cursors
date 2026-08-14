@@ -345,11 +345,13 @@ _OVERLAY_RATIO = 8.0       # ...and how many times the glass's own saturation
 _GRADIENT_FALLBACK = True  # use gradient detection when argmin prominence fails
 
 
-def _fold_gradient_peak(seg):
+def _fold_gradient_peak(seg, ref_offset=None):
     """Find fold edge as steepest brightness gradient, returns column or None.
 
     When fold cross-section varies wildly (high jag), darkest pixel criterion
-    becomes unstable. Fold is by definition a transition: find steepest edge."""
+    becomes unstable. Fold is by definition a transition: find steepest edge.
+    If ref_offset provided, constrain search to ±30% around reference to avoid
+    detecting secondary features (notch, shadow)."""
     if len(seg) < 3:
         return None
 
@@ -360,6 +362,13 @@ def _fold_gradient_peak(seg):
     k = int(np.argmax(grad))
     if k <= 0 or k >= len(grad) - 1:
         return None
+
+    # Reject if peak too far from reference
+    if ref_offset is not None:
+        ref_k = int(ref_offset)
+        search_radius = max(3, int(len(seg) * 0.3))  # 30% of segment, min 3
+        if abs(k - ref_k) > search_radius:
+            return None
 
     a0, b0, c0 = grad[k-1], grad[k], grad[k+1]
     den = a0 - 2*b0 + c0
@@ -432,6 +441,15 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
                 continue
             lo = max(lo, int(ref[y] - win))
             hi = min(hi, int(ref[y] + win) + 1)
+
+        # At tail junction, aggressive inset can collapse the window to < 3px
+        # This causes tracking to fail or jump to wrong feature. If window is tiny
+        # but the reference exists, loosen the inset instead of rejecting the row.
+        if hi - lo < 3 and ref is not None and not np.isnan(ref[y]):
+            # Loosen inset: reduce by half at this row
+            lo = max(on.min() + ins_lo//2, int(ref[y] - win))
+            hi = min(on.max() - ins_hi//2, int(ref[y] + win) + 1)
+
         if hi - lo < min_span:
             continue
         seg = lum[y, lo:hi]
@@ -459,15 +477,28 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
 
         if not prom_ok:
             if _GRADIENT_FALLBACK:
-                grad_offset = _fold_gradient_peak(seg)
+                ref_offset_in_seg = ref[y] - lo if ref is not None and not np.isnan(ref[y]) else None
+                grad_offset = _fold_gradient_peak(seg, ref_offset_in_seg)
                 if grad_offset is not None:
-                    track[y] = lo + grad_offset
+                    candidate = lo + grad_offset
+                    # Reject if candidate too far from reference (avoid jumping to secondary features)
+                    if ref is not None and not np.isnan(ref[y]) and abs(candidate - ref[y]) > 5.0 * L:
+                        pass  # Don't add to track
+                    else:
+                        track[y] = candidate
             continue
 
+        # Subpixel refinement of the darkest pixel
         a0, b0, c0 = seg[k - 1], seg[k], seg[k + 1]
         den = a0 - 2 * b0 + c0
         k = k + (0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0)
-        track[y] = lo + k
+        candidate = lo + k
+
+        # Reject if candidate too far from reference (avoid jumping to rim or overlay)
+        if ref is not None and not np.isnan(ref[y]) and abs(candidate - ref[y]) > 5.0 * L:
+            pass  # Don't add to track
+        else:
+            track[y] = candidate
     return track
 
 
