@@ -1319,6 +1319,11 @@ def edge_straight(name, idx=0, size=_RIM_SIZE, get=frame):
 # genuinely asymmetric are the control: Help and UpArrow score ~100 on both his
 # art and ours, and the gap between the two stays near nil, which is how this
 # was confirmed to be measuring a defect rather than an axis.
+#
+# Wider than trace.SYMMETRY on purpose: SizeNS and SizeWE are measured but not
+# corrected, because averaging their outlines costs the tip more than the
+# symmetry is worth. Keeping them here keeps that debt on the report instead of
+# out of sight. See DEAD_ENDS.md.
 SYMMETRY = {"Cross": ("lr", "ud", "t"), "SizeAll": ("lr", "ud", "t"),
             "IBeam": ("lr", "ud"), "SizeNS": ("lr", "ud"), "SizeWE": ("lr", "ud")}
 
