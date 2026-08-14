@@ -342,6 +342,29 @@ def _prominence(seg, k):
 
 _OVERLAY_SAT = 0.35        # absolute saturation floor an overlay has to clear
 _OVERLAY_RATIO = 8.0       # ...and how many times the glass's own saturation
+_GRADIENT_FALLBACK = True  # use gradient detection when argmin prominence fails
+
+
+def _fold_gradient_peak(seg):
+    """Find fold edge as steepest brightness gradient, returns column or None.
+
+    When fold cross-section varies wildly (high jag), darkest pixel criterion
+    becomes unstable. Fold is by definition a transition: find steepest edge."""
+    if len(seg) < 3:
+        return None
+
+    grad = np.abs(np.diff(seg))
+    if len(grad) == 0:
+        return None
+
+    k = int(np.argmax(grad))
+    if k <= 0 or k >= len(grad) - 1:
+        return None
+
+    a0, b0, c0 = grad[k-1], grad[k], grad[k+1]
+    den = a0 - 2*b0 + c0
+    offset = 0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0
+    return k + offset
 
 
 def _without_overlay(a, al, lum):
@@ -412,10 +435,13 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
         if hi - lo < min_span:
             continue
         seg = lum[y, lo:hi]
-        k = int(np.argmin(seg))
         # A window that is all overlay has no glass left to read a fold in, and
         # an infinity anywhere in `seg` would defeat both depth tests below.
-        if not np.isfinite(seg[k]) or not np.isfinite(seg).all():
+        if not np.isfinite(seg).all():
+            continue
+
+        k = int(np.argmin(seg))
+        if not np.isfinite(seg[k]):
             continue
         # A row with no fold in it has no business being measured: where the
         # glass is flat the minimum lands on whichever end of the search window
@@ -427,11 +453,17 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
         # where the old rule was right to give up.
         if k in (0, len(seg) - 1):
             continue
-        if strict and _prominence(seg, k) < _FOLD_DEPTH:
+
+        prom = _prominence(seg, k)
+        prom_ok = prom >= _FOLD_DEPTH if strict else seg.max() - seg.min() >= _FOLD_DEPTH
+
+        if not prom_ok:
+            if _GRADIENT_FALLBACK:
+                grad_offset = _fold_gradient_peak(seg)
+                if grad_offset is not None:
+                    track[y] = lo + grad_offset
             continue
-        if not strict and seg.max() - seg.min() < _FOLD_DEPTH:
-            continue
-        # sub-pixel: parabolic fit through the minimum and its neighbours
+
         a0, b0, c0 = seg[k - 1], seg[k], seg[k + 1]
         den = a0 - 2 * b0 + c0
         k = k + (0.5 * (a0 - c0) / den if abs(den) > 1e-6 else 0.0)
@@ -508,7 +540,7 @@ def _chord_ref(name, idx, size):
     ys = (np.arange(size) + 0.5) / L
     ref = np.full(size, np.nan)
     m = (ys >= min(y0, y1)) & (ys <= max(y0, y1))
-    ref[m] = (x0 + (x1 - x0) * (ys[m] - y0) / (y1 - y0)) * L
+    ref[m] = (x0 + (x1 - x0) * (ys[m] - y0) / (y1 - y0)) * L - 0.5 * L
     return ref
 
 
