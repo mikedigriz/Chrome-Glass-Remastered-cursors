@@ -2800,7 +2800,6 @@ def frame_image(name, idx, size):
     rgb = _edge_comb(rgb, name, idx, size)
     rgb = _notch_declutter(rgb, name, idx, size)
     rgb = _notch_from_author(rgb, name, idx, size)
-    rgb = _smooth_along_fold(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #
