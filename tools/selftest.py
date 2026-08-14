@@ -20,6 +20,7 @@ so it is one render of each rather than a sweep.
 """
 
 import json
+import math
 import os
 import sys
 
@@ -343,11 +344,47 @@ def test_mirror_asym():
         restore()
 
 
+def test_straighten_runs():
+    """Sawtooth a straight edge, then check trace's pass takes it back out.
+
+    The other tests here plant a defect and require a metric to see it. This one
+    plants the same defect one stage earlier, in the vector, and requires the
+    stage that exists to remove it to actually remove it - and, just as
+    importantly, to leave the two anchors exactly where they were. A pass that
+    straightens a corner away would score beautifully on this and be useless."""
+    import trace as T                                   # noqa: E402
+    eps = 0.7 / 4.0
+    n = 12
+    # One straight edge the way a cursor actually holds one: a flagged corner at
+    # each end, both sitting on the line, and the vertices between them sawing
+    # across it. The corners have to be on the line or no run can start at one,
+    # and then the first and last sawtooth vertex stay where they are - which is
+    # correct behaviour on a real bend and useless as a fixture.
+    saw = [(3.0 + k, 8.0 + (eps * 0.9 if k % 2 else -eps * 0.9))
+           for k in range(n)]
+    poly = [(2.0, 8.0)] + saw + [(15.0, 8.0), (8.0, 2.0)]
+    flags = [True] + [False] * n + [True, True]
+    out = T.straighten_runs(list(poly), flags, eps)
+    before = max(abs(p[1] - 8.0) for p in poly[1:1 + n])
+    after = max(abs(p[1] - 8.0) for p in out[1:1 + n])
+    moved = max(math.hypot(a[0] - b[0], a[1] - b[1])
+                for a, b in ((poly[0], out[0]), (poly[n + 1], out[n + 1]),
+                             (poly[n + 2], out[n + 2])))
+    # not to zero: a finite run of alternating samples has a small net tilt, and
+    # the fit follows it, which is what fitting the data rather than assuming the
+    # answer looks like
+    check("straighten removes the sawtooth", after < 0.25 * before,
+          f"{before:.3f} -> {after:.3f} logical units off the line")
+    check("straighten pins the anchors", moved < 1e-9,
+          f"corner moved {moved:.2e} logical units")
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_delta_e, test_fold_unmeasured,
-              test_rim_layers, test_edge_straight, test_mirror_asym):
+              test_rim_layers, test_edge_straight, test_mirror_asym,
+              test_straighten_runs):
         t()
     print()
     if FAILED:

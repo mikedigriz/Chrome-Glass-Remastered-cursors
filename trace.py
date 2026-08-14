@@ -349,6 +349,251 @@ def _components(mask, min_px):
     return out
 
 
+STRAIGHT_TOL = 2.5       # multiples of the simplifier's own eps a run may bow.
+                         #
+                         # Derived, not tuned. The run test measures each vertex
+                         # against the chord between the run's two endpoints, and
+                         # all three are samples of the same sawtooth: the
+                         # interior may sit eps off the true line, and so may
+                         # each endpoint, which tilts the chord as well. A
+                         # genuinely straight edge therefore reads up to about
+                         # 2 eps off its own chord before sharpen_corners has
+                         # nudged anything, so anything under that must still be
+                         # admitted as straight.
+                         #
+                         # The ceiling is measured, from a source the render
+                         # never touches: the distance from each polygon vertex
+                         # to the dense 128px boundary chain, which is what the
+                         # master actually draws. Straightening moves the mean of
+                         # that distance up to the staircase's own half-pixel
+                         # scale and no further, which is simply what a straight
+                         # line through a staircase costs; the number that says
+                         # whether a span swallowed a bend is the per-cursor
+                         # maximum. Through 2.5 eps not one of those maxima moves
+                         # at all, on any cursor. At 3 they start (IBeam 0.266 ->
+                         # 0.304, Cross -> 0.366 at 3.4) and edge_straight's own
+                         # worst window goes backwards on three cursors, both
+                         # symptoms of a span being called straight over a bend.
+                         # 2.5 is the last value that is free: it takes Cross's
+                         # wander at 512 from 0.147 rms to 0.033 and costs
+                         # nothing measurable anywhere.
+STRAIGHT_MIN = 4         # vertices a run needs before it is worth fitting
+
+
+def _chord_off(pts, i, j):
+    """Largest perpendicular distance from pts[i..j] to the chord i->j."""
+    a, b = pts[i], pts[j]
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    n = math.hypot(dx, dy)
+    if n < 1e-9:
+        return float("inf")
+    ux, uy = dx / n, dy / n
+    return max(abs((p[0] - a[0]) * (-uy) + (p[1] - a[1]) * ux)
+               for p in pts[i:j + 1])
+
+
+STRAIGHT_BALANCE = 0.4   # how evenly a run's vertices must straddle their own
+                         # chord, as the lighter side's share of the heavier one.
+                         #
+                         # This is the defect's own definition used as the test
+                         # for it. The sawtooth is vertices alternating either
+                         # side of the line they belong on, so it puts the same
+                         # mass on both sides of the chord and this reads near 1.
+                         # A genuine arc has every vertex on one side and reads
+                         # near 0 - and straightening one does not tidy an edge,
+                         # it bridges the curve and puts outline where the art
+                         # has none.
+                         #
+                         # Which is not hypothetical. Without this, Cross and
+                         # IBeam lost 0.017 and 0.015 of silhouette IoU against
+                         # the author's own 32px art, because their arms are
+                         # drawn slightly concave and a straight line across a
+                         # concave arm sits outside every pixel of it. Nothing
+                         # else in the pass could see that: the chord test only
+                         # asks how far, never which side, and Douglas-Peucker
+                         # splitting an arc in two just gives two chords that
+                         # each bridge half of it.
+STRAIGHT_MAX_SEG = 2     # straight pieces a span between two corners may hold.
+                         # Two is an edge with one bend in it, which this art has
+                         # plenty of. More than two and the span is a curve, and
+                         # cutting a curve into straight pieces is how you
+                         # polygonise it.
+STRAIGHT_TIP_DEG = 100.0  # interior angle above which a corner is a joint rather
+                          # than a point. Straightening never moves a corner, but
+                          # it moves both of its neighbours, and this angle is
+                          # what decides which of the two the corner is: the
+                          # first version tightened a Handwriting joint from 110
+                          # to 97 degrees and the cursor grew a third tip, which
+                          # the topology check caught. So a span is put back
+                          # whenever straightening it would carry either end
+                          # across this line. Guarding the size of the change
+                          # instead was tried and is the wrong shape - a few
+                          # degrees is normal and harmless everywhere except at
+                          # this one boundary, so a threshold on it either reverts
+                          # everything or protects nothing.
+
+
+def _dp_breaks(pts, a, b, tol):
+    """Douglas-Peucker breakpoints of pts[a..b], the ends included.
+
+    Same rule the simplifier upstream runs on, for the same reason: the vertex
+    that departs furthest from the chord is where the edge actually bends, so a
+    seam put there lands on a feature instead of on an arbitrary vertex of a
+    slow curve."""
+    if b - a < 2 or _chord_off(pts, a, b) <= tol:
+        return [a, b]
+    p, q = pts[a], pts[b]
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    n = math.hypot(dx, dy) or 1e-9
+    ux, uy = dx / n, dy / n
+    k = max(range(a + 1, b),
+            key=lambda i: abs((pts[i][0] - p[0]) * (-uy)
+                              + (pts[i][1] - p[1]) * ux))
+    return _dp_breaks(pts, a, k, tol)[:-1] + _dp_breaks(pts, k, b, tol)
+
+
+def _angle_at(pts, i, n):
+    """Interior angle at vertex i of a closed ring, in degrees."""
+    v, p, q = pts[i % n], pts[(i - 1) % n], pts[(i + 1) % n]
+    a1 = math.atan2(p[1] - v[1], p[0] - v[0])
+    a2 = math.atan2(q[1] - v[1], q[0] - v[0])
+    return abs(math.degrees((a2 - a1 + math.pi) % (2 * math.pi) - math.pi))
+
+
+def _balance(pts, i, j):
+    """How evenly pts[i..j] straddles its own chord: 0 all one side, 1 even.
+
+    Measured against the chord and not against the fitted line, which was the
+    first attempt and reads 1 for everything - total least squares centres its
+    own residuals by construction, so an arc balances about its fit as neatly as
+    a sawtooth does. The chord has no such property: an arc bows entirely to one
+    side of it, which is what an arc is."""
+    a, b = pts[i], pts[j]
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    n = math.hypot(dx, dy)
+    if n < 1e-9:
+        return 0.0
+    ux, uy = dx / n, dy / n
+    pos = neg = 0.0
+    for p in pts[i + 1:j]:
+        s = (p[0] - a[0]) * (-uy) + (p[1] - a[1]) * ux
+        if s > 0:
+            pos += s
+        else:
+            neg -= s
+    hi = max(pos, neg)
+    return min(pos, neg) / hi if hi > 1e-9 else 0.0
+
+
+def _tls_line(run):
+    """Centroid and direction of the total-least-squares line through run.
+
+    Orthogonal, not y on x: these edges run in every direction, vertical ones
+    included, and a fit of y on x has no answer for those."""
+    cx = sum(p[0] for p in run) / len(run)
+    cy = sum(p[1] for p in run) / len(run)
+    sxx = sum((p[0] - cx) ** 2 for p in run)
+    syy = sum((p[1] - cy) ** 2 for p in run)
+    sxy = sum((p[0] - cx) * (p[1] - cy) for p in run)
+    ang = 0.5 * math.atan2(2.0 * sxy, sxx - syy)
+    return cx, cy, math.cos(ang), math.sin(ang)
+
+
+def straighten_runs(poly, flags, eps, tol=STRAIGHT_TOL, minlen=STRAIGHT_MIN):
+    """Sit the interior vertices of a straight run on the line they are meant to
+    be on.
+
+    Douglas-Peucker keeps every vertex within `eps` of the chain it is
+    simplifying, and does so vertex by vertex, so a straight edge comes back as
+    a run of vertices alternating either side of the line the author drew - each
+    one legal, the run as a whole a sawtooth. `C.smooth` in the renderer then
+    turns that sawtooth into a slower S-curve rather than removing it, which is
+    why the wander grows with the size the cursor is drawn at instead of
+    averaging out. Measured with edge_straight in tools/analyze.py: up to 0.624
+    logical units on SizeAll, 0.467 on IBeam, 0.444 on Help, which at 512 is ten
+    pixels of visible waviness on edges that should be dead straight.
+
+    This is not smoothing. Every vertex moves *along* its own run's fitted line
+    and nowhere else, so nothing is rounded off and no detail is averaged away.
+    The fit is orthogonal (total least squares) rather than y-on-x, because
+    these edges run in every direction including vertical.
+
+    Two things are never touched. A vertex carrying the corner flag is an
+    anchor: it does not move, so a tip stays exactly where corner_curvature and
+    sharpen_corners put it. And a polygon with no flagged corner at all is left
+    alone entirely - that is a drawn circle, Help's dot or SizeAll's hole, and it
+    has no straight edge to assert.
+
+    The one way a pass that only moves points along a line can still invent a
+    feature is at the seam between two of those lines, and the first version did
+    exactly that: it walked runs greedily and stopped wherever the chord test
+    failed, so one stretch of a slow curve got fitted to a line while its
+    neighbour stayed curved, and the smooth bend between them came out a corner.
+    Not theoretical - it grew Handwriting frame 6 a third tip, and the topology
+    check caught it.
+
+    So the work is done span by span, between one flagged corner and the next,
+    and a span is cut only at its own Douglas-Peucker breakpoints - the vertices
+    that depart furthest from their chord, which is where the edge bends. A span
+    that needs more than STRAIGHT_MAX_SEG pieces is a curve and is left alone
+    entirely.
+
+    Then each piece has to look like the defect before it is treated as the
+    defect: its vertices must straddle the fitted line, per STRAIGHT_BALANCE.
+    An arc's vertices all sit on one side, and a line drawn across an arc puts
+    outline where the artwork has none.
+
+    The other half of the story is the corner itself. It never moves, but both
+    its neighbours do, and the angle between them is what decides whether the
+    corner is a point - so the whole span is put back if straightening it would
+    carry either end across STRAIGHT_TIP_DEG.
+
+    A greedy walk that stopped wherever the chord test failed was tried first
+    and is wrong: it fitted one stretch of a slow curve to a line, left its
+    neighbour curved, and the smooth bend between them came out a corner."""
+    n = len(poly)
+    if n < minlen + 2 or not any(flags):
+        return poly
+    tol = tol * eps
+    pts = [(float(x), float(y)) for x, y in poly]
+    # Start the walk on a corner so no span has to wrap the seam.
+    s = flags.index(True)
+    order = [(s + k) % n for k in range(n)]
+    seq = [pts[i] for i in order]
+    fl = [flags[i] for i in order]
+    out = list(seq)
+    seq.append(seq[0])                      # close the ring: index n is anchor 0
+    fl.append(True)
+    bounds = [k for k in range(n + 1) if fl[k]]
+    for a, b in zip(bounds, bounds[1:]):
+        if b - a + 1 < minlen:
+            continue
+        cuts = _dp_breaks(seq, a, b, tol)
+        if len(cuts) - 1 > STRAIGHT_MAX_SEG:
+            continue                        # a curve, not an edge with a bend
+        span = list(range(a, min(b + 1, n)))
+        was = [_angle_at(out, k, n) for k in (a, b)]
+        keep = [out[k] for k in span]
+        for u, v in zip(cuts, cuts[1:]):
+            if v - u + 1 < minlen:
+                continue
+            if _balance(seq, u, v) < STRAIGHT_BALANCE:
+                continue                    # an arc, and flattening one inflates
+            cx, cy, ux, uy = _tls_line(seq[u:v + 1])
+            for k in range(u + 1, min(v, n)):   # breakpoints stay put
+                t = (seq[k][0] - cx) * ux + (seq[k][1] - cy) * uy
+                out[k] = (cx + t * ux, cy + t * uy)
+        now = [_angle_at(out, k, n) for k in (a, b)]
+        if any((w > STRAIGHT_TIP_DEG) != (m > STRAIGHT_TIP_DEG)
+               for w, m in zip(was, now)):
+            for k, p in zip(span, keep):        # the corner would stop reading
+                out[k] = p                      # as the corner it is
+    back = [None] * n
+    for k, idx in enumerate(order):
+        back[idx] = out[k]
+    return back
+
+
 def trace_frame(key, eps=0.7):
     """key like 'cur__Arrow__0' -> {"polys": [...], "_apex": [...]}."""
     im = Image.open(os.path.join(SRC, key + ".png")).convert("RGBA")
@@ -376,6 +621,11 @@ def trace_frame(key, eps=0.7):
             poly = poly[:-1]
         if len(poly) >= 3:
             poly, flags, apexes = sharpen_corners(poly, chain, raw_flags, eps / 4.0)
+            anchors = list(flags)
+            for a in apexes:                # a reconstructed apex is an anchor too
+                if 0 <= a < len(anchors):
+                    anchors[a] = True
+            poly = straighten_runs(poly, anchors, eps / 4.0)
             polys.append(poly)
             corner_flags.append(flags)
             apex_idx.append(apexes)
