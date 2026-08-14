@@ -53,6 +53,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.12924259900038446,
   "tip_contrast_orig": 0.08381904395745228,
+  "rim_layers": {
+   "share": 0.7571428571428571,
+   "per_station": 1.1214285714285714,
+   "depth": 18.1548295335774,
+   "stations": 280
+  },
+  "rim_layers_orig": {
+   "share": 0.04838709677419355,
+   "per_station": 0.04838709677419355,
+   "stations": 248
+  },
+  "edge_straight": {
+   "max": 0.324931073950741,
+   "p95": 0.2990431389292642,
+   "rms": 0.11828489071603118,
+   "windows": 218
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.25,
@@ -172,6 +191,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.09348199410483148,
   "tip_contrast_orig": 0.08785851595540178,
+  "rim_layers": {
+   "share": 0.7964285714285714,
+   "per_station": 1.457142857142857,
+   "depth": 12.462595672322495,
+   "stations": 280
+  },
+  "rim_layers_orig": {
+   "share": 0.11693548387096774,
+   "per_station": 0.11693548387096774,
+   "stations": 248
+  },
+  "edge_straight": {
+   "max": 0.324931073950741,
+   "p95": 0.2990431389292642,
+   "rms": 0.11828489071603118,
+   "windows": 218
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.5,
@@ -291,6 +329,40 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.05298474945533767,
   "tip_contrast_orig": 0.030449826989619438,
+  "rim_layers": {
+   "share": 0.06909090909090909,
+   "per_station": 0.07272727272727272,
+   "depth": 7.05193798769136,
+   "stations": 275
+  },
+  "rim_layers_orig": {
+   "share": 0.11304347826086956,
+   "per_station": 0.11304347826086956,
+   "stations": 115
+  },
+  "edge_straight": {
+   "max": 0.21504306046896954,
+   "p95": 0.20484831575921783,
+   "rms": 0.14692963031025677,
+   "windows": 61
+  },
+  "mirror_asym": {
+   "native": {
+    "lr": 24.10112359550562,
+    "ud": 23.044444444444444,
+    "t": 33.79545454545455
+   },
+   "large": {
+    "lr": 32.59657739633957,
+    "ud": 29.713132795304475,
+    "t": 43.043856854624615
+   }
+  },
+  "mirror_asym_orig": {
+   "lr": 16.12,
+   "ud": 16.555555555555557,
+   "t": 28.26
+  },
   "multiscale": {
    "worst": {
     "gap": 0.0,
@@ -382,6 +454,25 @@
   "tip_convergence_orig": 5.800000000000002,
   "tip_contrast": 0.15940535691400742,
   "tip_contrast_orig": 0.07979495066000258,
+  "rim_layers": {
+   "share": 0.44551282051282054,
+   "per_station": 0.5544871794871795,
+   "depth": 9.448108458517519,
+   "stations": 312
+  },
+  "rim_layers_orig": {
+   "share": 0.04918032786885246,
+   "per_station": 0.04918032786885246,
+   "stations": 244
+  },
+  "edge_straight": {
+   "max": 0.44379203519806104,
+   "p95": 0.2942338091138173,
+   "rms": 0.11871413750851352,
+   "windows": 186
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.125,
@@ -483,6 +574,37 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.07020376778162246,
   "tip_contrast_orig": 0.030188389081122608,
+  "rim_layers": {
+   "share": 0.31386861313868614,
+   "per_station": 0.40875912408759124,
+   "depth": 7.866907016122513,
+   "stations": 137
+  },
+  "rim_layers_orig": {
+   "share": 0.07777777777777778,
+   "per_station": 0.07777777777777778,
+   "stations": 90
+  },
+  "edge_straight": {
+   "max": 0.46677334807255516,
+   "p95": 0.2255287799840935,
+   "rms": 0.17914284213796236,
+   "windows": 45
+  },
+  "mirror_asym": {
+   "native": {
+    "lr": 28.82,
+    "ud": 9.9375
+   },
+   "large": {
+    "lr": 42.543875602437026,
+    "ud": 16.259580894846138
+   }
+  },
+  "mirror_asym_orig": {
+   "lr": 21.610169491525422,
+   "ud": 10.45
+  },
   "multiscale": {
    "worst": {
     "gap": 0.0,
@@ -574,6 +696,40 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.042916826861463496,
   "tip_contrast_orig": 0.03321799307958477,
+  "rim_layers": {
+   "share": 0.041666666666666664,
+   "per_station": 0.06666666666666667,
+   "depth": 7.451657695438459,
+   "stations": 240
+  },
+  "rim_layers_orig": {
+   "share": 0.05405405405405406,
+   "per_station": 0.05405405405405406,
+   "stations": 185
+  },
+  "edge_straight": {
+   "max": 0.6237751764804328,
+   "p95": 0.5733344106728447,
+   "rms": 0.3340955217485575,
+   "windows": 180
+  },
+  "mirror_asym": {
+   "native": {
+    "lr": 24.46153846153846,
+    "ud": 29.67391304347826,
+    "t": 34.355555555555554
+   },
+   "large": {
+    "lr": 25.64791646143237,
+    "ud": 27.646730964959048,
+    "t": 38.84647098032439
+   }
+  },
+  "mirror_asym_orig": {
+   "lr": 14.621052631578948,
+   "ud": 14.885416666666666,
+   "t": 26.989583333333332
+  },
   "multiscale": {
    "worst": {
     "gap": 0.25,
@@ -684,6 +840,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.07344867358708196,
   "tip_contrast_orig": 0.02698449314366271,
+  "rim_layers": {
+   "share": 0.1277533039647577,
+   "per_station": 0.14537444933920704,
+   "depth": 8.062083871801835,
+   "stations": 227
+  },
+  "rim_layers_orig": {
+   "share": 0.06756756756756757,
+   "per_station": 0.06756756756756757,
+   "stations": 148
+  },
+  "edge_straight": {
+   "max": 0.6208626560642807,
+   "p95": 0.5351125441166369,
+   "rms": 0.22302751962619913,
+   "windows": 124
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.0,
@@ -775,6 +950,37 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.03947199794950663,
   "tip_contrast_orig": 0.04229142637447134,
+  "rim_layers": {
+   "share": 0.027624309392265192,
+   "per_station": 0.03867403314917127,
+   "depth": 7.7159629588488485,
+   "stations": 181
+  },
+  "rim_layers_orig": {
+   "share": 0.12295081967213115,
+   "per_station": 0.12295081967213115,
+   "stations": 122
+  },
+  "edge_straight": {
+   "max": 0.5562743803887522,
+   "p95": 0.3514252701685846,
+   "rms": 0.193028329136586,
+   "windows": 74
+  },
+  "mirror_asym": {
+   "native": {
+    "lr": 34.75409836065574,
+    "ud": 6.8474576271186445
+   },
+   "large": {
+    "lr": 45.55691519635743,
+    "ud": 12.202889733840305
+   }
+  },
+  "mirror_asym_orig": {
+   "lr": 27.651515151515152,
+   "ud": 4.234375
+  },
   "multiscale": {
    "worst": {
     "gap": 0.0,
@@ -866,6 +1072,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.05741381519928235,
   "tip_contrast_orig": 0.03395617070357554,
+  "rim_layers": {
+   "share": 0.03896103896103896,
+   "per_station": 0.03896103896103896,
+   "depth": 7.634512331496669,
+   "stations": 231
+  },
+  "rim_layers_orig": {
+   "share": 0.027777777777777776,
+   "per_station": 0.027777777777777776,
+   "stations": 144
+  },
+  "edge_straight": {
+   "max": 0.48766095063636705,
+   "p95": 0.3996334133630548,
+   "rms": 0.1809752422963622,
+   "windows": 123
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.0,
@@ -957,6 +1182,37 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.0909803921568627,
   "tip_contrast_orig": 0.035524798154555955,
+  "rim_layers": {
+   "share": 0.0546448087431694,
+   "per_station": 0.07650273224043716,
+   "depth": 7.591568933083048,
+   "stations": 183
+  },
+  "rim_layers_orig": {
+   "share": 0.15966386554621848,
+   "per_station": 0.15966386554621848,
+   "stations": 119
+  },
+  "edge_straight": {
+   "max": 0.48714625815007523,
+   "p95": 0.33830599080357165,
+   "rms": 0.18742634069112687,
+   "windows": 74
+  },
+  "mirror_asym": {
+   "native": {
+    "lr": 11.016949152542374,
+    "ud": 24.310344827586206
+   },
+   "large": {
+    "lr": 15.309987320056686,
+    "ud": 32.25646535753983
+   }
+  },
+  "mirror_asym_orig": {
+   "lr": 3.9393939393939394,
+   "ud": 27.19402985074627
+  },
   "multiscale": {
    "worst": {
     "gap": 0.0,
@@ -1048,6 +1304,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.0488888888888889,
   "tip_contrast_orig": 0.08482891195693962,
+  "rim_layers": {
+   "share": 0.8357142857142857,
+   "per_station": 0.9857142857142858,
+   "depth": 16.49344048510328,
+   "stations": 280
+  },
+  "rim_layers_orig": {
+   "share": 0.056451612903225805,
+   "per_station": 0.056451612903225805,
+   "stations": 248
+  },
+  "edge_straight": {
+   "max": 0.324931073950741,
+   "p95": 0.2990431389292642,
+   "rms": 0.11828489071603118,
+   "windows": 218
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 1.25,
@@ -1158,6 +1433,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.11138280148660772,
   "tip_contrast_orig": 0.06867102396514162,
+  "rim_layers": {
+   "share": 1.0,
+   "per_station": 2.525,
+   "depth": 30.387947605805014,
+   "stations": 280
+  },
+  "rim_layers_orig": {
+   "share": 0.6370967741935484,
+   "per_station": 0.6370967741935484,
+   "stations": 248
+  },
+  "edge_straight": {
+   "max": 0.324931073950741,
+   "p95": 0.2990431389292642,
+   "rms": 0.11828489071603118,
+   "windows": 218
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.0,
@@ -1280,6 +1574,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.06165833653722922,
   "tip_contrast_orig": 0.08381904395745228,
+  "rim_layers": {
+   "share": 0.6678571428571428,
+   "per_station": 1.0178571428571428,
+   "depth": 13.190605510476923,
+   "stations": 280
+  },
+  "rim_layers_orig": {
+   "share": 0.04838709677419355,
+   "per_station": 0.04838709677419355,
+   "stations": 248
+  },
+  "edge_straight": {
+   "max": 0.324931073950741,
+   "p95": 0.2990431389292642,
+   "rms": 0.11828489071603118,
+   "windows": 218
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.25,
@@ -1603,6 +1916,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.2424708445469691,
   "tip_contrast_orig": 0.05872100474176599,
+  "rim_layers": {
+   "share": 0.7553191489361702,
+   "per_station": 1.4432624113475176,
+   "depth": 20.693717386614672,
+   "stations": 282
+  },
+  "rim_layers_orig": {
+   "share": 0.15261044176706828,
+   "per_station": 0.15261044176706828,
+   "stations": 249
+  },
+  "edge_straight": {
+   "max": 0.32934792083331377,
+   "p95": 0.298610292298846,
+   "rms": 0.12030972503515094,
+   "windows": 219
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 1.75,
@@ -1790,6 +2122,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.24357298474945535,
   "tip_contrast_orig": 0.06773292323465334,
+  "rim_layers": {
+   "share": 0.7158273381294964,
+   "per_station": 1.3381294964028776,
+   "depth": 20.531938998469467,
+   "stations": 278
+  },
+  "rim_layers_orig": {
+   "share": 0.16666666666666666,
+   "per_station": 0.16666666666666666,
+   "stations": 240
+  },
+  "edge_straight": {
+   "max": 0.29199077366766235,
+   "p95": 0.2658218232037165,
+   "rms": 0.10949400946281532,
+   "windows": 218
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 0.5,
@@ -1942,6 +2293,25 @@
   "tip_convergence_orig": 0.0,
   "tip_contrast": 0.1652236319364347,
   "tip_contrast_orig": 0.06564141996667948,
+  "rim_layers": {
+   "share": 1.0,
+   "per_station": 2.367857142857143,
+   "depth": 38.61272445615963,
+   "stations": 280
+  },
+  "rim_layers_orig": {
+   "share": 0.7983870967741935,
+   "per_station": 0.7983870967741935,
+   "stations": 248
+  },
+  "edge_straight": {
+   "max": 0.324931073950741,
+   "p95": 0.2990431389292642,
+   "rms": 0.11828489071603118,
+   "windows": 218
+  },
+  "mirror_asym": null,
+  "mirror_asym_orig": null,
   "multiscale": {
    "worst": {
     "gap": 1.875,

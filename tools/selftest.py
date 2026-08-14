@@ -19,10 +19,12 @@ Cheap on purpose: two cursors, and the frames come out of analyze's own cache,
 so it is one render of each rather than a sweep.
 """
 
+import json
 import os
 import sys
 
 import numpy as np
+from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -211,10 +213,118 @@ def test_fold_unmeasured():
           bad[0] if bad else "gate passed an unmeasured fold")
 
 
+def test_rim_layers():
+    """Paint a dark ring at a fixed depth inside the contour - the master's own
+    defect, planted deliberately. The share of stations carrying an extra layer
+    has to rise. Keyed on H._edge_distance so the ring follows the outline the
+    way the real one does, and deliberately not on the route the metric itself
+    walks, which is the traced polygon."""
+    size = A._RIM_SIZE
+    clean = A.rim_layers("Cross", size=size)      # the cleanest cursor there is
+    d = H._edge_distance("Cross", 0)
+    if d.shape[0] != size:
+        d = np.asarray(Image.fromarray(d.astype(np.float32), mode="F")
+                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    ring = (d > 0.6) & (d < 0.8)
+
+    def band(a):
+        a[..., :3][ring] *= 0.7
+        return a
+
+    restore = damaged("Cross", 0, size, band)
+    try:
+        hurt = A.rim_layers("Cross", size=size)
+        check("rim layers", hurt["share"] > clean["share"] + 0.2,
+              f"{clean['share']*100:.0f}% -> {hurt['share']*100:.0f}% of stations")
+    finally:
+        restore()
+
+
+def test_edge_straight():
+    """Push a sawtooth into the longest corner-free run of vertices.
+
+    The damage is shaped like the defect. A run of vertices alternating either
+    side of the line they are meant to lie on is exactly what traced.json holds
+    and what the metric exists to find, so that is what gets injected here.
+
+    Bowing a single vertex instead does almost nothing to the reading, and the
+    reason is worth recording: C.smooth spreads one displaced vertex into a
+    bump some three logical units wide, and a straight line fitted over a
+    six-unit window tilts into a bump that wide and absorbs most of it. A raw
+    0.5-unit bow moved the reading by 0.001. That is the metric behaving
+    correctly - a gentle three-unit swell really is nearly straight at this
+    scale - but it makes a single vertex a poor control.
+
+    The amplitude stays under _STRAIGHT_ARC so the window still reads as meant
+    to be straight. Past it the metric rightly declines to call the stretch a
+    line, and the reading comes back off some other, undamaged window, which
+    looks like a miss when it is a refusal to measure a curve nobody claimed
+    was straight."""
+    name = "Arrow"
+    poly = H.C.TRACED[name]["frames"][0]["polys"]
+    clean = A.edge_straight(name)
+    keep = json.loads(json.dumps(poly))
+
+    def refresh():
+        H._mask_geom.cache_clear()
+        H._edge_distance_geom.cache_clear()
+        H.frame_image.cache_clear()
+        A._frame_cache.clear()
+
+    try:
+        pts = [np.array(p[:2], dtype=np.float64)
+               for p in H.C.smooth([tuple(p) for p in poly[0]])]
+        n = len(pts)
+        flags = [bool(p[2]) if len(p) > 2 else False for p in poly[0]]
+        # the longest stretch carrying no traced corner: the metric measures
+        # exactly the windows that hold none, so this is where damage lands
+        run, start = 0, 0
+        for i in range(n):
+            ln = 0
+            while ln < n and not flags[(i + ln) % n]:
+                ln += 1
+            if ln > run:
+                run, start = ln, i
+        amp = 0.4 * A._STRAIGHT_ARC
+        for j in range(run):
+            v = (start + j) % n
+            t = pts[(v + 1) % n] - pts[(v - 1) % n]
+            t = t / max(float(np.hypot(*t)), 1e-9)
+            s = amp if j % 2 == 0 else -amp
+            poly[0][v] = [poly[0][v][0] + t[1] * s,
+                          poly[0][v][1] - t[0] * s] + list(poly[0][v][2:])
+        refresh()
+        hurt = A.edge_straight(name)
+        check("edge straightness", hurt["max"] > clean["max"] + 0.1,
+              f"{clean['max']:.3f} -> {hurt['max']:.3f} logical units "
+              f"({run} vertices sawtoothed by {amp:.2f})")
+    finally:
+        H.C.TRACED[name]["frames"][0]["polys"][:] = keep
+        refresh()
+
+
+def test_mirror_asym():
+    """Eat one arm. A symmetric cursor must stop reading as symmetric."""
+    clean = A.mirror_asym("Cross")
+
+    def bite(a):
+        a[:a.shape[0] // 2, :, 3] *= 0.5
+        return a
+
+    restore = damaged("Cross", 0, 32, bite)
+    try:
+        hurt = A.mirror_asym("Cross")
+        c, h = max(clean["native"].values()), max(hurt["native"].values())
+        check("mirror asymmetry", h > c + 2.0, f"{c:.1f} -> {h:.1f} levels")
+    finally:
+        restore()
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
-              test_temporal, test_delta_e, test_fold_unmeasured):
+              test_temporal, test_delta_e, test_fold_unmeasured,
+              test_rim_layers, test_edge_straight, test_mirror_asym):
         t()
     print()
     if FAILED:
