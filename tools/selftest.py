@@ -183,26 +183,49 @@ def test_fold_jag():
 def test_temporal():
     """Alternate the fold's brightness frame to frame. The sweep still covers
     the same ground, so amplitude does not change and only the smoothness has
-    anything to say about it."""
-    clean = A.temporal_smoothness("Wait")
+    anything to say about it.
+
+    Damages the frames themselves rather than the renderer behind them: these
+    metrics read the cycle that ships, which is lit from one canonical render,
+    so patching a per-phase master no longer changes what they see."""
+    frames = A.product_frames("Wait", SIZE)
+    clean = A._smoothness("Wait", frames)
     band = A._fold_band("Wait", SIZE)
-    restores = []
+    hurt_frames = []
+    for i, f in enumerate(frames):
+        g = f.copy()
+        g[..., :3][band] = np.clip(g[..., :3][band] + (18.0 if i % 2 else -18.0), 0, 255)
+        hurt_frames.append(g)
+    hurt = A._smoothness("Wait", hurt_frames)
+    check("temporal fold", hurt["fold"] > clean["fold"] * 1.5,
+          f"{clean['fold']:.2f} -> {hurt['fold']:.2f}")
 
-    def jitter(sign):
-        def fn(a):
-            a[..., :3][band] = np.clip(a[..., :3][band] + sign * 18.0, 0, 255)
-            return a
-        return fn
 
+def test_inner_jitter():
+    """Shove the fold sideways on alternate frames of the cycle that ships.
+
+    Two things at once, both of them the point of this metric's rewrite: it has
+    to read the product frames, and it has to count pairs of neighbouring frames
+    rather than rows resolved in every frame of the cycle. So the damage is
+    planted on one frame in three, which under the old all-frames rule would
+    have deleted every row instead of raising the number."""
+    name = "Hand"
+    clean = A.inner_jitter(name)
+    frames = [f.copy() for f in A.product_frames(name)]
+    band = A._fold_band(name, A.JITTER_SIZE)
+    for i, f in enumerate(frames):
+        if i % 3 == 0:
+            f[..., :3][band] = np.roll(f[..., :3], 2, axis=1)[band]
+    key = (name, A.JITTER_SIZE)
+    keep = A._product_cache[key]
     try:
-        for i in range(A.nframes("Wait")):
-            restores.append(damaged("Wait", i, SIZE, jitter(1 if i % 2 else -1)))
-        hurt = A.temporal_smoothness("Wait")
-        check("temporal fold", hurt["fold"] > clean["fold"] * 1.5,
-              f"{clean['fold']:.2f} -> {hurt['fold']:.2f}")
+        A._product_cache[key] = frames
+        hurt = A.inner_jitter(name)
     finally:
-        for r in restores:
-            r()
+        A._product_cache[key] = keep
+    check("inner jitter", hurt["p95"] > clean["p95"] * 2.0 and hurt["rows"] >= 10,
+          f"p95 {clean['p95']:.3f} -> {hurt['p95']:.3f} on {hurt['rows']} rows, "
+          f"coverage {hurt['pair_coverage']:.2f}")
 
 
 def test_delta_e():
@@ -389,7 +412,7 @@ def test_straighten_runs():
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
-              test_temporal, test_delta_e, test_fold_unmeasured,
+              test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs):
         t()

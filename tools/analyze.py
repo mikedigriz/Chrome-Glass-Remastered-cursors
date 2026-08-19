@@ -63,6 +63,11 @@ _JAG_BAND = 2.0            # logical units either side of the fold a step is loo
 _DE_NATIVE = 256           # size the colour is judged at, box-averaged 8:1 down to 32
 _FOLD_ROWS = 6             # rows a fold reading needs before it means anything
 _RATCHET_SLACK = 0.05      # how far a floor metric may slip before it is a regression
+_JITTER_ROWS = 10          # rows carrying at least one step a jitter reading needs
+_JITTER_COVER = 0.60       # ...and the share of neighbouring frame pairs the
+                           # tracker has to resolve on them. Both are about
+                           # whether the instrument has enough data, never about
+                           # what the number came out as
 # Image diagnostics: read off the render, no absolute target. Their zero targets
 # said the fold has to be a mathematically straight line of constant brightness
 # with an identical cross-section on every row - which is not a property of lit
@@ -178,6 +183,41 @@ def orig_frame(name, idx, size):
 
 def nframes(name):
     return len(H.BY_NAME[name]["frames"])
+
+
+# Three kinds of frame, and mixing them up is how the temporal metrics ended up
+# measuring something that is no longer shipped.
+#
+#   author_frames   the 2006 art, nine frames. The standard.
+#   frame()         what frame_image returns: the renderer's own state at one
+#                   authored phase. Still the right thing for colour fidelity at
+#                   the phases the author actually drew, for geometry, and for
+#                   finding which authored state a regression is in.
+#   product_frames  exactly what goes into the .ani, the WebP and the .cape.
+#
+# Anything temporal - jitter, smoothness, sheen at the points, cadence, the
+# last-to-first seam - belongs on the third. The animated cursors are lit from
+# one canonical render now (hybrid.LIGHT_ANIM), so their per-phase masters are
+# an intermediate representation and nothing else: after that change every
+# temporal number in this file stayed identical to the last digit, because none
+# of them was looking at the animation.
+_product_cache = {}
+
+
+def product_frames(name, size=None):
+    """The frames the user gets, at the size the temporal metrics read."""
+    size = size or JITTER_SIZE
+    k = (name, size)
+    if k not in _product_cache:
+        _product_cache[k] = [np.asarray(f, dtype=np.float64)
+                             for f in H.anim_frames(name, size, True)[0]]
+    return _product_cache[k]
+
+
+def author_frames(name, size=None):
+    """The 2006 cycle, at the same size."""
+    size = size or JITTER_SIZE
+    return [orig_frame(name, i, size) for i in range(nframes(name))]
 
 
 def _moments(al, size):
@@ -530,30 +570,60 @@ def inner_jitter(name):
     median over three features is a fourth thing, and which rows survived the
     windowed pass afterwards was decided by that. The offset is one number per
     cycle, not per frame - a per-frame anchor would follow the very movement
-    this is here to measure."""
-    n = nframes(name)
+    this is here to measure.
+
+    Read on the frames that ship, and counted pairwise. Requiring one row to
+    resolve in every frame of the cycle was survivable at nine and is not at
+    twenty-seven: a row the tracker reads nine times out of ten survives the
+    first test 63 per cent of the time and the second 25, so tripling the frame
+    count alone cut Wait from twenty rows to six and looked like a defect of the
+    new renderer. What jitter actually asks is how far the fold moved between
+    two frames that both resolved it, which throws away one observation instead
+    of a whole row. The seam from the last frame back to the first is one of
+    those pairs - the animation loops.
+
+    Coverage is reported next to the number and gates it, because the opposite
+    error is just as easy: a tracker that finds the fold in three comfortable
+    places reports a beautifully still animation."""
+    frames = product_frames(name, JITTER_SIZE)
+    n = len(frames)
+    get = lambda _nm, i, _sz: frames[i]
     ref = _chord_ref(name, 0, JITTER_SIZE)
     if ref is None:
         return None
     wide = _JAG_BAND * JITTER_SIZE / 32.0
     with warnings.catch_warnings():        # rows outside the cursor are all-NaN
         warnings.simplefilter("ignore", RuntimeWarning)
-        off = np.nanmedian([_fold_track(name, i, JITTER_SIZE, ref, wide, strict=False) - ref
-                            for i in range(n)])
+        off = np.nanmedian([_fold_track(name, i, JITTER_SIZE, ref, wide, get=get,
+                                        strict=False) - ref for i in range(n)])
     if np.isfinite(off):
         ref = ref + off
     win = 0.5 * JITTER_SIZE / 32.0
-    T = np.array([_fold_track(name, i, JITTER_SIZE, ref, win) for i in range(n)])
-    ok = ~np.isnan(T).any(0)
-    if ok.sum() < 10:
-        return None
-    step = np.abs(np.diff(T[:, ok], axis=0))
-    return {
-        "rows": int(ok.sum()),
+    T = np.array([_fold_track(name, i, JITTER_SIZE, ref, win, get=get) for i in range(n)])
+    seen = np.isfinite(T)
+    pair = seen & np.roll(seen, -1, axis=0)          # both ends of a step
+    rows = pair.any(0)                               # rows that carry any step
+    if not rows.any():
+        return {"rows": 0, "pair_coverage": 0.0, "frame_coverage_min": 0.0,
+                "why": "the tracker resolved no two neighbouring frames on any row"}
+    step = np.abs(np.roll(T, -1, axis=0) - T)[pair]
+    cover = float(pair[:, rows].sum()) / float(n * rows.sum())
+    per_frame = seen[:, rows].sum(1) / float(rows.sum())
+    out = {
+        "rows": int(rows.sum()),
+        "pair_coverage": cover,
+        "frame_coverage_min": float(per_frame.min()),
         "mean": float(step.mean()),
         "p95": float(np.percentile(step, 95)),
         "max": float(step.max()),
     }
+    if out["rows"] < _JITTER_ROWS:
+        out["why"] = (f"the fold carries a step on {out['rows']} rows, "
+                      f"fewer than the {_JITTER_ROWS} a reading needs")
+    elif cover < _JITTER_COVER:
+        out["why"] = (f"the tracker resolved {cover:.0%} of the neighbouring "
+                      f"pairs, under the {_JITTER_COVER:.0%} a reading needs")
+    return out
 
 
 def _longest_run(flags):
@@ -729,7 +799,7 @@ def _fold_band(name, size):
     return m
 
 
-def _smoothness(name, get, size=JITTER_SIZE):
+def _smoothness(name, frames, size=JITTER_SIZE):
     """Frame-to-frame step over cycle amplitude, per zone, normalised by n.
 
     Geometry that is frozen can still flicker: when the sheen jumps between
@@ -747,10 +817,11 @@ def _smoothness(name, get, size=JITTER_SIZE):
     cancels out of both halves of the ratio, but the morphs change alpha as
     they redraw, and there the uncomposited reading counts colour under pixels
     that are not on screen."""
-    n = nframes(name)
+    fr = frames
+    n = len(fr)
     if n < 3:
         return {}
-    fr = [get(name, i, size) for i in range(n)]
+    size = fr[0].shape[0]
     al = np.array([f[..., 3] for f in fr]) / 255.0
     lum = np.array([f[..., :3].mean(-1) for f in fr])
     comp = lum * al + 128.0 * (1.0 - al)
@@ -779,15 +850,16 @@ def _smoothness(name, get, size=JITTER_SIZE):
 
 
 def temporal_smoothness(name):
-    r = {k: v for k, v in _smoothness(name, frame).items()}
-    r.update({k + "_orig": v for k, v in _smoothness(name, orig_frame).items()})
+    """The shipped cycle against the author's own, zone by zone."""
+    r = {k: v for k, v in _smoothness(name, product_frames(name)).items()}
+    r.update({k + "_orig": v for k, v in _smoothness(name, author_frames(name)).items()})
     return r
 
 
 _TIP_DISC = 2.0            # logical units around a corner the sweep is read in
 
 
-def tip_sheen(name, get=frame):
+def tip_sheen(name, frames=None):
     """Whether the sweep reaches the points, and how steady it is when it does.
 
     A cursor whose sheen stops short of its tips looks dead at exactly the part
@@ -803,11 +875,13 @@ def tip_sheen(name, get=frame):
     lean   where that centre sits relative to the apex, positive to the right.
            Reported because it is largely the author's own: he draws the arrow's
            point leaning +0.79 and the remaster reads +0.92."""
-    n = nframes(name)
-    if n < 3 or name not in H.INTERP:
+    if name not in H.INTERP:
         return {}
-    size = JITTER_SIZE
-    fr = [get(name, i, size) for i in range(n)]
+    fr = product_frames(name) if frames is None else frames
+    n = len(fr)
+    if n < 3:
+        return {}
+    size = fr[0].shape[0]
     al = np.array([f[..., 3] for f in fr]) / 255.0
     lum = np.array([f[..., :3].mean(-1) for f in fr])
     comp = lum * al + 128.0 * (1.0 - al)
@@ -1532,7 +1606,7 @@ def _collect_one(job):
         e["interp"] = interp_uniformity(name)
         e["temporal"] = temporal_smoothness(name)
         e["tip_sheen"] = tip_sheen(name)
-        e["tip_sheen_orig"] = tip_sheen(name, get=orig_frame)
+        e["tip_sheen_orig"] = tip_sheen(name, author_frames(name))
         if name in H.INTERP:
             e["inner_jitter"] = inner_jitter(name)
         else:
@@ -1704,11 +1778,17 @@ def gate(rep, base=None):
                 got, ref = ts.get(z), ts.get(z + "_orig")
                 if got is None:
                     continue
-                # The morphs redraw themselves, so their steps are large by
-                # design and only the author's own cycle says how large is
-                # right. The interpolated ones have a frozen silhouette, and
-                # there any hurrying is the shading's own.
-                want = T["temporal"] if name in H.INTERP else max(T["temporal"], ref or 0.0)
+                # The author's own cycle says how large a step is right, for
+                # the morphs because they redraw themselves and for the lit ones
+                # because the light is his. The interpolated three used to be
+                # held to a flat 1.0 on the grounds that their silhouette is
+                # frozen, so any hurrying was the shading's own - true while the
+                # shading was ours to place, and no longer true now that it is
+                # his nine samples reconstructed (hybrid.LIGHT_ANIM). Measured
+                # on what ships they read 1.04-1.12 against his own 1.11-1.19:
+                # steadier than the drawing they come from, and a flat 1.0 would
+                # be this repo inventing a standard the reference does not meet.
+                want = max(T["temporal"], ref or 0.0)
                 if got > want:
                     fail(name, "temporal_" + z, got, ">", round(want, 2))
         # Judged against the author's own frame, not an absolute: how far a
@@ -1737,9 +1817,10 @@ def gate(rep, base=None):
                 if it["cycle_motion"] < want:
                     fail(name, "sheen_damped", it["cycle_motion"], "<", round(want, 2))
         ij = e.get("inner_jitter")
-        if ij and ij["p95"] > T["inner_jitter"]:
-            fail(name, "inner_jitter_p95", ij["p95"], ">", T["inner_jitter"], "inner_jitter")
-        elif ij is None and name in H.INTERP and any(
+        if ij and ij.get("why") is None:
+            if ij["p95"] > T["inner_jitter"]:
+                fail(name, "inner_jitter_p95", ij["p95"], ">", T["inner_jitter"], "inner_jitter")
+        elif name in H.INTERP and any(
                 getattr(H.C, "CURSOR_TOPOLOGY", {}).get(name, {}).get("fold", [])):
             # Same rule as fold_unmeasured, for the same reason. AppStarting's
             # crease is four to seven levels deep where Arrow's is eighteen to
@@ -1750,7 +1831,7 @@ def gate(rep, base=None):
                            f"the baseline measured this jitter and this run does not")
             else:
                 unmeasured.append(f"{name:12s} {'inner_jitter':18s} "
-                                  f"fewer than ten rows of fold resolved across the cycle")
+                                  + (ij["why"] if ij else "the cursor has no chord to anchor on"))
         mo, mo0 = e.get("morph"), e.get("morph_orig")
         if mo and mo0:
             if mo["iou_min"] < mo0["iou_min"] * T["morph_iou"]:
@@ -1783,7 +1864,11 @@ def _flat(e):
         "delta_e": de["mean"] if de else None,
         "ghost_rgb": it["ghost_rgb"] if it else None,
         "cadence": it["visible_peak_over_mean"] if it else None,
-        "inner_jitter": ij["p95"] if ij else None,
+        # None the moment the reading is not trusted: a number kept next to its
+        # own "not enough data" note is a number something will compare against
+        "inner_jitter": ij.get("p95") if ij and ij.get("why") is None else None,
+        "jitter_rows": ij.get("rows") if ij else None,
+        "jitter_coverage": ij.get("pair_coverage") if ij else None,
         "morph_iou": mo["iou_min"] if mo else None,
         "temporal_fold": ts.get("fold"),
         "temporal_body": ts.get("body"),
@@ -1875,20 +1960,17 @@ def main():
     show(rep, base)
 
     if args.baseline:
-        # newline="
-" so the file matches what .gitattributes stores. Written in
+        # newline=\n so the file matches what .gitattributes stores. Written in
         # plain text mode on Windows it comes back CRLF and reads as modified the
         # moment git touches it.
-        with open(args.baseline, "w", newline="
-") as fh:
+        with open(args.baseline, "w", newline="\n") as fh:
             json.dump(rep, fh, indent=1)
         print(f"\nbaseline written to {args.baseline}")
 
     if args.ratchet:
         # Flat and sorted: this one is committed, so a diff on it has to be
         # readable by a person deciding whether a number was allowed to move.
-        with open(args.ratchet, "w", newline="
-") as fh:
+        with open(args.ratchet, "w", newline="\n") as fh:
             json.dump({n: {k: (round(v, 6) if isinstance(v, float) else v)
                            for k, v in sorted(_flat(e).items()) if v is not None}
                        for n, e in rep.items()}, fh, indent=1, sort_keys=True)
