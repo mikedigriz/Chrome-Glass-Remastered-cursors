@@ -230,6 +230,73 @@ def periodic_resample(field, out_n=OUT_N, k=HARMONICS):
     return np.fft.irfft(out, n=out_n, axis=0) * (out_n / n)
 
 
+_PACE_FINE = 216     # phase samples the pace curve is measured on, 8 per output
+                     # frame. The author's sweep does not move at a constant
+                     # rate, and sampling the reconstruction at equal phase
+                     # reproduces that unevenness exactly: it reads as hurrying
+                     # and dawdling (peak/mean of the visible step 1.39 against
+                     # a limit of 1.15). The field is a continuous function of
+                     # phase, so the fix is to sample it where it moves evenly
+                     # rather than where its parameter says - the same thing
+                     # anim_frames does to the old path, one level lower down.
+_PACE_DECIM = 4      # the pace is one scalar per phase; measure it on a
+                     # decimated field, not on 216 full-size ones
+_GHOST_ALPHA = 10.0  # alpha under which the light must not touch the colour.
+                     # Nothing there is visible, and RGB that moves under an
+                     # alpha of zero is what ghost_rgb exists to catch
+
+
+def periodic_at(field, phases, k=HARMONICS):
+    """The same band-limited fit as periodic_resample, at arbitrary phases.
+
+    periodic_resample can only land on a uniform grid, because irfft evaluates
+    on one. Written out as a sum of harmonics instead, the fit takes any phase
+    at all - which is what pacing the cycle by its own motion needs."""
+    n = field.shape[0]
+    spec = np.fft.rfft(field, axis=0)[:k + 1]
+    ph = np.asarray(phases, dtype=np.float64)
+    out = np.zeros((len(ph),) + field.shape[1:])
+    for m in range(spec.shape[0]):
+        # every harmonic but DC (and Nyquist, when n is even) stands for a
+        # conjugate pair, hence the two
+        w = 1.0 if m == 0 or (n % 2 == 0 and m == n // 2) else 2.0
+        c = spec[m] * (w / n)
+        ang = (2.0 * np.pi * m) * ph
+        sl = (slice(None),) + (None,) * (field.ndim - 1)
+        out += np.cos(ang)[sl] * c.real[None] - np.sin(ang)[sl] * c.imag[None]
+    return out
+
+
+def _paced_phases(raw, lin, vis, seen, anchor, out_n=OUT_N, k=HARMONICS):
+    """out_n phases spaced by equal change of the picture, not by equal time.
+
+    Measured on the rendered colour and not on the field itself: the light model
+    is multiplicative on one side and additive on the other, and sRGB on top of
+    it, so equal change of the field is not equal change of anything the eye
+    sees. Pacing on the field made the sweep hurry worse than not pacing it at
+    all (peak/mean 1.39 -> 1.57). Rendered at a decimated size - the pace is one
+    scalar per phase, and 216 frames of it are needed."""
+    d = _PACE_DECIM
+    lin_s, vis_s, seen_s = lin[::d, ::d], vis[::d, ::d], seen[::d, ::d]
+    raw_s = raw[:, ::d, ::d] if raw.shape[1] == lin.shape[0] else raw
+    a_s = anchor[:, ::d, ::d] if anchor.shape[1] == lin.shape[0] else anchor
+    ph = np.arange(_PACE_FINE) / _PACE_FINE
+    f = periodic_at(raw_s, ph, k) - a_s
+    if f.shape[1] != lin_s.shape[0]:                 # a 32px field under a render
+        return np.arange(out_n) / out_n
+    # float, not the uint8 linear_to_srgb hands back: a step of -3 levels read
+    # as 253 turns the pace curve into noise, and the pacing into nothing
+    shot = [V.linear_to_srgb(_lit(lin_s, f[i] * _LIGHT_GAIN * vis_s[..., None])).astype(np.float64)
+            for i in range(_PACE_FINE)]
+    step = np.array([float(np.abs(shot[(i + 1) % _PACE_FINE][seen_s]
+                                  - shot[i][seen_s]).mean()) for i in range(_PACE_FINE)])
+    if step.sum() < 1e-12:
+        return np.arange(out_n) / out_n
+    cum = np.concatenate([[0.0], np.cumsum(step)])
+    want = np.arange(out_n) * cum[-1] / out_n
+    return np.interp(want, cum, np.concatenate([ph, [1.0]]))
+
+
 def _gamut_scale(lin, r):
     """Largest t in [0,1] with every channel of lin + t*r still in range.
 
@@ -243,6 +310,24 @@ def _gamut_scale(lin, r):
         lo = np.where(r < 0, (0.0 - lin) / r, np.inf)
     t = np.minimum(np.nanmin(hi, axis=-1), np.nanmin(lo, axis=-1))
     return np.clip(np.where(np.isfinite(t), t, 1.0), 0.0, 1.0)
+
+
+def _lit(lin, r):
+    """One frame's linear colour: the canonical glass under a light residual."""
+    if MODE == "mul":
+        return (lin + _EPS) * np.exp(np.clip(r, -_GAIN_CAP, _GAIN_CAP)) - _EPS
+    if MODE == "split":
+        # taking light away from saturated yellow glass by subtracting the same
+        # numbers the author's sweep loses is what turned the crease green: his
+        # loss is mostly red, the glass has no blue to lose, and what is left of
+        # a yellow whose red has gone is green. Light that leaves a surface
+        # scales it; light that arrives adds to it.
+        dy = r[..., 0] * 0.2126 + r[..., 1] * 0.7152 + r[..., 2] * 0.0722
+        y = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722
+        f = np.clip(1.0 + np.minimum(dy, 0.0) / np.maximum(y, 1e-4), _DIM_FLOOR, 1.0)
+        add = np.clip(r, 0.0, None)
+        return lin * f[..., None] + add * _gamut_scale(lin * f[..., None], add)[..., None]
+    return lin + r * _gamut_scale(lin, r)[..., None]
 
 
 def canonical_frame(name, size, idx=None):
@@ -267,14 +352,24 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     alpha = base[..., 3]
     if SOURCE == "master":
         with _plain_masters():
-            field = periodic_resample(master_light(name, size), out_n, k)
+            raw = master_light(name, size)
     else:
-        field = periodic_resample(residual_field(name), out_n, k)
-    # the residual is measured against the cycle's mean light, the render
-    # against one keyframe's: re-anchor so the loop passes through the frame it
-    # was rendered from, exactly, at that frame's own phase
+        raw = residual_field(name)
     n = len(H.BY_NAME[name]["frames"])
-    field = field - field[idx * out_n // n]
+    # Where the light is allowed to touch the colour at all. The canonical alpha
+    # is the same for every frame, so this mask is too.
+    vis = np.clip(alpha / _GHOST_ALPHA, 0.0, 1.0)
+    # the glass proper, by the same fraction of the frame's own peak the rest of
+    # this repo uses. An absolute level selects almost nothing on translucent
+    # glass whose peak sits near 190, and pacing over the wrong region paces
+    # over the rim instead of the sheen.
+    seen = alpha > H._PACE_SOLID * float(alpha.max())
+    # the residual is measured against the cycle's mean light, the render
+    # against one keyframe's: re-anchor so the loop is lit relative to the frame
+    # it was rendered from, at that frame's own phase
+    anchor = periodic_at(raw, [idx / n], k)
+    phases = _paced_phases(raw, lin, vis, seen, anchor, out_n, k)
+    field = periodic_at(raw, phases, k) - anchor
     frames = []
     for t in range(out_n):
         if field.shape[1] == size:
@@ -282,21 +377,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
         else:
             r = np.dstack([H._smooth1(H._resample_signed(field[t, ..., c], size),
                                       _LIGHT_UNIT, size) for c in range(3)]) * _LIGHT_GAIN
-        if MODE == "mul":
-            out = (lin + _EPS) * np.exp(np.clip(r, -_GAIN_CAP, _GAIN_CAP)) - _EPS
-        elif MODE == "split":
-            # taking light away from saturated yellow glass by subtracting the
-            # same numbers the author's sweep loses is what turned the crease
-            # green: his loss is mostly red, the glass has no blue to lose, and
-            # what is left of a yellow whose red has gone is green. Light that
-            # leaves a surface scales it; light that arrives adds to it.
-            dy = r[..., 0] * 0.2126 + r[..., 1] * 0.7152 + r[..., 2] * 0.0722
-            y = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722
-            f = np.clip(1.0 + np.minimum(dy, 0.0) / np.maximum(y, 1e-4), _DIM_FLOOR, 1.0)
-            add = np.clip(r, 0.0, None)
-            out = lin * f[..., None] + add * _gamut_scale(lin * f[..., None], add)[..., None]
-        else:
-            out = lin + r * _gamut_scale(lin, r)[..., None]
-        rgb = V.linear_to_srgb(out).astype(np.float64)
+        r = r * vis[..., None]
+        rgb = V.linear_to_srgb(_lit(lin, r)).astype(np.float64)
         frames.append(H._compose(rgb, alpha))
     return frames, [1] * out_n

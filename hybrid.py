@@ -38,6 +38,12 @@ ANIM = [m["name"] for m in MANIFEST if m["kind"] == "ani"]
 # author's 50 ms/frame cursors, cross-faded x3 to 60 fps (same cycle length)
 INTERP = {"AppStarting", "Hand", "Wait"}
 INTERP_N = 3
+LIGHT_ANIM = True        # these three are lit, not redrawn: one canonical render
+                         # carries the geometry for the whole cycle and only the
+                         # light moves over it (lightanim.py, NEXT.md 29). Set
+                         # False to fall back on cross-fading full RGBA keyframes,
+                         # which is what redrew the fold in a different place on
+                         # every frame
 _PACE_SOLID = 0.85       # of peak alpha: the glass whose motion sets the pace
 _PACE_SAMPLES = 7        # points an interval is sampled at to invert its own pace
 
@@ -3483,6 +3489,11 @@ def anim_frames(name, size, interp=True):
     equal intervals of cumulative change spreads the motion out instead. Frame
     count and cycle length are untouched, so the .ani timing is unchanged."""
     n = len(BY_NAME[name]["frames"])
+    if name in INTERP and LIGHT_ANIM:
+        import lightanim                 # imports this module: has to stay lazy
+        out_n = n * INTERP_N if interp else n
+        frames, _ = lightanim.anim_frames_lighting(name, size, out_n=out_n)
+        return frames, ([1] * out_n if interp else list(BY_NAME[name]["rates"]))
     base = [frame_image(name, i, size) for i in range(n)]
     if name not in INTERP or not interp:
         return base, list(BY_NAME[name]["rates"])
