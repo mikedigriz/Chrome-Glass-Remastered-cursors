@@ -1618,10 +1618,10 @@
   },
   "interp": {
    "n": 27,
-   "visible_peak_over_mean": 1.0163181972161102,
-   "ghost_rgb": 2.759153491708744e-05,
-   "visible_mean": 5.128774627770929,
-   "cycle_motion": 138.4769149498151,
+   "visible_peak_over_mean": 1.067587966810695,
+   "ghost_rgb": 0.037248572138068044,
+   "visible_mean": 6.817506994580424,
+   "cycle_motion": 184.07268885367145,
    "cycle_motion_keys": 134.95446381405176
   },
   "temporal": {
@@ -1965,10 +1965,10 @@
   },
   "interp": {
    "n": 27,
-   "visible_peak_over_mean": 1.0253562324813703,
-   "ghost_rgb": 0.0,
-   "visible_mean": 4.817096550345201,
-   "cycle_motion": 130.06160685932042,
+   "visible_peak_over_mean": 1.0332338131654093,
+   "ghost_rgb": 0.029626410617222636,
+   "visible_mean": 6.928109648761707,
+   "cycle_motion": 187.0589605165661,
    "cycle_motion_keys": 127.16502593415899
   },
   "temporal": {
@@ -2672,10 +2672,10 @@
   },
   "interp": {
    "n": 27,
-   "visible_peak_over_mean": 1.026892446401256,
-   "ghost_rgb": 1.379576745854372e-05,
-   "visible_mean": 3.867879712781984,
-   "cycle_motion": 104.43275224511356,
+   "visible_peak_over_mean": 1.072368894165785,
+   "ghost_rgb": 0.024397814750434565,
+   "visible_mean": 5.332527244624445,
+   "cycle_motion": 143.97823560486,
    "cycle_motion_keys": 101.45398837823561
   },
   "temporal": {
