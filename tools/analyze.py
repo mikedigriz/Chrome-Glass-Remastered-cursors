@@ -1875,14 +1875,20 @@ def main():
     show(rep, base)
 
     if args.baseline:
-        with open(args.baseline, "w") as fh:
+        # newline="
+" so the file matches what .gitattributes stores. Written in
+        # plain text mode on Windows it comes back CRLF and reads as modified the
+        # moment git touches it.
+        with open(args.baseline, "w", newline="
+") as fh:
             json.dump(rep, fh, indent=1)
         print(f"\nbaseline written to {args.baseline}")
 
     if args.ratchet:
         # Flat and sorted: this one is committed, so a diff on it has to be
         # readable by a person deciding whether a number was allowed to move.
-        with open(args.ratchet, "w") as fh:
+        with open(args.ratchet, "w", newline="
+") as fh:
             json.dump({n: {k: (round(v, 6) if isinstance(v, float) else v)
                            for k, v in sorted(_flat(e).items()) if v is not None}
                        for n, e in rep.items()}, fh, indent=1, sort_keys=True)
