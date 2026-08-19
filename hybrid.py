@@ -2430,6 +2430,303 @@ def _notch_from_author(rgb, name, idx, size):
     return np.clip(rgb + (ref - rgb) * (pull * w)[..., None], 0, 255)
 
 
+# The edge's shape, transferred from the analytic surface (NEXT.md, "Перенос
+# формы кромки"). The master's cross-section from the contour inward carries an
+# interior dip on 97% of stations where the author's own art carries none and
+# the analytic bevel carries none; what is wrong is not the level or the colour
+# but the way the glass rises off its edge. So only that shape is rewritten:
+# per station corr(u) = (b(u) - b(e)) - (m(u) - m(e)), with `e` the far end of
+# the ray inside the glass, which leaves the master's level, hue and every
+# frequency along the arc untouched.
+#
+# Read and corrected in composite luma over _RIM_XFER_BG, not in raw RGB: the
+# glass runs 0.35 alpha at the contour and 0.80 a unit in, so a correction
+# sized in raw levels arrives at the eye scaled by whatever the alpha happens
+# to be, and the dip the metric reads is the composited one.
+_RIM_XFER = {"Arrow", "Help", "NO", "AppStarting"}   # cursors it runs on
+_RIM_XFER_DEPTH = 1.0      # logical units inward a section is read over. Wider
+                           # windows reach past the rim into the body and bring
+                           # the fold's neighbourhood back with them - at 2.5
+                           # Arrow's fold_jag went 53.9 -> 55.6 for a rim gain
+                           # this window gets anyway.
+_RIM_XFER_STEP = 0.125     # ...and the spacing of its samples
+_RIM_XFER_STATION = 0.25   # logical units of arc between sections
+_RIM_XFER_ARC = 1.0        # half-width of the mean that runs along the arc.
+                           # Without it each ray prints its own correction and
+                           # the edge comes out as a comb of them, plain to see
+                           # along Arrow's top edge.
+_RIM_XFER_ALPHA_LO = 0.35  # alpha the correction is held off below, and the
+_RIM_XFER_ALPHA_HI = 0.60  # alpha it is in full at - also the divide's floor
+_RIM_XFER_CORNER = 1.5     # logical units round a traced point the transfer
+_RIM_XFER_CORNER_RAMP = 1.0  # is held off, and the units it ramps back in over
+_RIM_XFER_BLEND = 0.35     # logical units of arc the sections are blended
+                           # over when the correction is read back as a field
+_RIM_XFER_CAP = 60.0       # levels of composite luma the correction may carry
+_RIM_XFER_BG = 128.0       # the ground the section is composited on, the same
+                           # one analyze.rim_layers reads over
+
+
+@functools.lru_cache(maxsize=None)
+def _rim_stations(name, idx):
+    """Points and inward normals along the outline, every _RIM_XFER_STATION
+    logical units of arc. Walks C.smooth's output - the polygon _mask_geom
+    rasterises - so a station sits where the contour actually is."""
+    out = []
+    for poly in C.TRACED.get(name, {}).get("frames", [])[idx]["polys"]:
+        pts = [np.array(p[:2], dtype=np.float64)
+               for p in C.smooth([tuple(p) for p in poly])]
+        n = len(pts)
+        if n < 3:
+            continue
+        arr = np.array(pts)
+        nxt = np.roll(arr, -1, axis=0)
+        area = float((arr[:, 0] * nxt[:, 1] - arr[:, 1] * nxt[:, 0]).sum())
+        sgn = -1.0 if area > 0 else 1.0          # inward, whichever way it winds
+        acc = 0.0
+        for i in range(n):
+            a, b = pts[i], pts[(i + 1) % n]
+            seg = float(np.hypot(*(b - a)))
+            if seg < 1e-9:
+                continue
+            t = (b - a) / seg
+            nrm = np.array([-t[1], t[0]]) * sgn
+            s = _RIM_XFER_STATION - acc
+            while s < seg:
+                out.append((a + t * s, nrm))
+                s += _RIM_XFER_STATION
+            acc = (acc + seg) % _RIM_XFER_STATION
+    if not out:
+        return None
+    return (np.array([p for p, _ in out]), np.array([n for _, n in out]))
+
+
+def _sample1(field, x, y):
+    """_sample for a single-channel field."""
+    return _sample(field[..., None], x, y)[..., 0]
+
+
+def _rim_transfer(rgb, name, idx, size):
+    """Rewrite how the glass rises off its edge, keeping everything else."""
+    if name not in _RIM_XFER:
+        return rgb
+    got = _rim_stations(name, idx)
+    if got is None:
+        return rgb
+    pts, nrm = got
+    L = size / V.LOGICAL
+    us = np.arange(0.0, _RIM_XFER_DEPTH + 1e-9, _RIM_XFER_STEP)
+    mask = _mask(name, idx, size).astype(np.float64)
+    # Which way is inward is settled per station by probing half a unit each
+    # way, not by the polygon's winding: the traced polys wind both ways and a
+    # hole winds against its own outline.
+    probe = np.stack([_sample1(mask, (pts[:, 0] + s_ * nrm[:, 0] * 0.5) * L - 0.5,
+                               (pts[:, 1] + s_ * nrm[:, 1] * 0.5) * L - 0.5)
+                      for s_ in (1.0, -1.0)])
+    flip = np.where(probe[0] >= probe[1], 1.0, -1.0)[:, None]
+    xs = (pts[:, 0:1] + nrm[:, 0:1] * flip * us) * L - 0.5
+    ys = (pts[:, 1:2] + nrm[:, 1:2] * flip * us) * L - 0.5
+    a = np.clip(_up_alpha(name, idx, size) * mask / 255.0, 0.0, 1.0)
+    comp = rgb.mean(-1) * a + _RIM_XFER_BG * (1.0 - a)
+
+    m = _sample1(comp, xs, ys)
+    b = _sample1(_bevel_shading(name, idx, size), xs, ys)
+    # A station whose ray leaves the silhouette has no section to read; the
+    # first ramp of samples is the contour's own falloff and is skipped.
+    ramp = int(np.ceil(0.5 / _RIM_XFER_STEP))
+    keep = _sample1(mask, xs, ys)[:, ramp:].min(1) >= 250.0
+    if keep.sum() < 8:
+        return rgb
+
+    # The section ends where the analytic surface stops climbing. On a thin
+    # limb the medial ridge falls inside the window, and past it the analytic
+    # profile descends again - transferring that descent prints the ridge into
+    # the rim band as a layer of its own, which is what it did to Arrow_Down
+    # and Handwriting (0.745 -> 0.78, 0.733 -> 0.79) while the wide cursors
+    # gained. Anchoring at the crest instead ends every section on the same
+    # feature it started from.
+    e = np.maximum(np.argmax(b, axis=1), 2)[:, None]
+    idxs = np.arange(b.shape[1])[None, :]
+    inside = idxs <= e
+    ba = np.take_along_axis(b, e, 1)
+    ma = np.take_along_axis(m, e, 1)
+    br = (b - ba) * inside
+    mr = (m - ma) * inside
+    # The analytic surface says how the glass should rise, not how far: its
+    # swing is _BEVEL_DIFF, a number about the wedges, and printing that swing
+    # on a master that rises by a different amount buys a new step where the
+    # two disagree. Scaled per station to the master's own rise, the correction
+    # is a change of path with the same endpoints - which is also why the
+    # contour sample is not pinned to zero afterwards: pinning re-introduces
+    # the step the scaling exists to avoid, and cost Arrow_Down 0.745 -> 0.79.
+    k = np.divide(br[:, 0], mr[:, 0], out=np.ones(len(br)),
+                  where=np.abs(mr[:, 0]) > 1e-6)
+    br = br / np.clip(np.abs(k), 0.2, 5.0)[:, None]
+    corr = br - mr
+    corr[~keep] = 0.0
+    w = max(1, int(round(_RIM_XFER_ARC / _RIM_XFER_STATION)))
+    pad = np.concatenate([corr[-w:], corr, corr[:w]], 0)          # the arc closes
+    kern = np.ones(2 * w + 1) / (2.0 * w + 1.0)
+    corr = np.apply_along_axis(lambda c: np.convolve(c, kern, mode="valid"), 0, pad)
+    corr = np.clip(corr, -_RIM_XFER_CAP, _RIM_XFER_CAP)
+    corr[~keep] = 0.0
+
+    # Composite levels back to the master's own, then read off as a field: the
+    # depth the pixel sits at, against the sections blended round it.
+    # Scattering the samples back along their own rays and normalising by their
+    # weight was tried first and is worse in both orders - the rays leave whole
+    # pixels untouched between them, and blurring the sums to fill those smears
+    # the correction across depth, which is the one axis it is about (Arrow
+    # 0.65 -> 0.80).
+    #
+    # Where the glass is barely there the divide would print the correction as
+    # an outline - a bright thread right on the contour - and it buys nothing:
+    # that ramp is the falloff itself and rim_layers skips it. So the
+    # correction fades out with the alpha it is divided by.
+    a_ray = _sample1(a, xs, ys)
+    corr = corr / np.maximum(a_ray, _RIM_XFER_ALPHA_HI)
+    corr = corr * np.clip((a_ray - _RIM_XFER_ALPHA_LO)
+                          / (_RIM_XFER_ALPHA_HI - _RIM_XFER_ALPHA_LO), 0.0, 1.0)
+    d = _edge_distance_at(name, idx, size)
+    ys_i, xs_i = np.mgrid[0:size, 0:size]
+    px = (xs_i + 0.5) / L
+    py = (ys_i + 0.5) / L
+    ui = np.clip(d / _RIM_XFER_STEP, 0.0, len(us) - 1.001)
+    k0 = ui.astype(np.int32)
+    k1 = np.minimum(k0 + 1, len(us) - 1)
+    fu = ui - k0
+    # Blended over the stations near the pixel, not taken from the nearest one.
+    # A nearest-station lookup partitions the glass into Voronoi cells and each
+    # cell prints its own section, so the correction lands as flat facets with
+    # straight seams between them - plain to see at the point, where the cells
+    # fan out (looked at on Help at 512, 4x). The weight is on the arc offset
+    # alone: the pixel's own depth is already the axis being interpolated, and
+    # leaving it in the distance would flatten the weights the deeper it sits.
+    delta = np.zeros((size, size))
+    var = 2.0 * _RIM_XFER_BLEND ** 2
+    for r0 in range(0, size, 32):
+        sl = slice(r0, r0 + 32)
+        dx = px[sl, :, None] - pts[None, None, :, 0]
+        dy = py[sl, :, None] - pts[None, None, :, 1]
+        arc2 = np.maximum(dx * dx + dy * dy - (d[sl] ** 2)[..., None], 0.0)
+        w = np.exp(-arc2 / var)
+        c = (corr[:, k0[sl]] * (1.0 - fu[sl]) + corr[:, k1[sl]] * fu[sl])
+        delta[sl] = np.einsum("yxs,syx->yx", w, c) / np.maximum(w.sum(2), 1e-9)
+    # Held off around the traced points. A section is a reading along one
+    # normal, and at a point there is no one normal: the rays of the stations
+    # either side of it cross, their sections disagree, and the blend of two
+    # disagreeing sections prints a dark wedge in the point itself - looked at
+    # on Help at 128 and 256, 10x. Where the geometry cannot define the
+    # correction it is not applied.
+    for cx_, cy_ in _sharp_corners(name, idx):
+        r_ = np.hypot(px - cx_, py - cy_)
+        delta = delta * np.clip((r_ - _RIM_XFER_CORNER) / _RIM_XFER_CORNER_RAMP,
+                                0.0, 1.0)
+    delta = delta * (mask / 255.0) * (d <= _RIM_XFER_DEPTH)
+    return np.clip(rgb + delta[..., None], 0, 255)
+
+
+# The fold's own shape, transferred the same way, along its length instead of
+# across the edge (NEXT.md, fork item 1: fix the fold with the method rather
+# than protect it from it). The rim transfer above rewrites how the glass rises
+# off its edge, and on a thin wedge the fold's neighbourhood is the same band of
+# pixels, so it arrives at the fold too - keep-outs by chord, by tracked path
+# and by ceiling were all tried and each either broke the crease or ate the
+# gain. Here the crease is part of the target: its brightness along its own
+# length is made to follow the analytic surface's, which varies smoothly, while
+# its depth across the crease - the dark line itself - is left alone.
+_FOLD_XFER = set()         # cursors the fold transfer runs on
+_FOLD_XFER_BAND = 1.2      # logical units either side of the crease it reaches
+_FOLD_XFER_STEP = 0.125    # sample spacing across the crease
+_FOLD_XFER_TS = 0.02       # spacing along the crease, as a share of the chord
+_FOLD_XFER_SMOOTH = 5      # samples along the crease the correction is averaged
+                           # over, so a single dark pixel cannot set the target
+_FOLD_XFER_TREND = 0.15    # share of the chord the slow gradient is kept over
+_FOLD_XFER_CAP = 6.0       # levels of composite luma the correction may carry
+_FOLD_XFER_ENDS = 0.15     # share of the chord at each end the correction fades
+                           # over: the point and the tail notch are drawn
+                           # features, not fold, and both are already owned by
+                           # _tip_relight and _notch_from_author
+
+
+def _fold_transfer(rgb, name, idx, size):
+    """Make the crease's brightness along its length follow the analytic one."""
+    if name not in _FOLD_XFER:
+        return rgb
+    got = _fold_offsets(name, idx)
+    if got is None:
+        return rgb
+    tso, offs, ch = got
+    L = size / V.LOGICAL
+    p0 = np.array(ch[0], dtype=np.float64)
+    p1 = np.array(ch[1], dtype=np.float64)
+    dvec = p1 - p0
+    span = float(np.hypot(*dvec))
+    if span < _FOLD_MIN_SPAN:
+        return rgb
+    u = dvec / span
+    nv = np.array([-u[1], u[0]])
+    ts = np.arange(0.0, 1.0 + 1e-9, _FOLD_XFER_TS)
+    qs = np.arange(-_FOLD_XFER_BAND, _FOLD_XFER_BAND + 1e-9, _FOLD_XFER_STEP)
+    # centred on where the crease actually runs, not on the chord: the master
+    # puts it up to _FOLD_CAP off the line, and a template read off the chord
+    # would be reading half glass and half crease.
+    off = np.interp(ts, tso, offs)
+    cx = p0[0] + dvec[0] * ts + nv[0] * off
+    cy = p0[1] + dvec[1] * ts + nv[1] * off
+    xs = (cx[:, None] + nv[0] * qs[None, :]) * L - 0.5
+    ys = (cy[:, None] + nv[1] * qs[None, :]) * L - 0.5
+
+    mask = _mask(name, idx, size).astype(np.float64)
+    a = np.clip(_up_alpha(name, idx, size) * mask / 255.0, 0.0, 1.0)
+    comp = rgb.mean(-1) * a + _RIM_XFER_BG * (1.0 - a)
+    m = _sample1(comp, xs, ys)
+    b = _sample1(_bevel_shading(name, idx, size), xs, ys)
+    solid = _sample1(mask, xs, ys) >= 250.0
+    keep = solid.all(1)
+    if keep.sum() < 8:
+        return rgb
+
+    # Along the crease, not across it: each column of the band is compared with
+    # its own mean, so the crease keeps its depth and only its variation down
+    # the line is rewritten.
+    def demean(v):
+        # High-passed, not de-meaned against the whole chord: a crease is
+        # legitimately brighter at one end than the other (fold_profile grades
+        # the step between neighbouring rows for exactly that reason), so only
+        # the variation faster than _FOLD_XFER_TREND is the render's to fix.
+        w = int(round(_FOLD_XFER_TREND / _FOLD_XFER_TS)) | 1
+        pad = np.pad(v, ((w // 2, w // 2), (0, 0)), mode="edge")
+        k = np.ones(w) / w
+        trend = np.apply_along_axis(lambda c: np.convolve(c, k, mode="valid"), 0, pad)
+        return np.where(keep[:, None], v - trend, 0.0)
+
+    corr = demean(b) - demean(m)
+    k = np.ones(_FOLD_XFER_SMOOTH) / _FOLD_XFER_SMOOTH
+    corr = np.apply_along_axis(
+        lambda c: np.convolve(np.pad(c, _FOLD_XFER_SMOOTH // 2, mode="edge"), k,
+                              mode="valid"), 0, corr)
+    corr = np.clip(corr, -_FOLD_XFER_CAP, _FOLD_XFER_CAP)
+    corr *= np.clip(np.minimum(ts, 1.0 - ts) / _FOLD_XFER_ENDS, 0.0, 1.0)[:, None]
+    corr *= (1.0 - np.abs(qs) / _FOLD_XFER_BAND)[None, :] ** 2
+    corr = corr / np.maximum(_sample1(a, xs, ys), 0.25)
+    corr[~keep] = 0.0
+
+    acc = np.zeros((size, size))
+    wgt = np.zeros((size, size))
+    sx = np.clip(xs, 0, size - 1.001)
+    sy = np.clip(ys, 0, size - 1.001)
+    x0, y0 = sx.astype(np.int32), sy.astype(np.int32)
+    fx, fy = sx - x0, sy - y0
+    for dx, dy, f in ((0, 0, (1 - fx) * (1 - fy)), (1, 0, fx * (1 - fy)),
+                      (0, 1, (1 - fx) * fy), (1, 1, fx * fy)):
+        xi = np.minimum(x0 + dx, size - 1)
+        yi = np.minimum(y0 + dy, size - 1)
+        np.add.at(acc, (yi, xi), corr * f)
+        np.add.at(wgt, (yi, xi), f)
+    delta = np.where(wgt > 1e-6, acc / np.maximum(wgt, 1e-6), 0.0) * (mask / 255.0)
+    return np.clip(rgb + delta[..., None], 0, 255)
+
+
 _TIP_ANCHOR_SMOOTH = 3.5   # logical units the band's anchor level is smoothed
                            # over. Wide enough that nothing structural survives
                            # it - the fold this stage replaces is a hairline and
@@ -2820,6 +3117,233 @@ def _match_author_level(rgb, name, idx, size):
     return np.clip(rgb + diff * m[..., None], 0, 255)
 
 
+_FACET_CURSORS = {"Arrow"}     # the two glass surfaces are built from the
+                               # traced landmarks instead of being taken on
+                               # trust from the master (NEXT.md 30). Arrow only:
+                               # on Arrow_Down and UpArrow the same stage buys
+                               # less facet contrast at the point than it spends
+                               # in point contrast against the desktop, measured
+                               # over three percentiles and three rim widths
+                               # (NEXT.md 30.3)
+_FACET_FEATHER = 0.40          # logical units the two facets blend over out in
+                               # the body, where the wedge is wide
+_FACET_RAMP = 3.0              # logical units from the point over which that
+                               # blend opens up from nothing. At the point
+                               # itself the two surfaces meet along a line: a
+                               # blend of constant width is wider than the glass
+                               # there, and two surfaces blended across the
+                               # whole width of a wedge are one surface
+_FACET_GAIN_CAP = 4.0          # widest facet ratio that may be imposed
+_FACET_REF = 512               # size the two ratios are read at, once
+_FACET_BODY_BAND = (8.0, 20.0) # logical units from the point the ratio between
+                               # the two surfaces is read over: the body, where
+                               # the master is trustworthy and reads 2.00-2.10
+                               # against the author's 1.91-2.07
+_FACET_BIN = 0.25              # logical units per station of the along-chord
+                               # brightness profile the tip zone keeps
+_FACET_MIX = 1.0               # how much of the rebuilt point is used against
+                               # the master's own. Full is the most faithful to
+                               # the author on both readings that matter here
+                               # and costs raw point contrast, which the ratchet
+                               # counts upward-only (NEXT.md 30)
+_FACET_PCT = 20                # percentile of each section that counts as its
+                               # dark surface, and its mirror as the lit one.
+                               # Medians of the whole section were tried and
+                               # flatten the ramp: the brightening towards the
+                               # point lives in the lit facet alone, and a
+                               # statistic that mixes both surfaces cannot see it.
+                               # The quartile is the principled reading and lands
+                               # the point exactly on the body's own facet ratio
+                               # (1.96 against 1.98) - and on the author's own
+                               # point contrast, a per cent under it. This one is
+                               # a fifth: ratio 2.12, and the point still reads
+                               # half again as strongly as his (NEXT.md 30.3)
+_FACET_TIP_ZONE = 2.5          # units of point the correction is full over, and
+_FACET_TIP_FADE = 2.0          # units it fades out over past that
+_FACET_KEEP_RIM = 0.25         # logical units of edge the master's own rim
+                               # keeps, blending to the rebuilt facets over the
+                               # same width again. The rim is what carries the
+                               # point against the desktop, and it is a different
+                               # structure from the two surfaces inside it
+_TIP_GLASS = 1.5               # logical units of point whose translucency is
+                               # carried out from deeper inside the glass
+_FACET_MEASURING = set()       # guard: the gain is read off the finished frame,
+                               # and reading it must not apply itself
+
+
+def _smoothstep(x):
+    x = np.clip(x, 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+@functools.lru_cache(maxsize=None)
+def _landmarks(name, idx):
+    """(A, B, J, C) in logical units: the point, the two tails, the notch.
+
+    Not hand-listed. A and J are the ends of the fold chord the tracer already
+    finds (_fold_chord); B and C are the other two convex points, sorted by
+    which side of that chord they fall on. The structure of an arrow is four
+    points and one interior edge, and all four are already in the outline."""
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return None
+    a = np.array(ch[0], dtype=np.float64)
+    j = np.array(ch[1], dtype=np.float64)
+    d = (j - a) / max(float(np.hypot(*(j - a))), 1e-9)
+    nv = np.array([-d[1], d[0]])
+    rest = [np.array(p, dtype=np.float64) for p in _sharp_corners(name, idx)
+            if float(np.hypot(*(np.array(p) - a))) > 1e-6]
+    if len(rest) < 2:
+        return None
+    side = [float((p - a) @ nv) for p in rest]
+    b = rest[int(np.argmax(side))]
+    c = rest[int(np.argmin(side))]
+    return (tuple(a), tuple(b), tuple(j), tuple(c))
+
+
+def _facet_frame(name, idx, size):
+    """Signed distance to the A-J chord and distance along it, logical units."""
+    lm = _landmarks(name, idx)
+    a = np.array(lm[0]); j = np.array(lm[2])
+    d = (j - a) / max(float(np.hypot(*(j - a))), 1e-9)
+    nv = np.array([-d[1], d[0]])
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    px = xs / s - a[0]
+    py = ys / s - a[1]
+    return px * nv[0] + py * nv[1], px * d[0] + py * d[1]
+
+
+@functools.lru_cache(maxsize=None)
+def _facet_gain(name, idx):
+    """How much of its own facet contrast the point has lost.
+
+    Median linear luminance either side of the chord, in a band at the point
+    and in a band out in the body, both on the finished frame at _FACET_REF.
+    The body is the target and it is not a guess: measured this way Arrow's
+    body separates its two surfaces by 2.00-2.10 and the author separates his
+    by 1.91-2.07 - the same glass. Inside two units of the apex ours falls to
+    1.06, which is what "the point stops reading as two surfaces" is, in a
+    number. Nothing is chosen by hand; the cursor is compared with itself."""
+    if _landmarks(name, idx) is None:
+        return 1.0
+    size = _FACET_REF
+    sd, t = _facet_frame(name, idx, size)
+    ed = _edge_distance_at(name, idx, size)
+    inside = (_mask(name, idx, size) > 250) & (ed > 0.35)
+    _FACET_MEASURING.add(name)
+    try:
+        rgb = np.asarray(frame_image.__wrapped__(name, idx, size), dtype=np.float64)[..., :3]
+    finally:
+        _FACET_MEASURING.discard(name)
+    y = V.srgb_to_linear(np.clip(rgb, 0, 255).astype(np.uint8)) @ _LUMA
+
+    def ratio(band):
+        m = inside & (t >= band[0]) & (t < band[1])
+        u, l = m & (sd > 0), m & (sd < 0)
+        if u.sum() < 20 or l.sum() < 20:
+            return None
+        return float(np.median(y[l])) / max(float(np.median(y[u])), 1e-9)
+
+    body = ratio(_FACET_BODY_BAND)
+    if not body or body <= 0:
+        return 1.0
+    return float(np.clip(body, 1.0 / _FACET_GAIN_CAP, _FACET_GAIN_CAP))
+
+
+def _facet_split(rgb, name, idx, size):
+    """Rebuild the point out of two surfaces that meet at it.
+
+    The outer silhouette is geometry - the tracer even reconstructs the apex
+    from the two sides that form it. The interior edge between the lit sheet
+    and the grey underside is not: it arrives as pixels in the master, drawn
+    wherever the network put it. Measured against the chord it is 0.44-0.70
+    logical units off within two units of the point, and measured across it the
+    two surfaces there differ by 1.06 where the body differs by 2.00 and the
+    author by 1.91-2.07. That is the point not reading as two surfaces.
+
+    The correction is across the chord only. Along it the master is right and
+    says something the author says too: the glass brightens towards the point
+    (Arrow 133 -> 238 over the first 2.5 units). An earlier version replaced the
+    tip with a straight fit of each surface's colour and flattened that ramp to
+    a plateau - which is UpArrow's own defect, drawn brighter. So the along-chord
+    profile is kept exactly as the master has it, taken as the median across each
+    section, and only the shape across the section is replaced: the two sides of
+    the chord are set to that level times and divided by the square root of the
+    ratio the body already carries.
+
+    This does not draw a line between them. A line has a width of its own and
+    would split the point in two; what is wanted is one edge whose width goes to
+    zero exactly at A, so both surfaces arrive at the same vertex. Out past
+    _FACET_TIP_ZONE the master's own fold takes over again."""
+    if (name not in _FACET_CURSORS or name in _FACET_MEASURING
+            or _landmarks(name, idx) is None):
+        return rgb
+    r = _facet_gain(name, idx)
+    if abs(r - 1.0) < 1e-3:
+        return rgb
+    sd, t = _facet_frame(name, idx, size)
+    near = 1.0 - _smoothstep((t - _FACET_TIP_ZONE) / _FACET_TIP_FADE)
+    if near.max() <= 0.0:
+        return rgb
+    ed = _edge_distance_at(name, idx, size)
+    inside = (_mask(name, idx, size) > 250) & (ed > 0.35)
+    lum = rgb @ _LUMA
+    span = _FACET_TIP_ZONE + _FACET_TIP_FADE
+    edges = np.arange(0.0, span + _FACET_BIN, _FACET_BIN)
+    at, hi, lo = [], [], []
+    for e0 in edges[:-1]:
+        m = inside & (t >= e0) & (t < e0 + _FACET_BIN)
+        if m.sum() < 12:
+            continue
+        y = lum[m]
+        cut_hi = np.percentile(y, 100 - _FACET_PCT)
+        cut_lo = np.percentile(y, _FACET_PCT)
+        at.append(e0 + _FACET_BIN / 2.0)
+        hi.append(np.median(rgb[m][y >= cut_hi], axis=0))
+        lo.append(np.median(rgb[m][y <= cut_lo], axis=0))
+    if len(at) < 4:
+        return rgb
+    at = np.array(at); hi = np.array(hi); lo = np.array(lo)
+    bright = np.dstack([np.interp(t, at, hi[:, c]) for c in range(3)])
+    dark = np.dstack([np.interp(t, at, lo[:, c]) for c in range(3)])
+    w = _FACET_FEATHER * _smoothstep(t / _FACET_RAMP)
+    upper = np.where(w < 1e-6, (sd > 0).astype(np.float64),
+                     np.clip(0.5 + sd / (2.0 * np.maximum(w, 1e-6)), 0.0, 1.0))
+    lit = upper if r < 1.0 else 1.0 - upper        # r is lower-over-upper
+    recon = bright * lit[..., None] + dark * (1.0 - lit)[..., None]
+    if _FACET_KEEP_RIM > 0.0:
+        # The two facets are interior surfaces. The dark rim that runs around
+        # the outside is a different structure, and it is what carries the
+        # point's contrast against the desktop - overwriting it with interior
+        # glass is what cost tip_contrast on all three arrows (NEXT.md 30.3).
+        near = near * _smoothstep(ed / _FACET_KEEP_RIM - 1.0)
+    k = (near * _FACET_MIX)[..., None]
+    return np.clip(rgb * (1.0 - k) + recon * k, 0, 255)
+
+
+def _tip_glass(up_a, name, idx, size):
+    """Carry the glass out to the point.
+
+    The silhouette is a sharp vector polygon and the translucency inside it is
+    not: at Arrow's apex the two multiply out to alpha 9, and the glass only
+    reaches its own level half a unit further in. The polygon is therefore
+    sharper than anything the eye ever sees. Sample the translucency
+    _TIP_GLASS units inside, along the fold chord where both surfaces meet, and
+    carry that value out to A. The vector mask still draws the edge, so the
+    point stays as sharp as it is traced - it just has glass in it."""
+    if name not in _FACET_CURSORS or _landmarks(name, idx) is None:
+        return up_a
+    lm = _landmarks(name, idx)
+    a = np.array(lm[0]); j = np.array(lm[2])
+    d = (j - a) / max(float(np.hypot(*(j - a))), 1e-9)
+    s = size / V.LOGICAL
+    p = (a + d * _TIP_GLASS) * s
+    ref = float(_sample1(up_a, p[0], p[1]))
+    _, t = _facet_frame(name, idx, size)
+    return np.maximum(up_a, ref * _smoothstep(1.0 - t / _TIP_GLASS))
+
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -2843,6 +3367,9 @@ def frame_image(name, idx, size):
     rgb = _edge_comb(rgb, name, idx, size)
     rgb = _notch_declutter(rgb, name, idx, size)
     rgb = _notch_from_author(rgb, name, idx, size)
+    rgb = _rim_transfer(rgb, name, idx, size)
+    rgb = _fold_transfer(rgb, name, idx, size)
+    rgb = _facet_split(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #
@@ -2878,7 +3405,7 @@ def frame_image(name, idx, size):
     # A rough section is a defect. It is not the defect that was reported, and
     # it is not worth paying for in points and in sheen. Left here, off, with
     # its numbers, so the trade is a decision rather than a discovery.
-    up_a = _up_alpha(name, idx, size)
+    up_a = _tip_glass(_up_alpha(name, idx, size), name, idx, size)
     alpha = _round_hole(_deburr(_mask(name, idx, size) / 255.0 * up_a, size),
                         name, idx, size)
     # anchor saturation at the shipped size, where the superiority metric reads
