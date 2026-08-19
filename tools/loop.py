@@ -69,12 +69,14 @@ DECISION_TREE = {
     "fold_jitter": [
         ("check_temporal", "analyze.temporal_smoothness by zone"),
         ("freeze_lines", "hybrid._freeze_lines, _FREEZE_UNIT"),
-        ("reduce_sheen", "hybrid._SHEEN_SMOOTH on the fold band"),
+        ("check_light_field", "lightanim._LIGHT_UNIT, _MASTER_UNIT: the light "
+                              "is what moves, the geometry is one canonical render"),
         ("escalate", ""),
     ],
     "tip_split": [
         ("check_apex", "trace.reconstruct_apex: is the apex where it should be"),
-        ("check_still_tip", "hybrid._STILL_TIP_R, _STILL_TIP_FEATHER"),
+        ("check_facets", "hybrid._FACET_PCT, _FACET_KEEP_RIM: the two surfaces "
+                         "must meet at the vertex without eating the rim"),
         ("analytic_tip", "hybrid._tip_pinch from geometry, radius under 4 units"),
         ("escalate", ""),
     ],

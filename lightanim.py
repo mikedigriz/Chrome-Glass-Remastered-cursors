@@ -24,7 +24,6 @@ approximation of it.
 Nothing here is wired into build.py. Import it and call anim_frames_lighting.
 """
 
-import contextlib
 import functools
 
 import numpy as np
@@ -109,31 +108,6 @@ _GAIN_CAP = 2.50     # |log gain| ceiling. The author's own sweep runs to
                      # 2.4 on AppStarting (a dark facet lit to near white is
                      # a factor of eleven), so this clips nothing he drew and
                      # only guards against a division by the log floor
-
-
-@contextlib.contextmanager
-def _plain_masters():
-    """Run with the temporal correctors off.
-
-    _SHEEN_SMOOTH averages three keyframes' colour, _tip_still freezes the
-    shading around every point to the cycle's mean. Both exist to hide the
-    disagreement between per-frame masters; the canonical frame must be one
-    frame as the network drew it, not a blend of three."""
-    smooth, still = H._SHEEN_SMOOTH, H._tip_still
-    H._SHEEN_SMOOTH = (0.0, 1.0, 0.0)
-    H._tip_still = lambda *a, **k: None
-    _clear_caches()
-    try:
-        yield
-    finally:
-        H._SHEEN_SMOOTH, H._tip_still = smooth, still
-        _clear_caches()
-
-
-def _clear_caches():
-    for obj in vars(H).values():
-        if hasattr(obj, "cache_clear"):
-            obj.cache_clear()
 
 
 @functools.lru_cache(maxsize=None)
@@ -334,8 +308,7 @@ def canonical_frame(name, size, idx=None):
     """The one rendered frame the whole cycle is lit from."""
     if idx is None:
         idx = canonical_index(name)
-    with _plain_masters():
-        return np.asarray(H.frame_image(name, idx, size), dtype=np.float64)
+    return np.asarray(H.frame_image(name, idx, size), dtype=np.float64)
 
 
 def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
@@ -351,8 +324,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     lin = V.srgb_to_linear(np.clip(base[..., :3], 0, 255).astype(np.uint8))
     alpha = base[..., 3]
     if SOURCE == "master":
-        with _plain_masters():
-            raw = master_light(name, size)
+        raw = master_light(name, size)
     else:
         raw = residual_field(name)
     n = len(H.BY_NAME[name]["frames"])

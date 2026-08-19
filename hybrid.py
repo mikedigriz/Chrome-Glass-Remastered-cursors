@@ -405,45 +405,6 @@ def _declutter_engraved_detail(name, idx, rgb, size):
     return rgb * (1 - strength)[..., None] + blurred * strength[..., None]
 
 
-_SHEEN_SMOOTH = (1.0, 2.0, 1.0)   # circular temporal kernel over an animation's colour
-_STILL_TIP_R = 1.75               # logical units around a corner whose shading is frozen.
-                                  # Was 6.0, wide enough to cover the neighbourhood
-                                  # _tip_pinch read its edge colour from - but _tip_pinch
-                                  # is gone (see DEAD_ENDS.md), and at 6.0 the sweep never
-                                  # reached the points at all: AppStarting/Hand/Wait's own
-                                  # cycle swing inside the tip_sheen disc measured near
-                                  # zero (0.02, 0.00, 0.04 luma levels) against the
-                                  # author's 14.7/13.6/10.7. At 1.75 the swing matches his
-                                  # (15.2/12.8/10.6) and the wobble it was guarding against
-                                  # stays below his own (0.32/0.29/0.30 vs 0.39/0.34/0.34) -
-                                  # the point does not visibly lean as the sweep crosses it.
-_STILL_TIP_FEATHER = 2.0          # logical units of blend back into the moving body
-
-
-@functools.lru_cache(maxsize=None)
-def _tip_still(name, idx, size):
-    """Weight map, 1 where an animation's shading is held still.
-
-    AppStarting, Hand and Wait animate nothing but the sheen: their silhouette
-    is one static arrow (identical 51-point polygon in every frame) and the
-    author sweeps a highlight through the glass inside it. Near a tip the wedge
-    is only a couple of units wide, so as the sweep passes it the fold line
-    crosses the whole width and the point reads as leaning left, then right -
-    the tip appears to wobble even though its outline never moves. Freezing the
-    shading in a disc around every corner keeps the points dead still and
-    leaves the sweep to the body, where it is meant to be seen."""
-    pts = [(v[0], v[1]) for poly in C.TRACED[name]["frames"][idx]["polys"]
-           for v in poly if v[2]]
-    if not pts:
-        return None
-    s = size / V.LOGICAL
-    ys, xs = np.mgrid[0:size, 0:size]
-    d = np.full((size, size), np.inf)
-    for x, y in pts:
-        d = np.minimum(d, np.hypot(xs - x * s, ys - y * s) / s)
-    return np.clip((_STILL_TIP_R - d) / _STILL_TIP_FEATHER, 0.0, 1.0)
-
-
 _TIP_COS = -0.17         # cos of the widest interior angle (100 deg) still a point
 @functools.lru_cache(maxsize=None)
 def _sharp_corners(name, idx):
@@ -761,55 +722,21 @@ def _tip_pinch(rgb, name, idx, size):
 
 @functools.lru_cache(maxsize=None)
 def _master(name, idx):
-    """Colour master with the animation's shading damped along time.
+    """Colour master for one frame, as the network drew it.
 
-    The author's sheen sweeps unevenly: on AppStarting the colour moves 6.6x
-    faster at mid-cycle than at its start, so between two keyframes near the
-    peak it jumps a long way. At 20 fps that passed unnoticed; interpolated to
-    60 fps against a silhouette that now holds a still, sharp tip, the shading
-    inside the tip reads as a stutter. Since a cross-fade cannot invent the
-    motion between two distant keyframes (and 27 frames at rate 1 is already
-    the cycle's 60 fps ceiling - see anim_frames), the pace is evened out at
-    the source instead, with a small circular kernel over the neighbouring
-    keyframes' colour.
-
-    Around the tips the sweep is frozen outright (see _tip_still), to the
-    cycle's own mean so no single frame's look is privileged.
-
-    Colour only, in linear light: alpha stays the vector silhouette exactly,
-    and the static cursors plus the two non-looping animations (Handwriting,
-    NO, whose content appears and freezes rather than cycling) are untouched -
-    averaging a frame with a neighbour that holds different content would
-    ghost it."""
-    rgb, anchor = _master_raw(name, idx)
-    if name not in INTERP:
-        return rgb, anchor
-    n = len(BY_NAME[name]["frames"])
-    w = _SHEEN_SMOOTH
-    out = sum(_lin_master(name, (idx + d) % n) * wt
-              for d, wt in zip((-1, 0, 1), w)) / sum(w)
-    mean = _cycle_mean(name)
-    still = _tip_still(name, idx, anchor)
-    if still is not None:
-        out = mean * still[..., None] + out * (1.0 - still[..., None])
-    return V.linear_to_srgb(np.clip(out, 0.0, None)).astype(np.float64), anchor
-
-
-@functools.lru_cache(maxsize=None)
-def _lin_master(name, idx):
-    return V.srgb_to_linear(np.clip(_master_raw(name, idx)[0], 0, 255).astype(np.uint8))
-
-
-@functools.lru_cache(maxsize=None)
-def _cycle_mean(name):
-    """Mean colour over the whole cycle, in linear light.
-
-    Cached per cursor, not recomputed per frame: _master used to rebuild this
-    inside every frame it rendered, so a 9-frame cycle ran the 512px
-    srgb_to_linear 81 times where 9 would do. Same summation order, so the
-    result is bit-for-bit what the inline version produced."""
-    n = len(BY_NAME[name]["frames"])
-    return sum(_lin_master(name, i) for i in range(n)) / n
+    Two temporal correctors used to live here and are gone. `_SHEEN_SMOOTH`
+    averaged each animation frame with its two neighbours and `_tip_still`
+    froze the shading in a disc around every point to the cycle's mean; both
+    existed because the animation was a cross-fade between per-frame masters
+    that disagreed with each other, and the disagreement showed at the tips.
+    The three looping animations are lit from one canonical render now
+    (LIGHT_ANIM), so those masters are not cross-faded and not shipped - the
+    correctors were left applying to nothing but the measurements and the
+    preview tile. Removing them leaves the shipped frames bit-for-bit identical
+    and moves the readings towards the author: delta_e 4.57 -> 4.24, 2.89 ->
+    2.79, 3.78 -> 3.52, and Hand's point contrast 0.062 -> 0.178 against his
+    own 0.084, which was a debt line describing a frame nobody ever saw."""
+    return _master_raw(name, idx)
 
 
 # UpArrow's apex is measured, and no stage here moves it. Kept as a note so the
