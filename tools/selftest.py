@@ -230,8 +230,11 @@ def test_delta_e():
 
 
 def test_fold_unmeasured():
-    """A fold declared in the topology and resolved nowhere has to fail the
-    gate, not pass it quietly. This is attempt 36, written down as a test."""
+    """A fold declared in the topology and resolved nowhere must never read as a
+    plain pass. It is no longer counted as a defect of the render - it says the
+    tracker could not see the fold, so it comes back in its own class - but a
+    reading the baseline had and this run has not is still a regression. This is
+    attempt 36, written down as a test."""
     rep = {"Arrow": {"scale_drift": 0.0, "density": 0.0, "tip_convergence": 0.0,
                      "tip_convergence_orig": 0.0, "tip_contrast": 1.0,
                      "tip_contrast_orig": 0.0, "topology": [],
@@ -239,9 +242,13 @@ def test_fold_unmeasured():
                                               ("gap", "luma_step", "wander", "jag", "tip")},
                                     "resolved": [], "per_size": {}},
                      "delta_e": {"mean": 0.0, "p95": 0.0, "frame": 0}}}
-    bad, _ = A.gate(rep)
-    check("fold unmeasured", any("fold_unmeasured" in b for b in bad),
-          bad[0] if bad else "gate passed an unmeasured fold")
+    bad, _, unmeasured = A.gate(rep)
+    check("fold unmeasured", any("fold" in u for u in unmeasured) and not bad,
+          unmeasured[0] if unmeasured else "gate passed an unmeasured fold in silence")
+    # ...and the same reading, once the baseline has one, is a regression.
+    bad, _, _ = A.gate(rep, {"Arrow": {"fold_gap": 0.5}})
+    check("fold unmeasured vs baseline", any("fold_unmeasured" in b for b in bad),
+          bad[0] if bad else "gate lost a fold reading without saying so")
 
 
 def test_rim_layers():

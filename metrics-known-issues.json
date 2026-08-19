@@ -12,12 +12,14 @@
     "",
     "Matching ignores runs of whitespace, so the alignment analyze.py pads with does",
     "not have to be reproduced exactly. Delete a line the day the defect is fixed -",
-    "a stale entry here is a hole in the gate."
+    "a stale entry here is a hole in the gate.",
+    "",
+    "Empty since the gate grew a class for it: a fold the tracker cannot resolve",
+    "is reported as `unmeasured`, on its own, because it is a state of the",
+    "instrument and not a defect of the render. The notes below are kept - they",
+    "still say what fixing each one would mean."
   ],
-  "accepted": [
-    "AppStarting  jitter_unmeasured  fewer than ten rows of fold resolved across the cycle",
-    "AppStarting  fold_unmeasured    declared in CURSOR_TOPOLOGY, no size resolved it"
-  ],
+  "accepted": [],
   "notes": {
     "AppStarting jitter_unmeasured": "Pre-existing, present before the 2026-08-XX audit (see NEXT.md item 9). AppStarting's fold is fainter than the tracker's rejection threshold on most rows, so the cycle never resolves the ten it needs to report inner_jitter. Fixing it means making the tracker see a fold this faint, not changing the render.",
     "AppStarting fold_unmeasured": "Accepted 2026-08-13, with _notch_from_author (NEXT.md 23.3). AppStarting never had a fold reading along its length: measured at 256, all six resolved rows sat at t=0.852..0.969 of the chord, inside the tail hook that stage exists to remove. The tracker takes the darkest interior pixel per row and the hook is dark, so what it was reading there was the defect. Removing it leaves nothing above the prominence threshold, which is the same fault the jitter_unmeasured note describes, now reaching fold_gap/wander/luma_step/jag as well. Not a licence to stop looking at this cursor - it is measured by eye at 128/256/512 like the rest, and the reference art scores no better: fold_profile on the author's own frames returns None for all six wedges at every size. Fixing it means a fold the tracker can see on AppStarting - a stronger _TROUGH_PARAMS diff than 18, or a tracker that does not need prominence - not putting the hook back."

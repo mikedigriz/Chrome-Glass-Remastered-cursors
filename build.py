@@ -991,7 +991,7 @@ def check_quality():
         with open(_KNOWN) as fh:
             known = {" ".join(x.split()) for x in json.load(fh)["accepted"]}
     rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
-    bad, debt = A.gate(rep, base)
+    bad, debt, unmeasured = A.gate(rep, base)
     # The ratchet compares numbers, so a complaint that carries no number -
     # "this could not be measured at all" - lands in `bad` on every run,
     # baseline or not, and would wedge the build shut for good. Those are
@@ -999,9 +999,10 @@ def check_quality():
     # ones are visible and only a new one stops a build.
     new = [b for b in bad if " ".join(b.split()) not in known]
     seen = len(bad) - len(new)
-    print("  quality : %s%s%s" % ("clean" if not new else f"{len(new)} REGRESSION(S)",
-                                  f", {seen} accepted" if seen else "",
-                                  f", {len(debt)} known debt" if debt else ""))
+    print("  quality : %s%s%s%s" % ("clean" if not new else f"{len(new)} REGRESSION(S)",
+                                    f", {seen} accepted" if seen else "",
+                                    f", {len(debt)} known debt" if debt else "",
+                                    f", {len(unmeasured)} unmeasured" if unmeasured else ""))
     if new:
         for b in new:
             print("    " + b)

@@ -184,7 +184,7 @@ def next_action(artifact, done):
 def cmd_diagnose(args):
     sizes = A.LADDER_FAST if args.fast else A.LADDER_FULL if args.full else A.LADDER
     rep = A.collect(sizes, args.only, args.jobs)
-    bad, debt = A.gate(rep, ratchet())
+    bad, debt, _ = A.gate(rep, ratchet())
     A.show(rep)
     print()
     if debt:
@@ -278,7 +278,7 @@ def note(path, line):
 
 def cmd_progress(args):
     rep = A.collect(A.LADDER_FAST if args.fast else A.LADDER, args.only, args.jobs)
-    bad, debt = A.gate(rep, ratchet())
+    bad, debt, _ = A.gate(rep, ratchet())
     # Most of these are worst-is-highest. Two are not: a point's contrast and a
     # morph's overlap are both worst at their lowest, and taking a max of them
     # would report the healthiest cursor in the set as the state of the set.

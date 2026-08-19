@@ -63,6 +63,17 @@ _JAG_BAND = 2.0            # logical units either side of the fold a step is loo
 _DE_NATIVE = 256           # size the colour is judged at, box-averaged 8:1 down to 32
 _FOLD_ROWS = 6             # rows a fold reading needs before it means anything
 _RATCHET_SLACK = 0.05      # how far a floor metric may slip before it is a regression
+# Image diagnostics: read off the render, no absolute target. Their zero targets
+# said the fold has to be a mathematically straight line of constant brightness
+# with an identical cross-section on every row - which is not a property of lit
+# glass, and it put thirty-five of fifty-eight debt lines on the board saying so.
+# Nothing to calibrate them against either: fold_profile returns nothing at all
+# on the author's own 32px frames, at every size, for all six wedges. So they are
+# judged against the render that was accepted by eye - the committed baseline -
+# and only a move away from it, past a slack wide enough that the eye would see
+# it first, is a regression.
+_FOLD_DIAG = ("wander", "luma_step", "jag")
+_DIAG_SLACK = 0.20
 _SOLID_FRAC = 0.85         # of a frame's own peak alpha: the glass proper
 _GHOST_FRAC = 0.05         # ...and below this, nothing that can be seen
 _FOLD_DEPTH = 6.0          # luma a dip must have to count as a fold and not as flat glass
@@ -104,14 +115,10 @@ THRESHOLDS = {
     # --- geometry read at every size, on every frame (validate_multiscale) ---
     "fold_gap": 0.0,            # logical units of fold missing mid-line. Zero is
                                 # reachable and is the point: a fold either runs
-                                # the length of the crease or it is broken.
-    "fold_wander": 0.0,         # logical units, p95 sideways step of the line per row
-    "fold_luma_step": 0.0,      # levels, p95 step in brightness along the line
-    "fold_jag": 0.0,            # levels the fold's cross-section changes shape by
-                                # from one row to the next. Absolute, not a share of
-                                # the author's: at 0.85 of peak alpha the 2006 frame
-                                # has almost no solid interior left, so its own fold
-                                # cannot be tracked and there is no share to take.
+                                # the length of the crease or it is broken. This
+                                # one is structural, so it keeps an absolute
+                                # target; wander, luma_step and jag no longer do -
+                                # see _FOLD_DIAG.
     # --- colour and motion ---
     "temporal": 1.0,            # frame-to-frame step over cycle amplitude, scaled so
                                 # a sinusoid sampled n times reads 1.0
@@ -1574,7 +1581,28 @@ def collect(sizes, names=None, jobs=1):
 
 
 def gate(rep, base=None):
-    """Every threshold, applied. Returns (regressions, debt).
+    """Every threshold, applied. Returns (regressions, debt, unmeasured).
+
+    Three classes of reading, and they are not judged the same way.
+
+    Invariants - silhouette, scale drift, density, a fold that is continuous or
+    is not - carry absolute targets, because those targets are reachable and
+    mean something on their own.
+
+    Quality against the author - tip contrast, delta_e, sheen, morph coherence -
+    is judged as a share of his own frame. His drawing is the standard; ours
+    does not get to invent one.
+
+    Image diagnostics - fold wander, luma step and jag - have no target at all
+    (see _FOLD_DIAG). They were written as zeros, which said the fold must be a
+    straight line of constant brightness with an identical cross-section on
+    every row, and that is not a property of lit glass. They are still measured,
+    still printed, and still fail on a move away from the accepted render - they
+    just no longer sit in the debt column forever for being above nothing.
+
+    Unmeasured is its own answer, not a pass and not a defect of the render: the
+    tracker could not see this fold at all. It is returned separately so it stays
+    visible. Losing a reading the baseline had is still a regression.
 
     Without a baseline every value that misses its threshold is a failure.
     With one, a value that misses its threshold but is no worse than the
@@ -1588,7 +1616,7 @@ def gate(rep, base=None):
     and a gate that is not running is how those numbers got there. Anything
     that moves further from the target still fails, on the spot."""
     T = THRESHOLDS
-    bad, debt = [], []
+    bad, debt, unmeasured = [], [], []
     was = {n: (_flat(v) if "multiscale" in v else v) for n, v in (base or {}).items()}
 
     def fail(name, metric, got, op, want, key=None):
@@ -1605,6 +1633,16 @@ def gate(rep, base=None):
             bad.append(f"{line}  (was {prev:.3f})")
         else:
             debt.append(line)
+
+    def drift(name, worst, prev):
+        """The diagnostic class: no target, only a distance from the baseline."""
+        for k in _FOLD_DIAG:
+            got, ref = worst[k], prev.get("fold_" + k)
+            if ref is None:
+                continue
+            if got > ref * (1.0 + _DIAG_SLACK) + 1e-6:
+                bad.append(f"{name:12s} {'fold_' + k:18s} {got:8.3f} > "
+                           f"{ref * (1.0 + _DIAG_SLACK):.3f}  (was {ref:.3f})")
 
     # Ratcheted whatever they read. Every other check here only consults the
     # baseline once a value has already missed its threshold, which leaves a
@@ -1631,16 +1669,22 @@ def gate(rep, base=None):
             fail(name, "density_%", e["density"], ">", T["density"], "density")
         ms = e.get("multiscale")
         if ms:
-            for k in ("gap", "wander", "luma_step", "jag"):
-                if ms["worst"][k] > T["fold_" + k]:
-                    fail(name, "fold_" + k, ms["worst"][k], ">", T["fold_" + k])
-            # Declared but never read is a failure, not a pass. A fold that no
-            # size resolved leaves every number above it at a clean zero, which
-            # is how the fold measurement sat broken for 36 attempts.
+            if ms["worst"]["gap"] > T["fold_gap"]:
+                fail(name, "fold_gap", ms["worst"]["gap"], ">", T["fold_gap"])
+            drift(name, ms["worst"], was.get(name, {}))
+            # Declared but never read is not a pass - but it is also not a defect
+            # of the render. It says the tracker could not see a fold this faint,
+            # which is a state of the instrument, so it is reported on its own.
+            # What would be a regression is losing a reading the baseline had:
+            # that is how the fold measurement sat broken for 36 attempts.
             top = getattr(H.C, "CURSOR_TOPOLOGY", {}).get(name, {})
             if any(top.get("fold", [])) and not ms["resolved"]:
-                bad.append(f"{name:12s} {'fold_unmeasured':18s} "
-                           f"declared in CURSOR_TOPOLOGY, no size resolved it")
+                if was.get(name, {}).get("fold_gap") is not None:
+                    bad.append(f"{name:12s} {'fold_unmeasured':18s} "
+                               f"the baseline resolved this fold and this run does not")
+                else:
+                    unmeasured.append(f"{name:12s} {'fold':18s} "
+                                      f"declared in CURSOR_TOPOLOGY, no size resolved it")
         de = e.get("delta_e")
         if de and de["mean"] > T["delta_e"]:
             fail(name, f"delta_e[{de['frame']}]", de["mean"], ">", T["delta_e"], "delta_e")
@@ -1701,8 +1745,12 @@ def gate(rep, base=None):
             # crease is four to seven levels deep where Arrow's is eighteen to
             # twenty-three, so few enough rows resolve that this returns nothing
             # at all - and nothing at all must not read as a pass.
-            bad.append(f"{name:12s} {'jitter_unmeasured':18s} "
-                       f"fewer than ten rows of fold resolved across the cycle")
+            if was.get(name, {}).get("inner_jitter") is not None:
+                bad.append(f"{name:12s} {'jitter_unmeasured':18s} "
+                           f"the baseline measured this jitter and this run does not")
+            else:
+                unmeasured.append(f"{name:12s} {'inner_jitter':18s} "
+                                  f"fewer than ten rows of fold resolved across the cycle")
         mo, mo0 = e.get("morph"), e.get("morph_orig")
         if mo and mo0:
             if mo["iou_min"] < mo0["iou_min"] * T["morph_iou"]:
@@ -1711,7 +1759,7 @@ def gate(rep, base=None):
             if mo["peak_over_mean"] > mo0["peak_over_mean"] * T["morph_peak"]:
                 fail(name, "morph_peak", mo["peak_over_mean"], ">",
                      round(mo0["peak_over_mean"] * T["morph_peak"], 2))
-    return bad, debt
+    return bad, debt, unmeasured
 
 
 def _flat(e):
@@ -1725,10 +1773,13 @@ def _flat(e):
         "density": e["density"],
         "tip_convergence": e["tip_convergence"],
         "tip_contrast": e["tip_contrast"],
-        "fold_gap": ms["worst"]["gap"] if ms else None,
-        "fold_wander": ms["worst"]["wander"] if ms else None,
-        "fold_luma_step": ms["worst"]["luma_step"] if ms else None,
-        "fold_jag": ms["worst"]["jag"] if ms else None,
+        # None, not zero, when no size resolved the fold. The zeros these used to
+        # carry are what let an unmeasured fold read as a perfect one, in the file
+        # the gate compares everything against.
+        "fold_gap": ms["worst"]["gap"] if ms and ms["resolved"] else None,
+        "fold_wander": ms["worst"]["wander"] if ms and ms["resolved"] else None,
+        "fold_luma_step": ms["worst"]["luma_step"] if ms and ms["resolved"] else None,
+        "fold_jag": ms["worst"]["jag"] if ms and ms["resolved"] else None,
         "delta_e": de["mean"] if de else None,
         "ghost_rgb": it["ghost_rgb"] if it else None,
         "cadence": it["visible_peak_over_mean"] if it else None,
@@ -1839,7 +1890,7 @@ def main():
         print(f"\nratchet written to {args.ratchet}")
 
     if args.check is not None:
-        bad, debt = gate(rep, base)
+        bad, debt, unmeasured = gate(rep, base)
         # The same subtraction build.check_quality does, for the same reason:
         # a complaint that carries no number ("this could not be measured at
         # all") cannot be ratcheted, so it lands in `bad` on every run and would
@@ -1860,6 +1911,11 @@ def main():
                   f"{os.path.basename(args.known)}, no number to ratchet")
             for a in accepted:
                 print("  " + a)
+        if unmeasured:
+            print(f"\nunmeasured ({len(unmeasured)}) - the tracker resolved nothing here,"
+                  " which is a state of the instrument, not of the render")
+            for u in unmeasured:
+                print("  " + u)
         print()
         if bad:
             print(f"FAIL ({len(bad)})")
