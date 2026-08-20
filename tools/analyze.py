@@ -88,14 +88,6 @@ _TIP_SPLIT = 28.0          # luma across a wedge that means its fold is present 
 _MORPH_SIZE = 32           # the size the author's frames actually exist at
 _TIP_COS = -0.17           # cos of the widest interior angle (100 deg) still a point
 
-# Directions the silhouette's extent is measured along. Eight is enough to pin
-# every cursor in the set: the diagonals catch the arrow points, the axials
-# catch the Size* wedges and the Cross arms.
-DIRS = {
-    "TL": (-1, -1), "TR": (1, -1), "BL": (-1, 1), "BR": (1, 1),
-    "L": (-1, 0), "R": (1, 0), "T": (0, -1), "B": (0, 1),
-}
-
 THRESHOLDS = {
     "scale_drift": 0.10,        # logical units of coverage spread across the ladder
                                 # (the traced mask alone sits at 0.02..0.10)

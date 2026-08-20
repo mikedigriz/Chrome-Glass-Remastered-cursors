@@ -27,7 +27,6 @@ Nothing here is wired into build.py. Import it and call anim_frames_lighting.
 import functools
 
 import numpy as np
-from PIL import Image
 
 import hybrid as H
 import vectorlib as V

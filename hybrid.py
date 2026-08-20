@@ -1125,13 +1125,6 @@ _LEVEL_REACH = 0.5       # least mask coverage a pixel needs to speak for the le
 _LEVEL_REF = 128         # size the glass level is matched at
 
 
-def _resample(a, size):
-    if a.shape[0] == size:
-        return a
-    return np.clip(np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
-                              .resize((size, size), Image.LANCZOS), dtype=np.float64), 0, 255)
-
-
 def _resample_cover(a, size, clip=True):
     """Resize a coverage map: area average down, Lanczos up.
 
