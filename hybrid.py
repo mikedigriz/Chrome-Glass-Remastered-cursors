@@ -1219,7 +1219,7 @@ def _up_alpha(name, idx, size):
         return _resize(_orig(key), size)[1]
     a = _up_alpha_raw(key, size)
     if size == _LEVEL_REF:
-        return a
+        return a                         # note: anything added below skips 128
     # Held to the reference size's own level. The map is one and the same at
     # every size, but the mask it gets multiplied by is not: that mask's edge is
     # one device pixel wide, a whole logical unit of the cursor at 32px and a

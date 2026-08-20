@@ -820,3 +820,39 @@ NEXT.md 30.3).
 грани 0.93 -> 1.22 при телесном 1.33, `tip_contrast` 0.048 -> 0.041 при том, что
 он и так вдвое ниже авторского 0.085. У этих двух дефект острия не в разделении
 поверхностей, а в самом ободке. На Arrow та же стадия работает (NEXT.md 30.3).
+
+## `_tip_glass` before the size ladder: three placements, all worse (2026-08-20)
+
+Plan item 8. The premise was the one `_up_alpha_native` was built on - a stage
+derived afresh at every rung gives a different answer on each - so the point's
+glass should be put in once, canonically, and scaled with everything else.
+
+Measured on what the item is about: the shipped frame's alpha near Arrow's apex,
+sampled in logical units along the A-J chord, spread across the eight rungs from
+32 to 512. As shipped that is 50.9% of the mean at 0.15 units in, 31.2% at 0.5,
+17.4% at 1.0, 5.7% at 1.5.
+
+- **The floor laid once at native and resampled** (inside `_up_alpha_native`,
+  after the level anchor). Worse everywhere: 59.5%, 36.6%, 18.2%. The vector
+  mask is redrawn crisp on every rung and this floor exists to fill it; laid at
+  512 and box-averaged down, it loses the point's glass again at exactly the
+  sizes that needed it - the apex reads 116.4 at 32px against 133.3 shipped.
+- **Canonical reference level, floor still laid per size.** Worse: 52.9%,
+  33.2%. The per-size sample was not drift. It reads the glass level on the rung
+  it is filling, and 214.3 at 32 against 202.1 at 512 is that map's own level at
+  that point; freezing it to the native value only lowers the small end.
+- **The stage moved inside `_up_alpha`, ahead of `_hold_coverage`,** so the
+  coverage hold accounts for what the tip adds. The one placement with a
+  structural argument, and it buys nothing: 50.6% against 50.9%, delta_e 2.925
+  -> 2.921, while Arrow's `scale_drift` doubles, 0.0034 -> 0.0072.
+
+`_tip_glass` is already where it belongs, and for a reason worth keeping: a
+floor that fills a crisp mask has to be laid on the same grid the mask is drawn
+on. What still varies along the ladder at the point is coverage - one logical
+unit of shape under an edge one device pixel wide - and no alpha stage reaches
+that.
+
+Collateral worth knowing: `_up_alpha` returns early at `size == _LEVEL_REF`, so
+a stage appended to its tail silently skips 128. The first run of the third
+attempt did exactly that and put a hole at that one rung (apex 54.8 against 154.2
+either side of it). Commented at the return.
