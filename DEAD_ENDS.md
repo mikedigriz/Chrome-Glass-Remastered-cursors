@@ -502,6 +502,15 @@ touches it.
   1.15/1.20/1.25 give 0.041/0.040/0.045, so no factor clears it), but that is
   not what decided it - the shadow is.
 
+  **Closed from the other side (2026-08-20).** Every lever here, this one
+  included, tried to move or smooth UpArrow's own shading. Across the wedge two
+  units from the point UpArrow reads 115 95 104 97 82 and Arrow_Down reads
+  123 88 72 96 225: the crease is in both, the lit facet only in the donor, so
+  the facet is *missing* and there is nothing to move. Arrow_Down is drawn on
+  the same traced outline, so its luminance transplants without registration -
+  see `_apex_borrow` and NEXT.md 36. The conclusion recorded here, that anything
+  further belongs upstream of `src/ai512`, was wrong: it belongs to a neighbour.
+
 - **Three narrower shapes for the tail notch (2026-08-13).** All three were
   tried before `_notch_from_author` settled on a plain deviation cap over a
   disc, and each looked like it should cost less.
