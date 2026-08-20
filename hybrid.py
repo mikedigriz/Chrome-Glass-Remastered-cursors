@@ -998,17 +998,47 @@ def _resample(a, size):
                               .resize((size, size), Image.LANCZOS), dtype=np.float64), 0, 255)
 
 
+def _resample_cover(a, size, clip=True):
+    """Resize a coverage map: area average down, Lanczos up.
+
+    Box on the way down was tried once on its own and measured worse (the
+    ladder's interior spread went 2.5..3.9% -> 3.4..6.3%), which is why this
+    file was Lanczos both ways. That reading was taken against the whole-mask
+    anchor below, which counted the ladder's own rim as glass; against an
+    interior anchor the order reverses, and Lanczos' ring across a bar six
+    units wide (SizeNS, SizeWE - all rim, no interior) is what no anchor could
+    reach."""
+    if a.shape[0] == size:
+        return a
+    f = Image.BOX if size < a.shape[0] else Image.LANCZOS
+    out = np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
+                     .resize((size, size), f), dtype=np.float64)
+    return np.clip(out, 0, 255) if clip else out
+
+
 def _up_alpha_raw(key, size):
-    """The native blend at `size`, resampled. Lanczos both ways: a box
-    downsample was tried for being the physically right average of a coverage
-    map and is measurably worse here (the ladder's interior spread went
-    2.5..3.9% -> 3.4..6.3%), because the rim this map carries is flat by
-    construction and what the average would protect is already gone."""
+    """The native blend at `size`, resampled - averaged over the silhouette
+    only, never across its edge.
+
+    A plain box average of the map pulls in what lies outside the shape, so at
+    32px the map's own edge pixels come out coverage-weighted - and then the
+    vector mask, which is coverage-weighted by construction, multiplies that in
+    a second time. The rim ends up carrying cov^2 where it should carry cov,
+    and the cursor loses a few percent of its mass at every step down the
+    ladder. Weighting the average by the mask removes the double count: the map
+    keeps its level right up to the edge and the mask alone says how much of
+    each pixel is covered."""
     a = _up_alpha_native(key)
     if a.shape[0] == size:
         return a
-    return np.clip(np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
-                              .resize((size, size), Image.LANCZOS), dtype=np.float64), 0, 255)
+    if size > a.shape[0]:
+        return _resample_cover(a, size)
+    _, name, idx = key.split("__")
+    w = _mask(name, int(idx), a.shape[0]) / 255.0
+    num = _resample_cover(a * w, size, clip=False)
+    den = _resample_cover(w, size, clip=False)
+    flat = _resample_cover(a, size)
+    return np.clip(np.where(den > 1e-3, num / np.maximum(den, 1e-3), flat), 0, 255)
 
 
 @functools.lru_cache(maxsize=None)
@@ -1061,19 +1091,85 @@ def _up_alpha(name, idx, size):
         return a
     target = _up_alpha_level(name, idx)
     for _ in range(2):                   # the clip at 255 eats part of the first
-        cur = float((m * a).sum() / ms)
+        cur = _interior_level(a, name, idx)
+        if cur is None:
+            cur = float((m * a).sum() / ms)
         if cur < 1e-6:
             break
         a = np.clip(a * (target / cur), 0, 255)
-    return a
+    return _hold_coverage(a, name, idx, size)
+
+
+_DENSITY_DEPTH = 1.0     # logical units below the edge where the glass starts
+
+
+@functools.lru_cache(maxsize=None)
+def _level_region(name, idx):
+    """Where the glass level is read: everything deeper than _DENSITY_DEPTH.
+
+    Chosen once at _LEVEL_REF and never re-thresholded per size, so every rung
+    is measured over one and the same piece of the cursor."""
+    return _edge_distance_at(name, idx, _LEVEL_REF) > _DENSITY_DEPTH
+
+
+def _interior_level(a, name, idx):
+    """Mean of that region, read on the reference grid. None if there is no
+    interior at all - a frame thinner than two logical units everywhere."""
+    reg = _level_region(name, idx)
+    if not reg.any():
+        return None
+    return float(_resample_cover(a, _LEVEL_REF)[reg].mean())
 
 
 @functools.lru_cache(maxsize=None)
 def _up_alpha_level(name, idx):
-    """Mask-weighted mean of the translucency map at the reference size."""
+    """The glass level every other size is held to.
+
+    Was the mask-weighted mean over the whole silhouette, which is not a
+    property of the glass: the mask's edge is one device pixel wide, so
+    half-covered pixels are 41% of the coverage at 32px against 4% at 512, and
+    an average over all of them reads the ladder's own rim as the cursor
+    getting denser. That is where density's 2.4..6.8% came from."""
+    a = _up_alpha_raw(_key(name, idx), _LEVEL_REF)
+    lvl = _interior_level(a, name, idx)
+    if lvl is not None:
+        return lvl
     m = _mask(name, idx, _LEVEL_REF)
-    return float((m * _up_alpha_raw(_key(name, idx), _LEVEL_REF)).sum()
-                 / max(m.sum(), 1e-6))
+    return float((m * a).sum() / max(m.sum(), 1e-6))
+
+
+@functools.lru_cache(maxsize=None)
+def _cover_ref(name, idx):
+    """Coverage the frame carries per unit area at the reference size."""
+    m = _mask(name, idx, _LEVEL_REF) / 255.0
+    a = _up_alpha_raw(_key(name, idx), _LEVEL_REF) / 255.0
+    return float((m * a).sum()) / float(_LEVEL_REF ** 2)
+
+
+def _hold_coverage(a, name, idx, size):
+    """Put back the coverage the interior anchor no longer carries.
+
+    One scalar cannot hold two quantities. The level belongs to the glass and
+    is now read where the glass is; how much of the cursor is covered belongs
+    to the edge, and the pixels carrying it are exactly the ones the mask
+    antialiases. Correcting only those leaves the interior at its anchored
+    level and keeps scale_drift where it was."""
+    m = _mask(name, idx, size) / 255.0
+    rim = (m > 0.0) & (m < 1.0)
+    if not rim.any():
+        return a
+    want = _cover_ref(name, idx) * float(size * size)
+    for _ in range(2):                   # the clip at 255 eats part of the first
+        p = m * (a / 255.0)
+        have_rim = float(p[rim].sum())
+        if have_rim < 1e-6:
+            break
+        c = (want - (float(p.sum()) - have_rim)) / have_rim
+        if not 0.0 < c < 4.0 or abs(c - 1.0) < 1e-4:
+            break
+        a = a.copy()
+        a[rim] = np.clip(a[rim] * c, 0.0, 255.0)
+    return a
 
 
 def original(name, idx):
