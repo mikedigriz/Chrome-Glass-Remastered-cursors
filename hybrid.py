@@ -736,7 +736,104 @@ def _master(name, idx):
     and moves the readings towards the author: delta_e 4.57 -> 4.24, 2.89 ->
     2.79, 3.78 -> 3.52, and Hand's point contrast 0.062 -> 0.178 against his
     own 0.084, which was a debt line describing a frame nobody ever saw."""
-    return _master_raw(name, idx)
+    rgb, anchor = _master_raw(name, idx)
+    if name in _APEX_DONOR:
+        rgb = _apex_borrow(rgb, name, idx)
+    return rgb, anchor
+
+
+_APEX_DONOR = {"UpArrow": "Arrow_Down"}   # blunt point -> whose shading it borrows
+_APEX_R0 = 2.0           # logical units from the point the borrow is whole out to
+_APEX_R1 = 3.5           # and where it has faded to nothing
+_APEX_LEVEL = 1.0        # logical units the broad level is read over
+
+
+def _gauss(a, sigma_px):
+    """Separable gaussian, in float. PIL's own runs on bytes, and what this
+    carries is a ratio of two blurs, where one level of quantisation is a
+    percent of the answer."""
+    r = int(max(1, round(3 * sigma_px)))
+    x = np.arange(-r, r + 1, dtype=np.float64)
+    k = np.exp(-0.5 * (x / sigma_px) ** 2)
+    k /= k.sum()
+    out = np.asarray(a, dtype=np.float64)
+    for axis in (0, 1):
+        pad = [(0, 0)] * out.ndim
+        pad[axis] = (r, r)
+        q = np.pad(out, pad, mode="edge")
+        acc = np.zeros_like(out)
+        for i, w in enumerate(k):
+            sl = [slice(None)] * out.ndim
+            sl[axis] = slice(i, i + out.shape[axis])
+            acc += w * q[tuple(sl)]
+        out = acc
+    return out
+
+
+def _apex_borrow(rgb, name, idx):
+    """Lend a blunt point the shading of a cursor drawn on the same outline.
+
+    Only the luminance travels, and only near the point:
+
+    - the donor's own broad level is divided out and UpArrow's put back, so the
+      zone cannot come out lighter or darker than it was - what is borrowed is
+      the shape of the shading, not its exposure;
+    - colour comes from UpArrow's own chroma direction, read over _APEX_LEVEL so
+      it carries no structure of its own. Scaling each pixel by the ratio it
+      would need instead clips two channels before the third where UpArrow has
+      its crease and the donor has its facet, and lands as a magenta line down
+      the fold - the first thing this stage got wrong;
+    - the weight is 1 inside _APEX_R0 of the traced point and smoothsteps to 0
+      by _APEX_R1, measured in logical units, so nothing steps at the boundary.
+
+    Measured on UpArrow, the only cursor this is wired for: point contrast
+    0.048 -> 0.071 against the author's own 0.085, the fold reaches 2.00 logical
+    units from the apex instead of 2.10, delta_e 3.769 -> 3.784, fold curvature
+    0.012 -> 0.013. A wider zone (2.5/4.0) buys 0.001 of contrast and costs the
+    curvature 0.016; Arrow as donor doubles the contrast to 0.150 and pushes the
+    fold's own start out to 5.00 units, which is the defect this exists to fix
+    arriving from the other side."""
+    donor = _APEX_DONOR.get(name)
+    lm = _landmarks(name, idx)
+    if donor is None or lm is None:
+        return rgb
+    size = rgb.shape[0]
+    L = size / 32.0
+    A = np.asarray(lm[0], dtype=np.float64)
+    sigma = _APEX_LEVEL * L
+    pad = int(round(3 * sigma))
+    reach = int(round(_APEX_R1 * L)) + pad
+    x0, x1 = max(0, int(A[0] * L) - reach), min(size, int(A[0] * L) + reach + 1)
+    y0, y1 = max(0, int(A[1] * L) - reach), min(size, int(A[1] * L) + reach + 1)
+
+    m = _mask(name, idx, size)[y0:y1, x0:x1] / 255.0
+    dm = _mask(donor, idx, size)[y0:y1, x0:x1] / 255.0
+    if abs(float(m.sum() - dm.sum())) > 0.01 * max(float(m.sum()), 1.0):
+        raise ValueError("%s cannot borrow from %s: different silhouettes" % (name, donor))
+
+    u = rgb[y0:y1, x0:x1]
+    d = _master_raw(donor, idx)[0][y0:y1, x0:x1]
+    lu, ld = u.mean(-1), d.mean(-1)
+    bu, bd = _mblur(lu, m, sigma), _mblur(ld, m, sigma)
+    lit = ld * np.where(bd > 1e-3, bu / np.maximum(bd, 1e-3), 1.0)
+    dirn = _mblur(u, m[..., None], sigma) / np.maximum(bu, 1e-3)[..., None]
+
+    ys, xs = np.mgrid[y0:y1, x0:x1]
+    dist = np.hypot(xs / L - A[0], ys / L - A[1])
+    w = (1.0 - _smoothstep(np.clip((dist - _APEX_R0) / max(_APEX_R1 - _APEX_R0, 1e-6), 0, 1)))[..., None]
+
+    out = rgb.copy()
+    out[y0:y1, x0:x1] = np.clip(u * (1.0 - w) + lit[..., None] * dirn * w, 0, 255)
+    return out
+
+
+def _mblur(a, m, sigma_px):
+    """Blur over the covered part only, so the background outside the outline
+    does not average into the level this reads."""
+    if a.ndim == 3:
+        return np.dstack([_mblur(a[..., i], m[..., 0], sigma_px) for i in range(a.shape[2])])
+    den = _gauss(m, sigma_px)
+    return np.where(den > 1e-3, _gauss(a * m, sigma_px) / np.maximum(den, 1e-3), a)
 
 
 # UpArrow's apex is measured, and no stage here moves it. Kept as a note so the
@@ -765,7 +862,13 @@ def _master(name, idx):
 # by the same factor and arrives as a hard shadow hugging the lit facet on both
 # flanks, where before there was none. Owner saw it immediately. Blending the
 # 128 base back in instead recovers the ramp and smears the point into a glow.
-# Whatever is done about this belongs upstream of `src/ai512`.
+#
+# What does work is not moving anything: borrowing it. Across the wedge two
+# units from the point UpArrow reads 115 95 104 97 82 and Arrow_Down reads
+# 123 88 72 96 225 - the crease is there in both, the lit facet only in one, so
+# the facet is missing rather than dim and no gain applied to UpArrow can put it
+# back. Arrow_Down is drawn on the same traced outline, which makes its shading
+# transplantable without any registration at all. See _apex_borrow.
 
 
 @functools.lru_cache(maxsize=None)
