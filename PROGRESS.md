@@ -6,6 +6,8 @@ One row per iteration. Every number is the worst over all sixteen cursors, so a 
 
 Targets: drift 0.10 logical units, gap and wander 0, delta_e 5, temporal 1.0. The full list is THRESHOLDS in tools/analyze.py, each with why it is that number.
 
+The table lapsed between 2026-08-15 and 2026-08-20 - the work of those days is committed and written up, but no rows were added for it. What it covers is NEXT.md 35 to 38: the coverage double count at the rim, the fold tracker, UpArrow's apex, the glass level anchored at the author's own resolution, and `_tip_glass` measured and left alone. The `debt` column therefore steps rather than slides across that gap.
+
 | when | what changed | reg | debt | tip_contrast | tip_convergence | temporal_fold | inner_jitter | fold_gap | fold_wander | fold_jag | delta_e | scale_drift |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-08-07 | харнесс на месте, базовый замер | 0 | 84 | 0.073 | 4.800 | 1.241 | 0.321 | 2.375 | 3.606 | 206.267 | 8.970 | 0.597 |
@@ -26,3 +28,4 @@ Targets: drift 0.10 logical units, gap and wander 0, delta_e 5, temporal 1.0. Th
 | 2026-08-14 | пустил 512 в лестницу гейта: debt вырос не от рендера, а от того, что перестали не смотреть | 0 | 59 | 0.040 | 2.400 | 1.006 | 0.024 | 2.375 | 1.337 | 134.000 | 6.759 | 0.074 |
 | 2026-08-15 | посадил вершины прямых рёбер на их же прямую, дуги оставил как нарисованы | 0 | 59 | 0.037 | 2.400 | 1.006 | 0.031 | 2.375 | 1.337 | 134.000 | 6.760 | 0.073 |
 | 2026-08-15 | усреднил Cross, SizeAll и IBeam с их же отражениями; пересобрал устаревший traced.json | 0 | 59 | 0.037 | 2.400 | 1.006 | 0.031 | 2.375 | 0.602 | 134.000 | 6.759 | 0.074 |
+| 2026-08-20 | привязал уровень стекла и сторож альфы к авторскому разрешению; строки за 08-15..08-20 не велись | 0 | 11 | 0.039 | 2.600 | 1.120 | 0.010 | 2.500 | 0.280 | 76.000 | 6.560 | 0.083 |
