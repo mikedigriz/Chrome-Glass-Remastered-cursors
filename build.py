@@ -17,7 +17,7 @@ for:
 Every build prints superiority metrics against the original frames and warns
 when anything drifts out of tolerance.
 """
-import os, io, json, struct, gzip, tarfile, hashlib, time, shutil, sys, zipfile
+import os, io, json, struct, gzip, tarfile, hashlib, time, shutil, sys, zipfile, argparse
 import concurrent.futures as cf
 import numpy as np
 from PIL import Image, ImageDraw
@@ -652,7 +652,7 @@ def _onbg(im, light=(244, 244, 246), dark=(222, 222, 226)):
     b = b.convert("RGBA"); b.alpha_composite(im); return b
 
 
-def build_preview():
+def build_preview(root=None):
     # Hand and Handwriting are skipped here: in the 2006 original they're the
     # same arrow silhouette as Arrow with only a per-frame shimmer, so a single
     # still frame just duplicates the Arrow tile. They're still built and
@@ -689,7 +689,7 @@ def build_preview():
         r, c = divmod(i, cols); x = pad + c * (cell + pad); y = pad + r * (cell + pad + lab)
         sheet.alpha_composite(_onbg(img, light=(84, 87, 96), dark=(66, 69, 77)), (x, y))
         d.text((x + 2, y + cell + 3), name, fill=(198, 200, 206), font=f)
-    sheet.convert("RGB").save(os.path.join(HERE, "preview.png"))
+    sheet.convert("RGB").save(os.path.join(root or HERE, "preview.png"))
 
 
 def _pad(img, box):
@@ -729,8 +729,8 @@ def _encode_anim_job(job):
                duration=gif_duration, loop=0, disposal=2, optimize=True)
 
 
-def build_animations():
-    assets = os.path.join(HERE, "assets")
+def build_animations(root=None):
+    assets = os.path.join(root or HERE, "assets")
     os.makedirs(assets, exist_ok=True)
     # Only clear what this function rewrites. Wiping the whole directory also
     # took assets/social-preview.png with it - that one is committed and comes
@@ -931,8 +931,26 @@ def check_packages(win):
         ", ".join(sorted(H.INTERP)), ", ".join(sorted(set(ANIM) - H.INTERP))))
 
 
-def main():
-    dist = os.path.join(HERE, "dist")
+def _rel(p):
+    """Path for the summary lines. relpath raises across Windows drives, and
+    --out-dir routinely points at another one, so fall back to the absolute."""
+    try:
+        return os.path.relpath(p, HERE)
+    except ValueError:
+        return p
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Build the cursor theme.")
+    ap.add_argument("--out-dir", default=HERE, metavar="DIR",
+                    help="where dist/, packages/, assets/ and preview.png are "
+                         "written (default: the repo itself). Point it "
+                         "somewhere else to render an experiment without "
+                         "overwriting the committed preview and assets.")
+    args = ap.parse_args(argv)
+    out = os.path.abspath(args.out_dir)
+    os.makedirs(out, exist_ok=True)
+    dist = os.path.join(out, "dist")
     if os.path.exists(dist): shutil.rmtree(dist)
     if os.environ.get("BUILD_SERIAL") != "1":           # escape hatch: BUILD_SERIAL=1
         _warm_frames()                                   # renders single-core instead
@@ -940,21 +958,22 @@ def main():
     check_inf(win)
     orig_theme = build_original(dist)
     lin, aliases = build_linux(dist)
-    packages = os.path.join(HERE, "packages")
+    packages = os.path.join(out, "packages")
     if os.path.exists(packages): shutil.rmtree(packages)
     deb = build_deb(lin, aliases, packages)
     zpath, tpath = build_artifacts(win, lin, aliases, packages)
     cape = build_mac(packages)
-    build_preview()
-    assets = build_animations()
+    build_preview(out)
+    assets = build_animations(out)
     build_comparison(assets)
-    print("macOS   :", os.path.relpath(cape, HERE))
-    print("Windows :", os.path.relpath(win, HERE), "-", len(os.listdir(win)), "files")
-    print("Original:", os.path.relpath(orig_theme, HERE), "-", len(os.listdir(orig_theme)), "files (2006, 32px)")
-    print("Linux   :", os.path.relpath(lin, HERE), "-", len(os.listdir(os.path.join(lin, "cursors"))), "cursor files")
-    print("Debian  :", os.path.relpath(deb, HERE))
-    print("Zips    :", os.path.relpath(zpath, HERE), "+", os.path.relpath(tpath, HERE))
-    print("Preview : preview.png   Animations: assets/*.webp")
+    print("macOS   :", _rel(cape))
+    print("Windows :", _rel(win), "-", len(os.listdir(win)), "files")
+    print("Original:", _rel(orig_theme), "-", len(os.listdir(orig_theme)), "files (2006, 32px)")
+    print("Linux   :", _rel(lin), "-", len(os.listdir(os.path.join(lin, "cursors"))), "cursor files")
+    print("Debian  :", _rel(deb))
+    print("Zips    :", _rel(zpath), "+", _rel(tpath))
+    print("Preview :", _rel(os.path.join(out, "preview.png")),
+          "  Animations:", _rel(os.path.join(out, "assets")) + "/*.webp")
     print("Checks:")
     check_packages(win)
     warns = check_metrics()

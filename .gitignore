@@ -12,3 +12,4 @@ venv/
 .claude/
 tools/_social_preview.html
 .metrics/
+audit/
