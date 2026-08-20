@@ -1050,45 +1050,76 @@ def _up_alpha_native(key):
     # worst colour error in the set.
     #
     # This is a shape correction and has to be: the level matching below is a
-    # scalar, and a scalar cannot put back a crushed tail. Trying to make it -
-    # by matching the author's mask-weighted mean instead of his median - does
-    # land the total light, and pays for it twice over: the middle of the glass
-    # goes 25% past his own median at 128 and the shipped 512 frame lands 10.3%
-    # over at build.check_metrics' 8% limit, because a 512 frame's visible zone
-    # is nearly all interior where his 32px one is mostly antialiased edge.
-    # Correcting the distribution here instead leaves the level policy below
-    # untouched and drops that drift to 1.8%.
+    # scalar, and a scalar cannot put back a crushed tail. Matching the
+    # author's mask-weighted mean does land the total light, and lands it by
+    # inflating the middle of the glass - the level policy below matches a mean
+    # now, on a like-for-like reading, and still needs this stage under it for
+    # exactly that reason.
     thin = np.clip((ref - ai) / np.maximum(ref, 1.0), 0.0, 1.0)
     w = w * (1.0 - _THIN_LEAN * thin)
     a = np.clip((1.0 - w) * ref + w * ai, 0, 255)
-    # Level held to the author's own median, once, at native resolution: a
+    # Level held to the author's own glass, once, at native resolution: a
     # scalar applied before any resampling cannot bring per-size drift back
     # with it. Measured through the vector mask, the way the shipped frame is -
     # on the thin frames (Handwriting's pencil) the mask trims a different share
     # of the map than of the plain Lanczos, and matching the two maps bare left
     # that frame 9% out while every other one landed.
     #
-    # Matching a mean here instead of this median was tried, on the argument
-    # that a mean is what delta_e reads after compositing. It does improve
-    # delta_e, and it moves the level statistic this whole file is gated on:
-    # both stages then read at the author's own 32px, and the shipped 512px
-    # frame - whose visible zone is nearly all interior where his is mostly
-    # antialiased edge - came out 10.3% over his median on Handwriting[6],
-    # past build.check_metrics' 8%. The thinning it was aimed at is a shape
-    # defect and is fixed above, by `thin`, where it lives; the level policy
-    # is left alone.
+    # Both sides are read at the author's own resolution, and that is the whole
+    # point of this stage. It used to compare our median on the _LEVEL_REF grid
+    # against his on 32, which is not the same quantity: on a thin cursor every
+    # pixel of his visible zone is antialiased edge - Cross 148 of 148, IBeam
+    # 88 of 88, against a tenth solid on Help - so the pairing held our glass
+    # to his antialiasing. It held it perfectly (Cross 0.541 against his 0.543)
+    # and the cursor paid in density: read at his own 32px, all 58 shipped
+    # frames sat under him, 1.4% on NO[8] to 10.7% on IBeam, worst on the grey
+    # family that reads thinnest on screen. Reading our 32 against his 32
+    # lifts the glass 2..16% and centres that on zero.
+    #
+    # A mean rather than a median, because once the two sides line up the mean
+    # is the honest statistic: a median over an all-edge zone is a median of
+    # antialiasing. Matching a mean was tried before and reverted on a drift
+    # reading of 10.3% against build.check_metrics' 8% limit - that reading came
+    # from the same mismatched pairing, which check_metrics made too and no
+    # longer does, so it is not evidence against this.
+    #
+    # The deficit it corrects is not perfectly flat: binned by depth from the
+    # traced edge, the grey family runs 0.82..0.88 of the author in the outer
+    # half unit against 0.87..0.97 deeper, so a scalar leaves the rim a few
+    # percent short. Per rule 7 in NEXT.md that residue wants a per-pixel
+    # correction in the manner of `thin` above, not a fourth anchor.
     _, name, idx = key.split("__")
+    idx = int(idx)
     o = _orig(key)[..., 3]
-    target = np.median(o[o > _VIS * o.max()])
-    m = _mask(name, int(idx), _LEVEL_REF) / 255.0
+    n = o.shape[0]
+    vis = o > _VIS * o.max()
+    w = _mask(name, idx, a.shape[0]) / 255.0
+    m = _mask(name, idx, n) / 255.0
+    # Read only where the silhouette actually carries glass. Where the trace
+    # runs inside his faint edge the frame cannot reach him at any opacity, and
+    # a mean over those pixels bills the difference to the level: Handwriting's
+    # pencil has fifteen of its hundred and eighty-four visible pixels sitting
+    # under a fifth of a unit of coverage against half a unit of his alpha, and
+    # paying for them put that frame's body 8.1% over his own median - through
+    # build.check_metrics, on the corrected reading. Missing reach is a tracing
+    # defect and belongs to the trace.
+    #
+    # The region is picked once, on his grid, so this is not the size-dependent
+    # anchor DEAD_ENDS.md records: nothing here is re-thresholded per rung, and
+    # the scalar it produces is applied before any resampling.
+    reach = vis & (m >= _LEVEL_REACH)
+    if reach.sum() < 16:
+        reach = vis
+    target = float(o[reach].mean())
     for _ in range(3):                   # the clip at 255 eats part of each pass
-        cur = _resample(a, _LEVEL_REF) * m
-        vis = cur > _VIS * cur.max()
-        lvl = float(np.median(cur[vis])) if vis.sum() > 32 else 0.0
+        lvl = float((_shrink_in_mask(a, w, n) * m)[reach].mean())
         if lvl < 1e-6 or abs(lvl - target) < 0.05:
             break
-        a = np.clip(a * target / lvl, 0, 255)
+        a = np.clip(a * (target / lvl), 0, 255)
     return a
+
+
+_LEVEL_REACH = 0.5       # least mask coverage a pixel needs to speak for the level
 
 
 _LEVEL_REF = 128         # size the glass level is matched at
@@ -1137,7 +1168,15 @@ def _up_alpha_raw(key, size):
     if size > a.shape[0]:
         return _resample_cover(a, size)
     _, name, idx = key.split("__")
-    w = _mask(name, int(idx), a.shape[0]) / 255.0
+    return _shrink_in_mask(a, _mask(name, int(idx), a.shape[0]) / 255.0, size)
+
+
+def _shrink_in_mask(a, w, size):
+    """Box-average a coverage map down to `size` over the silhouette only.
+
+    Shared with the level anchor in _up_alpha_native, which has to read the map
+    the way the shipped frame is built or it would measure a level nothing
+    renders."""
     num = _resample_cover(a * w, size, clip=False)
     den = _resample_cover(w, size, clip=False)
     flat = _resample_cover(a, size)

@@ -402,6 +402,15 @@ level, and moving the level is what density measures. Per rule 7 in NEXT.md a
 scalar cannot fix a distribution - if this is worth another pass it needs a
 per-pixel correction in the manner of `_THIN_LEAN`, not another anchor.
 
+**Both halves settled elsewhere (2026-08-20).** `density_%` was not an anchor
+problem at all: the rim was carrying `cov^2` because the alpha map was box-
+averaged across the silhouette's edge and then multiplied by the coverage-
+weighted mask a second time (NEXT.md 35). And the anchor that did need moving
+was a different quantity - not the level's consistency across the ladder, which
+these three attempts were chasing, but its absolute distance from the author,
+which none of them measured, because the reading itself compared our 128 median
+against his 32 one (NEXT.md 37). Neither is evidence about the other.
+
 ## Wait's split apex: two more render-side attempts (2026-08-13)
 
 NEXT.md item 7 settles this as a master defect - the network invented a crease

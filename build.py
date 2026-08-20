@@ -867,24 +867,34 @@ def _sat(img):
 def check_metrics():
     """Superiority metrics vs the original frames; drift prints a WARN.
 
-    Checked at 128px (the tuning anchor) and at each cursor's native shipped
-    anchor (256 or 512, see hybrid._master) - a regression only visible in the
-    native master would otherwise pass silently at 128."""
+    Saturation is checked at 128px (the tuning anchor) and at each cursor's
+    native shipped anchor (256 or 512, see hybrid._master) - a regression only
+    visible in the native master would otherwise pass silently at 128.
+
+    Alpha level is checked at the author's own resolution instead, against his
+    own frame. Reading our 128 or 512 median against his 32 one compares two
+    different quantities: on a thin cursor every pixel of his visible zone is
+    antialiased edge (Cross 148 of 148, IBeam 88 of 88), so that pairing scored
+    a comfortable +0.0..+2.4% while the frames it passed sat 1.4..10.7% under
+    him at his own size, worst on the grey family. See
+    hybrid._up_alpha_native, which had its anchor mismatched the same way."""
     warns = 0
     for name in H.STATIC + ANIM:
         n = len(H.BY_NAME[name]["frames"])
         for idx in range(n):
             o = H.original(name, idx)
             _, native = H._master(name, idx)
+            his = o.size[0]
+            mo = _med_alpha(o)
+            da = (_med_alpha(H.frame_image(name, idx, his)) - mo) / max(mo, 1e-6) * 100
+            if abs(da) > 8:
+                print(f"  WARN {name}[{idx}]@{his}: median alpha drift {da:+.1f}% (>8%)")
+                warns += 1
             for size in sorted({128, native}):
                 h = H.frame_image(name, idx, size)
-                da = (_med_alpha(h) - _med_alpha(o)) / max(_med_alpha(o), 1e-6) * 100
                 so, sh = _sat(o), _sat(h)
                 sat_ok = (so <= 1e-6 or -2 <= (sh - so) / max(so, 1e-6) * 100 <= 12
                           or abs(sh - so) <= 0.02)
-                if abs(da) > 8:
-                    print(f"  WARN {name}[{idx}]@{size}: median alpha drift {da:+.1f}% (>8%)")
-                    warns += 1
                 if not sat_ok:
                     print(f"  WARN {name}[{idx}]@{size}: saturation {so:.3f} -> {sh:.3f}")
                     warns += 1
@@ -962,8 +972,8 @@ _KNOWN = os.path.join(HERE, "metrics-known-issues.json")
 def check_quality():
     """The real gate: tools/analyze.py's own thresholds and ratchet.
 
-    check_metrics above reads exactly two things - median alpha drift and
-    saturation. It printed "metrics: all within tolerance" while the frames it
+    check_metrics above reads exactly two things - median alpha drift at the
+    author's own resolution, and saturation. It printed "metrics: all within tolerance" while the frames it
     passed carried twelve of fifty-eight over the delta_e tolerance (NO[7] at
     8.96 against a limit of 5.0), a fold that no size could resolve on one
     cursor, and seven cursors rendering a fifth of their area darker than
