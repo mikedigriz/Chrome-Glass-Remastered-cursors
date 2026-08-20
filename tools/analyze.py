@@ -82,6 +82,8 @@ _DIAG_SLACK = 0.20
 _SOLID_FRAC = 0.85         # of a frame's own peak alpha: the glass proper
 _GHOST_FRAC = 0.05         # ...and below this, nothing that can be seen
 _FOLD_DEPTH = 6.0          # luma a dip must have to count as a fold and not as flat glass
+_FOLD_INSET = 0.75         # logical units of glass between the search and the rim
+_FOLD_MIN_SIZE = 128       # below this a fold has no cross-section to read
 _TIP_SPLIT = 28.0          # luma across a wedge that means its fold is present there
 _MORPH_SIZE = 32           # the size the author's frames actually exist at
 _TIP_COS = -0.17           # cos of the widest interior angle (100 deg) still a point
@@ -470,33 +472,50 @@ def _fold_track(name, idx, size, ref=None, win=None, get=frame, strict=True):
     al, lum = _interior(a)
     lum = _without_overlay(a, al, lum)
     track = np.full(size, np.nan)
-    # The rim insets and the width a row must have are logical, not pixel:
+    # The rim inset and the width a row must have are logical, not pixel:
     # written as the constants 6, 5 and 16 they were a quarter of the cursor at
     # 32px, so every row was rejected and the track came back empty at exactly
-    # the sizes the multiscale sweep exists to look at. Scaled from 256, where
-    # they were tuned, they reproduce the old numbers there exactly.
+    # the sizes the multiscale sweep exists to look at.
+    #
+    # Where the row's own glass ends used to be read off the picture - the
+    # columns above _SOLID_FRAC of the frame's peak alpha - and inset from
+    # those. On a row that crosses the shape twice, that span is bimodal: two
+    # marginal pixels at the far end of Arrow's upper wedge decide whether
+    # on.min() is 58 or 190, and half a level of dimming there moved the whole
+    # window off the fold and dropped seven consecutive rows whose fold was
+    # sitting right there with 14 to 18 levels of prominence. The reading is
+    # not allowed to depend on a pixel at the other end of the row: depth
+    # inside the traced silhouette says the same thing locally, in logical
+    # units, and does not move when the glass dims by a level.
     L = size / 256.0
-    ins_lo, ins_hi = max(1, round(6 * L)), max(1, round(5 * L))
     min_on, min_span = max(6, round(16 * L)), max(3, round(6 * L))
+    deep = H._edge_distance_at(name, idx, size) >= _FOLD_INSET
     for y in range(size):
-        on = np.nonzero(al[y] > _SOLID_FRAC * al.max())[0]
-        if len(on) < min_on:
+        # How much glass the row has is still read off the picture, as a count
+        # and not as a pair of extremes: a count moves by the pixels that
+        # actually changed, and stays put when one of them is marginal.
+        if int((al[y] > _SOLID_FRAC * al.max()).sum()) < min_on:
             continue
-        lo, hi = on.min() + ins_lo, on.max() - ins_hi
-        if ref is not None:
-            if np.isnan(ref[y]):
-                continue
-            lo = max(lo, int(ref[y] - win))
-            hi = min(hi, int(ref[y] + win) + 1)
+        if ref is None or np.isnan(ref[y]):
+            continue
+        c = int(round(ref[y]))
+        if not (0 <= c < size) or not deep[y, c]:
+            continue
+        # The run of admissible glass the chord itself stands in, never the
+        # row's outer extent: a hole or a second crossing must not widen it.
+        lo, hi = c, c
+        while lo > 0 and deep[y, lo - 1]:
+            lo -= 1
+        while hi + 1 < size and deep[y, hi + 1]:
+            hi += 1
+        hi += 1
+        lo = max(lo, int(ref[y] - win))
+        hi = min(hi, int(ref[y] + win) + 1)
 
         # A row whose window has collapsed used to have its inset halved so it
         # could be measured anyway. That is the window moving to suit the row it
         # is measuring, which is rule 1 ("any quantity fitted to the thing being
-        # measured") applied to the instrument instead of the render. It was
-        # added for one row at the tail junction, where the silhouette narrows
-        # from 207px to 196px and there genuinely is no room left between the
-        # rim insets - and where the honest answer is that this row carries no
-        # readable fold, which `min_span` below already says.
+        # measured") applied to the instrument instead of the render.
         if hi - lo < min_span:
             continue
         seg = lum[y, lo:hi]
@@ -677,6 +696,15 @@ def fold_profile(name, idx, size, get=frame):
     inner_jitter asks whether the line moves between frames. This asks whether
     it is a line at all in the frame it is in, which is the defect PLAN.md
     describes as a dark band "broken into pieces with staircase edges"."""
+    if size < _FOLD_MIN_SIZE:
+        # Below 128 the fold is one pixel wide and the rows either side of it
+        # are rim: the search window is +-_JAG_BAND, four pixels at 64, and
+        # every statistic here is a shape read across that window. The old row
+        # window happened never to resolve at these rungs; the local one does,
+        # and what it returns is rasterisation - one missing row at 64 is half
+        # a logical unit of "gap". Saying so once, here, beats reading noise
+        # into the worst-of-all-sizes the gate takes.
+        return None
     L = size / 32.0
     ref = _chord_ref(name, idx, size)
     if ref is None:
@@ -701,6 +729,25 @@ def fold_profile(name, idx, size, get=frame):
     rows = np.nonzero(~np.isnan(t))[0]
     if len(rows) < _FOLD_ROWS:
         return None
+    # A fold is a line, and two rows on their own thirty rows up the chord are
+    # not a piece of it - they are the search finding something else that far
+    # from the line. Counted as part of the track they turn the empty stretch
+    # between them and the fold into the widest "gap" on the cursor: Hand read
+    # 3.75 logical units from two rows at 66 with the fold running 98..146.
+    # A piece shorter than a reading (_FOLD_ROWS, the same minimum the whole
+    # track has to clear) is dropped before anything is measured, and how many
+    # rows that was is reported rather than swallowed.
+    cut = np.nonzero(np.diff(rows) > _FOLD_ROWS)[0]
+    pieces = np.split(rows, cut + 1)
+    specks = int(sum(len(p) for p in pieces if len(p) < _FOLD_ROWS))
+    kept = [p for p in pieces if len(p) >= _FOLD_ROWS]
+    if not kept:
+        return None
+    if specks:
+        rows = np.concatenate(kept)
+        drop = np.ones(size, bool)
+        drop[rows] = False
+        t = np.where(drop, np.nan, t)
     a = get(name, idx, size)
     lum = a[..., :3].mean(-1)
     cols = np.clip(np.round(t[rows]).astype(int), 0, size - 1)
@@ -742,6 +789,7 @@ def fold_profile(name, idx, size, get=frame):
     jag = np.abs(np.diff(prof, axis=0)).max(1)[adj] if adj.any() else np.zeros(1)
     return {
         "rows": int(len(rows)),
+        "specks": specks,
         "gap": float(gap),
         "luma_step": float(np.percentile(step, 95)),
         "wander": float(np.percentile(wan, 95)),
