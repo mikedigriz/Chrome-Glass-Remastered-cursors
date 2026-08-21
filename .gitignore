@@ -13,3 +13,7 @@ venv/
 tools/_social_preview.html
 .metrics/
 audit/
+out.png
+tmp/
+.local/
+notes-private/
