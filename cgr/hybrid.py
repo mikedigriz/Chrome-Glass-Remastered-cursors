@@ -14,9 +14,13 @@ Per frame:
   sat    - anchored at the shipped size to the original's level x1.05.
 
 Animated cursors that the author drew at 50 ms/frame (AppStarting, Hand,
-Wait) are cross-fade interpolated x3 to 60 fps - same cycle length, three
-times smoother.  Handwriting and NO already run at 60 fps with a freeze on
-the last frame; their frames and rate chunks ship unchanged.
+Wait) ship at x3 the frame count - same cycle length, three times smoother.
+Under `LIGHT_ANIM` (the default, see below) those frames are not redrawn at
+all: one canonical render carries the geometry for the whole cycle and only
+the light moves over it. Cross-fade interpolation of full RGBA keyframes is
+the fallback the flag switches back to.  Handwriting and NO already run at
+60 fps with a freeze on the last frame; their frames and rate chunks ship
+unchanged.
 """
 import functools, json, os
 import numpy as np
@@ -35,7 +39,9 @@ BY_NAME = {m["name"]: m for m in MANIFEST}
 STATIC = [m["name"] for m in MANIFEST if m["kind"] == "cur"]
 ANIM = [m["name"] for m in MANIFEST if m["kind"] == "ani"]
 
-# author's 50 ms/frame cursors, cross-faded x3 to 60 fps (same cycle length)
+# author's 50 ms/frame cursors, resampled x3 to 60 fps (same cycle length).
+# How the x3 frames are produced depends on LIGHT_ANIM below: lit by default,
+# cross-faded only as the fallback
 INTERP = {"AppStarting", "Hand", "Wait"}
 INTERP_N = 3
 LIGHT_ANIM = True        # these three are lit, not redrawn: one canonical render
