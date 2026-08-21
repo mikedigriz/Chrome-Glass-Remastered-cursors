@@ -984,15 +984,26 @@ def _material_layer(name, idx, donor, size):
     same reason the substitution it replaces was: laid at 512 and carried down
     the chain instead, Handwriting[3]'s `fold_wander` reads 0.33 against 0.20
     with no donor detail in it at all. That is the stages between, not the
-    borrow."""
+    borrow.
+
+    What crosses is luminance only. Measured three ways on this cursor - the
+    donor's detail in all three channels, its detail collapsed to luminance,
+    and luminance plus the donor's own low-passed chroma - the fold readings
+    are identical to the hundredth (gap 0.50, step 3.33, wander 0.20, jag 43.3)
+    and only delta_e separates them: 4.49, 4.46, 4.62. So chroma is not a
+    degree of freedom here, and the one variant that does move it moves it the
+    wrong way - the donor's cast lands as a blue wash across the sheet, plain
+    in the residual. Colour stays the author's by construction rather than by
+    luck."""
     own = _resize(_orig(_key(name, idx)), size)[0]
     tm = _mask(name, idx, size) / 255.0
     dm = _mask(name, donor, size) / 255.0
     _iou, qx, qy = _moment_map(tm, dm)
     warped = _sample(_master_rgb(name, donor, size), qx, qy)
     detail = warped - _gauss(warped, _MATERIAL_SPLIT * size / V.LOGICAL)
+    detail = detail.mean(2)[..., None]                 # material, not colour
     detail = np.where(detail < 0, detail * _MATERIAL_DARK, detail)
-    detail *= _MATERIAL_GAIN * _material_keepout(name, idx, size)[..., None]
+    detail = detail * (_MATERIAL_GAIN * _material_keepout(name, idx, size)[..., None])
     return np.clip(own + detail, 0, 255)
 
 
