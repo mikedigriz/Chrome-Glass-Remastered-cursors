@@ -3696,7 +3696,13 @@ def _tip_level(rgb, name, idx, size):
     What is left is +2.7..+8.1 levels of the author's own falloff, and that is
     the price of not touching the fold. Closing it needs the correction to live
     where the fold lives, in `_tip_relight`'s own trough model, so that one
-    object owns both - not a second luma stage arguing with the first."""
+    object owns both - not a second luma stage arguing with the first.
+
+    Which makes this stage provisional by design. It is one number because one
+    number is all that can be added here without a fight; the moment
+    `_tip_relight` owns the longitudinal level as well, this comes out. Do not
+    layer a second mechanism on top of it - see STATUS.md, the fold-relight
+    branch."""
     if name not in _TIP_LEVEL_CURSORS:
         return rgb
     ch = _fold_chord(name, idx)
