@@ -3426,11 +3426,14 @@ _TEMPER_K = {"level": 1.0,
 # failure - `tip_contrast` rises (UpArrow 0.049 -> 0.074), the apex gradient
 # rises (0.32 -> 0.43), and the fold profile's own width, notch and residual all
 # improve, because a flat field has nothing left to disagree with itself. The
-# owner saw it on sight. Giving the stage full strength only inside its own band
-# fails the same way and for the same reason - see DEAD_ENDS.md, "Зонный
-# temper": the inner facet lives in the same pixels as the fold transition, so
-# no spatial mask separates the two requirements. What is needed is a model that
-# can hold a wide transition and a separate inner facet tip at once.
+# owner saw it on sight. Giving the stage full strength inside `band` fails the
+# same way - see DEAD_ENDS.md, "Зонный temper" - because `band` bounds the
+# stage's authority along the chord and not across it, so full strength covers
+# the strip the inner tip is drawn in as well. The two are not in the same
+# pixels: measured 2026-08-22, the ridge sits 0.35 logical units from the fold
+# centre at t=0.20 and 3.1-3.5 by t=0.45. A territory that cuts that strip out,
+# or a model that can hold a wide transition and a separate inner tip at once,
+# are both still open; neither has been tried.
 #
 # `sat` is the one that earns its temper and keeps it. It costs nothing at any
 # of Arrow's corners - `_sat_match` only runs on saturated cursors, so it never
