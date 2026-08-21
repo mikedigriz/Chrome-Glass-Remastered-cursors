@@ -3420,12 +3420,10 @@ _TEMPER_K = {"level": 1.0,
 # single worst pixel), against the 6.15 levels tempering all three bought back.
 # So this stage was paying the fold's bill for a corner it does not touch.
 #
-# `relight` stays at half strength, and not for the tail corner - it is measured
-# not to touch one (2026-08-21: both of Arrow's tail corners are bit-identical
-# at full strength, in the discs `analyze.corners` marks). Full strength was
-# tried and reverted in `52f5e06`: it washes out the lit inner facet's own point
-# and the dark separator that gives that point its structure. No metric here
-# catches it - `tip_contrast` rises (UpArrow 0.049 -> 0.074), the apex gradient
+# `relight` stays at half strength. Full strength was tried and reverted in
+# `52f5e06`: it washes out the lit inner facet's own point and the dark
+# separator that gives that point its structure. No metric here catches the
+# failure - `tip_contrast` rises (UpArrow 0.049 -> 0.074), the apex gradient
 # rises (0.32 -> 0.43), and the fold profile's own width, notch and residual all
 # improve, because a flat field has nothing left to disagree with itself. The
 # owner saw it on sight. Giving the stage full strength only inside its own band
