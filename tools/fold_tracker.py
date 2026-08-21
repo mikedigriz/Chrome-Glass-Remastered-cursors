@@ -45,6 +45,16 @@ genuinely curved and reads 11.6 - so Wait's slopes are a control, not a source
 of parameters, and a quadratic facet model would be a measuring option to add
 later rather than a rewrite of the base fit.
 
+What this does not measure, and it matters: `s`, `d` and `rms` describe one
+cross-section's shape and nothing else. They say nothing about whether the
+features either side of the fold survived. A change that flattens the lit inner
+facet into the fold improves all three at once - width up, notch on target,
+residual halved - because a flat field has nothing left to disagree with itself,
+and that is exactly what happened on 2026-08-21 to a render whose inner tip had
+visibly been destroyed (DEAD_ENDS.md, "Зонный temper"). These numbers are not a
+sufficient acceptance test on their own. Render it and look first; that is the
+rule in this repo and this tool is not an exception to it.
+
 Alpha is used only as a floor for "there is a signal here at all". Admission is
 geometric. Any station count of zero is a fault in this file until proven
 otherwise.

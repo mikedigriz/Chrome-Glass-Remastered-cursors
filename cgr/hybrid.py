@@ -3420,13 +3420,19 @@ _TEMPER_K = {"level": 1.0,
 # single worst pixel), against the 6.15 levels tempering all three bought back.
 # So this stage was paying the fold's bill for a corner it does not touch.
 #
-# `relight` went back to full for the same reason, isolated the same way: at 1.0
-# it costs 0.00 levels at both of Arrow's tail corners - the crop the owner's
-# report was about - while clearing UpArrow's `tip_contrast` outright and taking
-# Hand's `temporal_fold` 1.022 -> 1.005 and Wait's `fold_jag` off the list. Its
-# whole cost is at the apex (4.6 levels on average there, and Arrow_Down's point
-# contrast 0.090 -> 0.069), which is the axis already under review in NEXT.md
-# item 15. Ten gate regressions down to eight.
+# `relight` stays at half strength, and not for the tail corner - it is measured
+# not to touch one (2026-08-21: both of Arrow's tail corners are bit-identical
+# at full strength, in the discs `analyze.corners` marks). Full strength was
+# tried and reverted in `52f5e06`: it washes out the lit inner facet's own point
+# and the dark separator that gives that point its structure. No metric here
+# catches it - `tip_contrast` rises (UpArrow 0.049 -> 0.074), the apex gradient
+# rises (0.32 -> 0.43), and the fold profile's own width, notch and residual all
+# improve, because a flat field has nothing left to disagree with itself. The
+# owner saw it on sight. Giving the stage full strength only inside its own band
+# fails the same way and for the same reason - see DEAD_ENDS.md, "Зонный
+# temper": the inner facet lives in the same pixels as the fold transition, so
+# no spatial mask separates the two requirements. What is needed is a model that
+# can hold a wide transition and a separate inner facet tip at once.
 #
 # `sat` is the one that earns its temper and keeps it. It costs nothing at any
 # of Arrow's corners - `_sat_match` only runs on saturated cursors, so it never
