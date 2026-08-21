@@ -251,6 +251,69 @@ def coverage(names, sizes):
               + "%9.3f%8.3f" % (band, press))
 
 
+_HAZE = 2.0      # author alpha at or below this is not drawing. IBeam carries
+                 # 480 such pixels against 125 real ones - 3.4% of what a naive
+                 # sum calls its mass, and nearly the whole of its waist, so a
+                 # ratio taken against the raw sum reads the waist as a third
+                 # short when it is a fifth. Every other cursor is under 0.6%.
+
+
+def parts(names, rows=3):
+    """Area against level, and the signed alpha error, band by band.
+
+    Total alpha cannot say whether a cursor is short of silhouette or short of
+    glass - the two multiply. So the silhouette is measured against the author's
+    own coverage (his alpha divided by his interior level, clipped), the glass
+    against his level, and the product is checked against the plain mass.
+
+    Then the same difference taken with its sign. A shape that is honestly thin
+    is missing alpha and gaining almost none; a shape that has merely moved is
+    missing and gaining in step. That is the reading that separates thinness
+    from misregistration, and the two look identical in the total.
+
+    Bands are horizontal thirds by default: enough for the cursors whose thin
+    part is a waist, which is all of the ones this question keeps coming up on."""
+    size = 256
+    k = size // 32
+    print("area: our silhouette against the author's coverage. level: our glass "
+          "against his.")
+    print("missing/excess: signed alpha error on his own 32px grid, as a share "
+          "of his mass.")
+    print("%-11s %6s %6s %6s %6s %8s %8s" %
+          ("cursor", "band", "area", "level", "mass", "missing", "excess"))
+    for name in names:
+        if B.is_glyph(name):
+            print("%-11s (drawn by glyphs.py, no author frame)" % name)
+            continue
+        au = np.asarray(H.original(name, 0).convert("RGBA"), dtype=float)[..., 3]
+        au = np.where(au > _HAZE, au, 0.0)
+        if not au.any():
+            continue
+        lvl = float(np.percentile(au[au > 0], 99))
+        cov = np.clip(au / lvl, 0, 1)
+        mask = H._mask(name, 0, size) / 255.0
+        fin = np.asarray(_frame(name, 0, size), dtype=float)[..., 3]
+        our32 = np.asarray(_frame(name, 0, 32), dtype=float)[..., 3]
+        d = au - our32
+        inside = mask > 0.99
+        bands = [("all", 0, 31)] + [(str(i + 1), i * 32 // rows,
+                                     (i + 1) * 32 // rows - 1) for i in range(rows)]
+        for lbl, r0, r1 in bands:
+            sl = slice(r0 * k, (r1 + 1) * k)
+            ref_cov = cov[r0:r1 + 1].sum() * k * k
+            ref_au = au[r0:r1 + 1].sum()
+            if ref_au < 1e-6:
+                continue
+            dd = d[r0:r1 + 1]
+            lv = (float(np.median(fin[sl][inside[sl]])) / lvl
+                  if inside[sl].any() else float("nan"))
+            print("%-11s %6s %6.3f %6.3f %6.3f %8.3f %8.3f"
+                  % (name if lbl == "all" else "", lbl,
+                     mask[sl].sum() / max(ref_cov, 1e-9), lv,
+                     fin[sl].sum() / (ref_au * k * k),
+                     dd[dd > 0].sum() / ref_au, -dd[dd < 0].sum() / ref_au))
+
+
 def _head():
     try:
         r = subprocess.run(["git", "-c", "safe.directory=*", "rev-parse",
@@ -274,6 +337,10 @@ def main(argv=None):
     ap.add_argument("--crops-only", action="store_true")
     ap.add_argument("--coverage", action="store_true",
                     help="print the coverage tables and write no sheets")
+    ap.add_argument("--parts", action="store_true",
+                    help="print area/level and signed alpha error per band")
+    ap.add_argument("--bands", type=int, default=3, metavar="N",
+                    help="horizontal bands --parts splits a cursor into")
     args = ap.parse_args(argv)
 
     known = _all_names()
@@ -283,6 +350,9 @@ def main(argv=None):
         raise SystemExit("unknown cursor(s): %s" % ", ".join(unknown))
     if args.coverage:
         coverage(names, args.sizes)
+        return
+    if args.parts:
+        parts(names, args.bands)
         return
     only = args.ladder_only or args.anim_only or args.crops_only
     out = os.path.abspath(args.out)
