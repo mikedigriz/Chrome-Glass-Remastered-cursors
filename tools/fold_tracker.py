@@ -55,6 +55,11 @@ visibly been destroyed (DEAD_ENDS.md, "Зонный temper"). These numbers are 
 sufficient acceptance test on their own. Render it and look first; that is the
 rule in this repo and this tool is not an exception to it.
 
+`--inner` is the companion for that specific blind spot: it asks whether the lit
+inner facet is still a separate feature rather than how the fold is shaped. Two
+independent classes, both required - a candidate that widens the transition and
+loses the inner tip is rejected however good its `s`.
+
 Alpha is used only as a floor for "there is a signal here at all". Admission is
 geometric. Any station count of zero is a fault in this file until proven
 otherwise.
@@ -63,6 +68,7 @@ Usage:
     python tools/fold_tracker.py --cursor Arrow --size 256
     python tools/fold_tracker.py --cursor Arrow --size 256 --debug
     python tools/fold_tracker.py --sizes 128,256,512      # is s a real width?
+    python tools/fold_tracker.py --inner                  # is the tip still there?
 """
 import argparse
 import os
@@ -158,7 +164,7 @@ def _steepest(n, y):
     return float(n[i]), float(g[i])
 
 
-def section(name, idx, size, get, t):
+def section(name, idx, size, get, t, inset=RIM_INSET):
     """One cross-section at fraction `t` along the chord, or None."""
     ch = H._fold_chord(name, idx)
     if ch is None:
@@ -178,7 +184,7 @@ def section(name, idx, size, get, t):
     alpha = H._sample1(np.ascontiguousarray(a[..., 3].astype(np.float64)), sx, sy)
     # already in logical units - analyze compares it against _FOLD_INSET raw
     dist = H._sample1(H._edge_distance_at(name, idx, size), sx, sy)
-    ok = (dist >= RIM_INSET) & (alpha >= ALPHA_FLOOR) & np.isfinite(lum)
+    ok = (dist >= inset) & (alpha >= ALPHA_FLOOR) & np.isfinite(lum)
     if ok.sum() < 2 * MIN_SIDE + 3:
         return None
     # one run only: a normal that leaves and re-enters the shape must not be
@@ -245,6 +251,71 @@ def measure(name, idx, size, get, t):
                 n=n, y=y, raw=raw, res=res)
 
 
+INNER_T = (0.10, 0.45)  # the stretch of chord the inner tip lives on
+INNER_INSET = 0.15      # the separator sits within a unit of the rim, so the
+                        # section has to reach nearly to it - RIM_INSET cuts it
+INNER_DIP = 5.0         # levels the separator must fall below the rim's own
+                        # brightness before it counts as a separator
+INNER_RIDGE = 12.0      # levels the inner facet must rise above the separator
+
+
+def inner_tip(name, idx, size, get, count=12):
+    """Is the inner tip still a separate thing, or has it washed into the fold?
+
+    This is the companion the fold profile needs and cannot be. `s`, `d` and
+    `rms` describe the shape of one cross-section; they say nothing about
+    whether the lit inner facet still exists as its own feature. On 2026-08-21 a
+    render whose inner tip had visibly been destroyed scored better on all three
+    at once, because a flat field has nothing left to disagree with itself
+    (DEAD_ENDS.md, "Зонный temper").
+
+    What is looked for is a topology, not a contrast: walking inward from the
+    rim, the profile must fall into a separator and then climb onto the inner
+    facet's own ridge. Two turning points, in that order. A wash has neither -
+    it leaves one monotone slope from the rim to the fold, however bright.
+
+    Not a fidelity check: the author's own frame is 32px art, upscaled, and
+    carries no such structure to compare against. This measures that our render
+    has kept a feature its owner asked for, which is a different question.
+    """
+    out = []
+    for t in np.linspace(INNER_T[0], INNER_T[1], count):
+        got = section(name, idx, size, get, t, inset=INNER_INSET)
+        if got is None:
+            continue
+        n, y = got
+        k = max(3, int(round(SMOOTH / STEP)) | 1)
+        sm = np.convolve(np.pad(y, k // 2, mode="edge"), np.ones(k) / k, "valid")
+        # Only the stretch between the rim and the fold. Taking the first
+        # turning point instead of the strongest one was the first version's
+        # mistake: on a plateau the ripple supplies a local minimum two samples
+        # in, and UpArrow then scored 4 stations of 12 on a render whose inner
+        # tip is plainly there.
+        c0, _g = _steepest(n, y)
+        lim = int(np.searchsorted(n, c0)) if c0 is not None else int(0.6 * len(n))
+        lim = max(lim, 5)
+        hi = int(np.argmax(sm[:lim]))               # the inner facet's ridge
+        # The separator is a local minimum, not the darkest sample before the
+        # ridge: on Arrow the section begins at the rim already darker than the
+        # separator (159 against 184 at t=0.20), and the plain argmin lands on
+        # the first sample and reports no structure at all. Prominence, so a
+        # ripple on a plateau cannot pass for a drawn line either.
+        d = np.diff(sm[:hi + 1])
+        lo, dip = 0, 0.0
+        for i in range(len(d) - 1):
+            if d[i] < 0 <= d[i + 1]:
+                j = i + 1
+                prom = min(float(sm[:j].max()), float(sm[j:hi + 1].max())) - sm[j]
+                if prom > dip:
+                    lo, dip = j, float(prom)
+        ridge = float(sm[hi] - sm[lo]) if lo else 0.0
+        out.append(dict(t=float(t), dip=dip, ridge=ridge, n_lo=float(n[lo]),
+                        n_hi=float(n[hi]),
+                        ok=bool(lo > 0 and hi > lo and dip >= INNER_DIP
+                                and ridge >= INNER_RIDGE)))
+    return out
+
+
 def track(name, idx, size, get, count=24):
     """Every station that resolves, from t=0.08 to t=0.92 along the chord."""
     out = []
@@ -289,6 +360,23 @@ def _report(name, size, count):
               (who, r["stations"], r["c"], r["s"], r["unresolved"],
                r["b_lo"], r["b_hi"], r["k_lo"], r["k_hi"],
                max(r["bend_lo"], r["bend_hi"]), r["d"], r["rms"]))
+
+
+def _inner_report(name, size, count):
+    """Has the inner tip survived? Ours only - the author has no such structure
+    to compare against, his frame being 32px art."""
+    r = inner_tip(name, 0, size, A.frame, count=count)
+    if not r:
+        print("%-12s@%-5d no section reaches the rim - fault in the measurer"
+              % (name, size))
+        return
+    dip = np.array([x["dip"] for x in r])
+    ridge = np.array([x["ridge"] for x in r])
+    print("%-12s@%-5d inner tip kept on %2d of %2d stations | "
+          "separator %4.1f (%.1f..%.1f) | ridge %4.1f (%.1f..%.1f)"
+          % (name, size, sum(x["ok"] for x in r), len(r),
+             np.median(dip), dip.min(), dip.max(),
+             np.median(ridge), ridge.min(), ridge.max()))
 
 
 def _converge(name, sizes, count):
@@ -380,6 +468,8 @@ def main():
     ap.add_argument("--sizes", default=None, metavar="A,B,C",
                     help="report s against resolution instead")
     ap.add_argument("--stations", type=int, default=24)
+    ap.add_argument("--inner", action="store_true",
+                    help="report inner-tip survival instead of the fold profile")
     ap.add_argument("--debug", action="store_true",
                     help="also draw the sections to --out")
     ap.add_argument("--out", default=os.path.join(HERE, "audit", "fold"),
@@ -392,7 +482,9 @@ def main():
         if name not in WEDGES:
             raise SystemExit("%s carries no fold chord; known: %s"
                              % (name, ", ".join(WEDGES)))
-        if args.sizes:
+        if args.inner:
+            _inner_report(name, args.size, 12)
+        elif args.sizes:
             _converge(name, [int(s) for s in args.sizes.split(",")], args.stations)
         else:
             _report(name, args.size, args.stations)
