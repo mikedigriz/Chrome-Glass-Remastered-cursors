@@ -1023,7 +1023,7 @@ def check_quality():
         with open(_KNOWN) as fh:
             known = {" ".join(x.split()) for x in json.load(fh)["accepted"]}
     rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
-    bad, debt, unmeasured = A.gate(rep, base)
+    bad, debt, unmeasured, attention = A.gate(rep, base)
     # The ratchet compares numbers, so a complaint that carries no number -
     # "this could not be measured at all" - lands in `bad` on every run,
     # baseline or not, and would wedge the build shut for good. Those are
@@ -1035,6 +1035,9 @@ def check_quality():
                                     f", {seen} accepted" if seen else "",
                                     f", {len(debt)} known debt" if debt else "",
                                     f", {len(unmeasured)} unmeasured" if unmeasured else ""))
+    # Never fatal, but never silent either - see analyze._DE_ATTENTION.
+    for a in attention:
+        print("    attention: " + a)
     if new:
         for b in new:
             print("    " + b)

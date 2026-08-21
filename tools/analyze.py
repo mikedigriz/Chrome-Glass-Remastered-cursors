@@ -61,6 +61,12 @@ VALIDATE_SIZES = (32, 64, 128, 256, 512)
 VALIDATE_SIZES_FULL = VALIDATE_SIZES
 _JAG_BAND = 2.0            # logical units either side of the fold a step is looked for in
 _DE_NATIVE = 256           # size the colour is judged at, box-averaged 8:1 down to 32
+_DE_ATTENTION = 0.5        # delta_e a cursor may gain against the baseline before
+                           # the gate says so out loud. Not a threshold: crossing
+                           # it prints a line and changes no exit code. Sized off
+                           # the case that motivated it - Handwriting's +1.13 sat
+                           # under the 5.0 target the whole time, so nothing in
+                           # the gate had a reason to mention it
 _FOLD_ROWS = 6             # rows a fold reading needs before it means anything
 _RATCHET_SLACK = 0.05      # how far a floor metric may slip before it is a regression
 _JITTER_ROWS = 10          # rows carrying at least one step a jitter reading needs
@@ -123,6 +129,7 @@ THRESHOLDS = {
     "temporal": 1.0,            # frame-to-frame step over cycle amplitude, scaled so
                                 # a sinusoid sampled n times reads 1.0
     "delta_e": 5.0,             # CIEDE2000 against the author's own 32px frame
+                                # see _DE_ATTENTION for the second, softer guard
     "tip_sheen": 0.75,          # share of the author's own sweep that has to survive
                                 # at the points. Not 1.0: the remaster's silhouette is
                                 # crisp where his is soft, so the disc holds a little
@@ -1827,7 +1834,7 @@ def gate(rep, base=None):
     and a gate that is not running is how those numbers got there. Anything
     that moves further from the target still fails, on the spot."""
     T = THRESHOLDS
-    bad, debt, unmeasured = [], [], []
+    bad, debt, unmeasured, attention = [], [], [], []
     was = {n: (_flat(v) if "multiscale" in v else v) for n, v in (base or {}).items()}
 
     def fail(name, metric, got, op, want, key=None):
@@ -1905,6 +1912,18 @@ def gate(rep, base=None):
         de = e.get("delta_e")
         if de and de["mean"] > T["delta_e"]:
             fail(name, f"delta_e[{de['frame']}]", de["mean"], ">", T["delta_e"], "delta_e")
+        elif de:
+            # Under the threshold, so neither bad nor debt - but a jump this
+            # size is still somebody's decision to make. Handwriting went
+            # 3.553 -> 4.682 between two baselines and nothing said a word,
+            # because the ratchet only compares against targets that are
+            # already missed (NEXT.md 47). Raised, never fatal: the number is
+            # allowed to move, it is just not allowed to move quietly.
+            prev = was.get(name, {}).get("delta_e")
+            if prev is not None and de["mean"] > prev + _DE_ATTENTION:
+                attention.append(f"{name:12s} {'delta_e[' + str(de['frame']) + ']':18s} "
+                                 f"{de['mean']:8.3f}   (was {prev:.3f}, "
+                                 f"+{de['mean'] - prev:.2f})")
         sh, sh0 = e.get("tip_sheen"), e.get("tip_sheen_orig")
         if sh and sh0 and sh0.get("amp"):
             want = sh0["amp"] * T["tip_sheen"]
@@ -1985,7 +2004,7 @@ def gate(rep, base=None):
             if mo["peak_over_mean"] > mo0["peak_over_mean"] * T["morph_peak"]:
                 fail(name, "morph_peak", mo["peak_over_mean"], ">",
                      round(mo0["peak_over_mean"] * T["morph_peak"], 2))
-    return bad, debt, unmeasured
+    return bad, debt, unmeasured, attention
 
 
 def _flat(e):
@@ -2128,7 +2147,7 @@ def main():
         print(f"\nratchet written to {args.ratchet}")
 
     if args.check is not None:
-        bad, debt, unmeasured = gate(rep, base)
+        bad, debt, unmeasured, attention = gate(rep, base)
         # The same subtraction build.check_quality does, for the same reason:
         # a complaint that carries no number ("this could not be measured at
         # all") cannot be ratcheted, so it lands in `bad` on every run and would
@@ -2154,6 +2173,11 @@ def main():
                   " which is a state of the instrument, not of the render")
             for u in unmeasured:
                 print("  " + u)
+        if attention:
+            print(f"\nattention ({len(attention)}) - moved a long way and stayed under"
+                  " target, so nothing else here would have said so")
+            for a in attention:
+                print("  " + a)
         print()
         if bad:
             print(f"FAIL ({len(bad)})")
