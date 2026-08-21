@@ -409,12 +409,52 @@ def test_straighten_runs():
           f"corner moved {moved:.2e} logical units")
 
 
+def test_material_basis():
+    """The frames in hybrid._MATERIAL_BASIS carry no material of their own, and
+    the contract is worth a control: a frame listed there must move when its
+    basis moves, and a frame not listed must not move at all.
+
+    Not a picture quality check. It exists so that a year from now "let us
+    improve frame 8" cannot quietly change four other frames without anybody
+    noticing which ones, and so that the reverse - a basis frame that has
+    silently started reading from the frames that borrow from it - shows up as
+    a cycle here rather than as a mystery in the render."""
+    name, size = "Handwriting", 128
+    watch = [2, 3, 4, 5, 6, 7]
+
+    def render():
+        return {i: np.asarray(H.frame_image(name, i, size), dtype=float)
+                for i in watch}
+
+    repoint()
+    base = render()
+    orig = H._master_rgb
+    for basis, expect in ((2, {2, 3, 4}), (8, {5, 6})):
+        def patched(n, i, s, _b=basis, _o=orig):
+            rgb = _o(n, i, s)
+            if (n, i) != (name, _b):
+                return rgb
+            # A stripe, not a constant: the layer transfers high frequencies,
+            # so a flat offset is exactly the damage it is built to drop, and
+            # the first run of this control passed the offset and read nothing.
+            y = np.arange(rgb.shape[0])[:, None, None]
+            return rgb + 12.0 * ((y // 2) % 2)
+        H._master_rgb = patched
+        repoint()
+        now = render()
+        H._master_rgb = orig
+        repoint()
+        moved = {i for i in watch if np.abs(now[i] - base[i]).max() > 0.5}
+        check("material basis %d" % basis, moved == expect,
+              "moved %s, expected %s" % (sorted(moved), sorted(expect)))
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
               test_rim_layers, test_edge_straight, test_mirror_asym,
-              test_straighten_runs):
+              test_straighten_runs, test_material_basis):
         t()
     print()
     if FAILED:
