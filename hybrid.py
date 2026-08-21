@@ -3677,6 +3677,22 @@ def _tip_glass(up_a, name, idx, size):
     return np.maximum(up_a, ref * _smoothstep(1.0 - t / _TIP_GLASS))
 
 
+_SAT_LIFT_DEFAULT = 1.05     # of the author's own level. Glass reads flatter
+                             # than the art it came from once it is composited,
+                             # and the lift is what puts the colour back.
+_SAT_LIFT = {"NO": 1.00}     # named, because NO's red ring is not a sheet of
+                             # glass - it is a small, highly saturated UI mark
+                             # laid over one, and the same lift that flatters a
+                             # sheet oversaturates a mark. Measured: on the
+                             # grey background the interior of frames 5-10
+                             # departs from the author's almost purely in
+                             # chroma (dC +3.69..+6.71 against dL +0.48..+1.35
+                             # and dH 1.64..2.38), and delta_e[7] reads 6.56 at
+                             # 1.05, 6.14 at 1.02, 5.93 at 1.00. The rest of
+                             # that frame's error is the ring's own coverage,
+                             # not its colour, and no lift reaches it.
+
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -3748,7 +3764,8 @@ def frame_image(name, idx, size):
     # floor) is left alone - scaling its near-zero chroma only invents colour.
     orig_sat = _sat_anchor(name, idx)
     if orig_sat >= 0.035:
-        rgb = _temper(rgb, _sat_match(rgb, alpha, orig_sat * 1.05), name, "sat")
+        lift = _SAT_LIFT.get(name, _SAT_LIFT_DEFAULT)
+        rgb = _temper(rgb, _sat_match(rgb, alpha, orig_sat * lift), name, "sat")
     return _hide_ghost(_compose(rgb, alpha), name, size)
 
 
