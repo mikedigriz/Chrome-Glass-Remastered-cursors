@@ -871,6 +871,151 @@ def _mblur(a, m, sigma_px):
 # transplantable without any registration at all. See _apex_borrow.
 
 
+# Handwriting 3-6: the master is torn paper, and no render stage reaches it.
+#
+# The author's own frames 3-5 are a cross-dissolve - two silhouettes at partial
+# opacity, the arrow going and the pen arriving - so the colour handed to
+# Real-ESRGAN there has no crisp structure to enlarge, and what came back is a
+# scene of shards over a grey gradient (look at src/ai512 for those keys). The
+# alpha is not the problem: on a common interior set at 32 our alpha and
+# luminance sit within 2-4 levels of the author's on every one of the nine
+# frames. Only the colour is invented, and only from 128 px up does the
+# invention read - at 32 the shards average away.
+#
+# So the colour for those frames is borrowed from the two frames whose masters
+# the net did get right (2, the arrow; 8, the pen) and registered onto the
+# frame's own traced mask. Registration is by second moments rather than by
+# landmarks: _landmarks resolves for 0-3 only, and the pen frames have no fold
+# chord for it to stand on.
+#
+# Read the value as a basis frame, not as a better copy of this frame. What is
+# taken from it is material - the high frequencies of glass, its facets and its
+# rim - and nothing about when in the cycle it sits. Two consequences worth
+# holding on to: improving frame 2 or 8 changes four other frames with it, and
+# a frame listed here has no colour of its own past _MATERIAL_SPLIT, so any
+# complaint about its structure is a complaint about the basis.
+_MATERIAL_BASIS = {("Handwriting", 3): 2, ("Handwriting", 4): 2,
+                   ("Handwriting", 5): 8, ("Handwriting", 6): 8}
+
+
+def _moment_map(tm, dm):
+    """Affine taking a target pixel to the donor pixel with the same place in
+    the shape: centroid to centroid, principal axes to principal axes.
+
+    Second moments fix the axes but not their sign, so all four sign pairs are
+    tried and the one whose warped donor mask overlaps the target best wins.
+    Nothing here looks at colour."""
+    ys, xs = np.mgrid[0:tm.shape[0], 0:tm.shape[1]].astype(np.float64)
+
+    def mom(m):
+        w = m / max(m.sum(), 1e-9)
+        c = np.array([(w * xs).sum(), (w * ys).sum()])
+        dx, dy = xs - c[0], ys - c[1]
+        cov = np.array([[(w * dx * dx).sum(), (w * dx * dy).sum()],
+                        [(w * dx * dy).sum(), (w * dy * dy).sum()]])
+        return c, cov
+
+    ct, cov_t = mom(tm)
+    cd, cov_d = mom(dm)
+    wt, vt = np.linalg.eigh(cov_t)
+    wd, vd = np.linalg.eigh(cov_d)
+    wt = np.maximum(wt, 1e-9)
+    wd = np.maximum(wd, 1e-9)
+    whiten = (vt * (1.0 / np.sqrt(wt))).T          # target -> unit circle
+    best = None
+    for s0 in (1.0, -1.0):
+        for s1 in (1.0, -1.0):
+            m = (vd * np.array([s0, s1]) * np.sqrt(wd)) @ whiten
+            qx = cd[0] + m[0, 0] * (xs - ct[0]) + m[0, 1] * (ys - ct[1])
+            qy = cd[1] + m[1, 0] * (xs - ct[0]) + m[1, 1] * (ys - ct[1])
+            warped = _sample(dm[..., None], qx, qy)[..., 0]
+            iou = np.minimum(warped, tm).sum() / max(np.maximum(warped, tm).sum(), 1e-9)
+            if best is None or iou > best[0]:
+                best = (iou, qx, qy)
+    return best
+
+
+_MATERIAL_GAIN = 1.2        # weight of the borrowed detail. Costs the frame's
+                         # colour fidelity and buys the glass back: delta_e on
+                         # Handwriting[4] reads 4.05 at 1.0, 4.49 here, 5.40 at
+                         # 1.6 - past the 5.0 the gate allows. Ceiling is that
+                         # number, not taste.
+_MATERIAL_FOLD_KEEP = 2.0   # logical units either side of this frame's own fold
+                         # chord that take no borrowed detail at all. The donor
+                         # brings its own crease and no fit puts the two on top
+                         # of each other, so inside the band the fold stays the
+                         # frame's. Measured on Handwriting[3]: without the
+                         # band, fold_gap 1.50 and fold_luma_step 18.10 against
+                         # a baseline 0.50 and 3.33; at 1.2 units, 1.44 and
+                         # 3.33; at 2.0, both back on the baseline. Wider buys
+                         # nothing.
+_MATERIAL_FOLD_FADE = 0.8   # units the keep-out fades back in over
+_MATERIAL_DARK = 1.0        # how much of the donor's darkening the frame takes.
+                         # Held at 1: keeping the band above and letting only
+                         # the bright half through it puts fold_wander at 0.93
+                         # against 0.20, so the two are not interchangeable -
+                         # a bright facet beside the crease moves the ridge the
+                         # tracker follows as surely as a dark one.
+_MATERIAL_SPLIT = 1.0       # logical units: coarser than this the colour is the
+                         # author's own, finer than this it is the donor's.
+                         # Whole-donor substitution reads better than anything
+                         # before it and costs the frame its identity - the
+                         # donor brings its own fold and its own level, so on
+                         # Handwriting[3] delta_e went 3.55 -> 8.80, fold_gap
+                         # 0.50 -> 4.38 and fold_luma_step 3.3 -> 32.1. The
+                         # split keeps what the donor is for (facets, rim, the
+                         # crispness of glass) and leaves where the fold runs
+                         # and how bright the sheet is to the frame itself.
+
+
+def _material_layer(name, idx, donor, size):
+    """Colour for a frame whose own master the net tore up: high frequencies
+    borrowed from `donor` and registered onto this frame's silhouette by
+    _moment_map, low frequencies kept from the frame's own author art.
+
+    The author's frame is 32px, so on its own it can only be soft - that is the
+    _BROKEN_COLOUR substitution this grew out of. It is, however, right about
+    everything coarse: where the fold runs, how the sheet is lit, what the frame
+    weighs. The donor is right about everything fine and knows nothing about
+    this frame. Splitting them at _MATERIAL_SPLIT gives each the half it is right
+    about.
+
+    Built at the shipped size rather than at the master's anchor, and for the
+    same reason the substitution it replaces was: laid at 512 and carried down
+    the chain instead, Handwriting[3]'s `fold_wander` reads 0.33 against 0.20
+    with no donor detail in it at all. That is the stages between, not the
+    borrow."""
+    own = _resize(_orig(_key(name, idx)), size)[0]
+    tm = _mask(name, idx, size) / 255.0
+    dm = _mask(name, donor, size) / 255.0
+    _iou, qx, qy = _moment_map(tm, dm)
+    warped = _sample(_master_rgb(name, donor, size), qx, qy)
+    detail = warped - _gauss(warped, _MATERIAL_SPLIT * size / V.LOGICAL)
+    detail = np.where(detail < 0, detail * _MATERIAL_DARK, detail)
+    detail *= _MATERIAL_GAIN * _material_keepout(name, idx, size)[..., None]
+    return np.clip(own + detail, 0, 255)
+
+
+def _material_keepout(name, idx, size):
+    """1 everywhere the borrowed detail may land, fading to 0 over the frame's
+    own fold. Flat 1 when this frame has no chord to keep away from.
+
+    Not to be confused with _fold_keepout further down, which holds a different
+    stage off the same chord."""
+    ch = _fold_chord(name, idx)
+    if ch is None or _MATERIAL_FOLD_KEEP <= 0:
+        return np.ones((size, size))
+    s = size / V.LOGICAL
+    a = np.array(ch[0], dtype=np.float64) * s
+    b = np.array(ch[1], dtype=np.float64) * s
+    d = b - a
+    n = np.array([-d[1], d[0]]) / max(float(np.hypot(*d)), 1e-9)
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    dist = np.abs((xs - a[0]) * n[0] + (ys - a[1]) * n[1]) / s
+    keep = (dist - _MATERIAL_FOLD_KEEP) / max(_MATERIAL_FOLD_FADE, 1e-6)
+    return np.clip(keep, 0.0, 1.0)
+
+
 @functools.lru_cache(maxsize=None)
 def _master_raw(name, idx):
     """Colour master -> (rgb HxWx3 float, anchor px), sharpened once at the anchor.
@@ -2934,7 +3079,20 @@ def _band_level(field, band, size):
 # than a `_SYNTH_BEVEL` shape, so the distance field ridges at every one of
 # them. That is the facet dead end recorded against `_tip_relight`, reached
 # from the other side, and crumpled paper is worse than soft glass.
-_BROKEN_COLOUR = {("Handwriting", 3), ("Handwriting", 4), ("Handwriting", 5)}
+#
+# Superseded 2026-08-21 and left empty rather than deleted, because the two
+# dead ends above are still the reason the third way is shaped as it is. The
+# author's own colour is whole but it comes from 32px, and past 128 it reads as
+# the grey smudge NEXT.md 23.8 complains about - "серые мутные пятна без единой
+# грани", which is this substitution seen at size. What replaces it is neither
+# the net's output for these frames nor a field computed from the outline: it
+# is the colour of the frames either side, registered onto this frame's own
+# silhouette. See _MATERIAL_BASIS.
+# Kept as a name because tools/loop.py's diagnosis tree asks about it, and
+# because the two dead ends above are still why the third way is shaped the way
+# it is. The substitution itself now runs through _MATERIAL_BASIS, at the same
+# point in frame_image this set used to be read at.
+_BROKEN_COLOUR = set()
 
 _FREEZE_UNIT = 2.0       # logical units below which detail counts as a line.
                          # Was 0.6, which froze hairlines and let every coarser
@@ -3516,8 +3674,8 @@ def frame_image(name, idx, size):
     master, so the crispness carries down without a second sharpen pass."""
     orig = _orig(_key(name, idx))
     rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
-    if (name, idx) in _BROKEN_COLOUR:
-        rgb = _resize(orig, size)[0]
+    if (name, idx) in _MATERIAL_BASIS:
+        rgb = _material_layer(name, idx, _MATERIAL_BASIS[(name, idx)], size)
     if name == "Help":
         rgb = _engrave(rgb, name, size)
         rgb = _bead(rgb, name, idx, size)
