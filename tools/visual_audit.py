@@ -186,6 +186,71 @@ def crops(out, names, bgs, sizes, font):
         print("  crops  %-12s %s" % (name, ", ".join(sorted(pts))))
 
 
+def _band(alpha, px=1):
+    """Outer shell of a silhouette: the pixels within `px` of its edge."""
+    m = alpha > 32
+    inner = m.copy()
+    for _ in range(px):
+        t = inner.copy()
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                t &= np.roll(np.roll(inner, dy, 0), dx, 1)
+        inner = t
+    return m & ~inner, inner
+
+
+def _perimeter(m):
+    """Boundary length in pixel edges: every side of a filled pixel whose
+    neighbour is empty counts once. Not the count of boundary pixels - a pixel
+    at a corner has two sides exposed and pressing the outline in moves both."""
+    e = 0
+    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        e += int((m & ~np.roll(np.roll(m, dy, 0), dx, 1)).sum())
+    return float(e)
+
+
+def coverage(names, sizes):
+    """How much of the author's own alpha each cursor carries, and where.
+
+    Three readings, because the obvious one is the misleading one:
+
+    `mass` is the total alpha at a rung, divided by the author's own total
+    scaled to that rung. It is scale-invariant by construction, so a number
+    that holds along the ladder is a property of the shape and a number that
+    drifts is a property of the resampling. Ours hold to the third decimal from
+    32 to 256, which is what rules the resize out.
+
+    `band` is the same ratio taken only in the outermost half logical unit,
+    against the author's Lanczos at that rung. It reads much worse than mass on
+    thin cursors - a crisp edge against a smeared reference always will - so it
+    says where the difference sits, not how big it is.
+
+    `press` converts the mass deficit into the width it would take to explain
+    it, spread over the silhouette's own perimeter. That is the number to
+    compare against the 0.14-0.24 logical units the traced contour is known to
+    sit inside its source by (NEXT.md 28.1)."""
+    print("mass: total alpha against the author's, normalised per rung")
+    head = "%-10s" % "cursor" + "".join("%8d" % s for s in sizes) + "%9s%8s" % ("band48", "press")
+    print(head)
+    for name in names:
+        a0 = np.asarray(H.original(name, 0).convert("RGBA"), dtype=float)[..., 3]             if not B.is_glyph(name) else None
+        if a0 is None:
+            print("%-10s (drawn by glyphs.py, no author frame)" % name)
+            continue
+        row = []
+        for size in sizes:
+            ours = np.asarray(_frame(name, 0, size), dtype=float)[..., 3].sum()
+            row.append(ours / (a0.sum() * (size / 32.0) ** 2))
+        auth48 = H._resize(H._orig(H._key(name, 0)), 48)[1]
+        b, _inner = _band(auth48)
+        ours48 = np.asarray(_frame(name, 0, 48), dtype=float)[..., 3]
+        band = ours48[b].mean() / max(auth48[b].mean(), 1e-6)
+        m = a0 > 128
+        press = (1 - row[-1]) * m.sum() / max(_perimeter(m), 1.0)
+        print("%-10s" % name + "".join("%8.3f" % v for v in row)
+              + "%9.3f%8.3f" % (band, press))
+
+
 def _head():
     try:
         r = subprocess.run(["git", "-c", "safe.directory=*", "rev-parse",
@@ -207,6 +272,8 @@ def main(argv=None):
     ap.add_argument("--ladder-only", action="store_true")
     ap.add_argument("--anim-only", action="store_true")
     ap.add_argument("--crops-only", action="store_true")
+    ap.add_argument("--coverage", action="store_true",
+                    help="print the coverage tables and write no sheets")
     args = ap.parse_args(argv)
 
     known = _all_names()
@@ -214,6 +281,9 @@ def main(argv=None):
     unknown = [n for n in names if n not in known]
     if unknown:
         raise SystemExit("unknown cursor(s): %s" % ", ".join(unknown))
+    if args.coverage:
+        coverage(names, args.sizes)
+        return
     only = args.ladder_only or args.anim_only or args.crops_only
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
