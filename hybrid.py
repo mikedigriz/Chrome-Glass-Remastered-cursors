@@ -1272,7 +1272,8 @@ def _up_alpha_native(key):
         if lvl < 1e-6 or abs(lvl - target) < 0.05:
             break
         a = np.clip(a * (target / lvl), 0, 255)
-    return a
+    kind, cname, cidx = key.split("__")
+    return _thin_lift_glass(a, cname, int(cidx), a.shape[0])
 
 
 _LEVEL_REACH = 0.5       # least mask coverage a pixel needs to speak for the level
@@ -1794,6 +1795,73 @@ def _hole_circle(name, idx):
     ys, xs = np.nonzero(comp)
     L = size / V.LOGICAL
     return (xs.mean() / L, ys.mean() / L, (comp.sum() / np.pi) ** 0.5 / L)
+
+
+_THIN_REF = 256          # grid the width field is measured on, once
+_THIN_FULL = 1.6         # logical units of feature width repaired in full
+_THIN_NONE = 3.2         # ...and where the repair has faded out
+_THIN_LIFT = 0.30        # how far toward opaque the glass is taken there
+
+
+@functools.lru_cache(maxsize=None)
+def _thin_weight(name, idx, size):
+    """1 on a thin feature, 0 on a broad one, smooth between.
+
+    Width, not depth: a pixel in the middle of IBeam's stem is 0.8 units from
+    the edge because the stem is 1.6 units across, and a pixel 0.8 units inside
+    Arrow's blade is in the middle of nothing. So the field is the deepest
+    point within a unit's reach, doubled - the width of the feature the pixel
+    belongs to.
+    Measured once at _THIN_REF and resampled, never derived at the shipped size:
+    at 32 a logical unit is one pixel, the reach becomes a single step and half
+    the cursor reads as thin. Derived per rung, the lift put IBeam at 0.948 of
+    the author's mass at 32 against 0.928 at 256 and pushed Cross past the
+    author outright (1.023 at 32) - the cursor changing weight with the size it
+    is drawn at, which is the defect this stage exists to remove."""
+    d = _edge_distance_at(name, idx, _THIN_REF)
+    r = max(1, int(round(_THIN_REF / 32.0)))
+    m = d
+    for axis in (0, 1):                       # separable max, r rolls per axis
+        acc = m
+        for k in range(1, r + 1):
+            acc = np.maximum(acc, np.maximum(np.roll(m, k, axis),
+                                             np.roll(m, -k, axis)))
+        m = acc
+    t = 2.0 * m
+    w = np.clip((_THIN_NONE - t) / (_THIN_NONE - _THIN_FULL), 0.0, 1.0)
+    w = w * w * (3.0 - 2.0 * w)
+    if size != _THIN_REF:
+        w = np.asarray(Image.fromarray(w.astype(np.float32), mode="F")
+                       .resize((size, size), Image.BILINEAR), dtype=np.float64)
+    return w
+
+
+def _thin_lift_glass(up_a, name, idx, size):
+    """Hold a thin strip of glass off transparency.
+
+    The grey family carries less alpha than the author's own art, and the
+    shortfall is not made at any rung: normalised to the author's own 32px
+    frame, IBeam reads 0.901 at 32 and 0.902 at 256, flat to the third decimal
+    (tools/visual_audit.py --coverage). A resize loss would vary with size;
+    this one is in the shape, and it hurts in proportion to how much boundary a
+    cursor has for its area - IBeam has 62 pixel edges around 57 pixels of
+    body, Arrow 160 around 190, and Arrow shows no deficit at all.
+
+    Two repairs were measured, both alpha-only, neither moving a vertex: this
+    one, which raises the glass's translucency on thin features, and lifting
+    the mask's own partial coverage there instead. At the same strength the
+    coverage lift buys almost nothing (IBeam mass +0.007 against +0.026 here),
+    because the mask is already near one across a stem - what is thin there is
+    the glass. Widening the traced contour instead is a dead end with numbers
+    against it (DEAD_ENDS, uniform outward offset).
+
+    Gated on width so it cannot touch a broad cursor: at _THIN_LIFT 0.30, Arrow
+    moves 1.003 -> 1.007 and Help 0.999 -> 1.005, while Cross goes 0.955 ->
+    0.991 and SizeWE 0.970 -> 0.998."""
+    if _THIN_LIFT <= 0:
+        return up_a
+    w = _thin_weight(name, idx, size)
+    return up_a + _THIN_LIFT * (255.0 - up_a) * w
 
 
 def _round_hole(alpha, name, idx, size):
