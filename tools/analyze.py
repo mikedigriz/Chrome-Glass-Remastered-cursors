@@ -1076,6 +1076,7 @@ _BACKGROUNDS = {"white": 255.0, "grey": 128.0, "black": 0.0}
 _TIP_SIZE = 256       # where the points are read
 _TIP_REACH = 1.5      # logical units of the disc the extremum is taken over
 _TIP_RING = 0.25      # width of one ring of the profile
+_TIP_RING_MIN = 8     # pixels a ring needs before it is read at all
 _TIP_BAND = (0.75, 1.5)
                       # the stretch of the approach tip_profile compares. It
                       # starts at 0.75 because the reference is a 32px drawing
@@ -1147,8 +1148,13 @@ def tip_rings(name, size=_TIP_SIZE, get=frame):
         rings = []
         for u in edges:
             m = (r >= (u - _TIP_RING) * L) & (r < u * L)
-            if not m.any():
-                rings.append(0.0)
+            # None, not zero, for a ring the rung cannot hold. A quarter of a
+            # logical unit is under one pixel below 128, and scoring those
+            # empty rings as zero contrast made every cursor read 0.00 at 48
+            # and 64 - the instrument's own resolution, reported as the
+            # render's failure.
+            if m.sum() < _TIP_RING_MIN:
+                rings.append(None)
                 continue
             worst = 1.0
             for bg in _BACKGROUNDS.values():
@@ -1180,8 +1186,12 @@ def tip_profile(name, size=_TIP_SIZE):
         t = theirs.get(k)
         if not t:
             continue
-        pairs = [(a, b) for a, b in zip(o, t) if b > 1e-6]
-        out[k] = min(a / b for a, b in pairs) if pairs else None
+        pairs = [(a, b) for a, b in zip(o, t)
+                 if a is not None and b is not None and b > 1e-6]
+        # half the band has to resolve, or the corner says nothing rather than
+        # saying whatever the one ring that fit happened to read
+        out[k] = (min(a / b for a, b in pairs)
+                  if len(pairs) * 2 >= len(o) else None)
     vals = [v for v in out.values() if v is not None]
     return (min(vals) if vals else None), out
 
