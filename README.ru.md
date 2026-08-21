@@ -22,7 +22,7 @@
 
 Проверено на Windows 11 и Debian 13 (GNOME, X11). Cape для macOS собирается и проходит проверку сборки, но на живой Mac его пока никто не ставил.
 
-## Что скачивать
+## Установка
 
 Все файлы лежат в [последнем релизе](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest).
 
@@ -31,8 +31,6 @@
 | Windows 10/11 | `ChromeGlassRemastered-windows.zip` | правая кнопка по `Install.inf`, пункт **Установить** |
 | Linux | `.deb` или `ChromeGlassRemastered-linux.tar.gz` | пакет или распаковка в `~/.local/share/icons` |
 | macOS 15+ | `ChromeGlassRemastered.cape` | открыть в [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
-
-## Поставить
 
 <details open>
 <summary><b>🪟 &nbsp;Windows 10 / 11</b></summary>
@@ -79,13 +77,13 @@ plasma-apply-cursortheme "Chrome Glass Remastered"                              
 
 </details>
 
-## Как это выглядело и как выглядит
+## Было / Стало
 
 Слева файл 2006 года в том виде, в каком его сегодня растягивает система. Справа те же два указателя, нарисованные в 512 пикселей. Сверху Arrow, снизу Wait.
 
 ![Оригинальные Arrow и Wait размером 32 px, увеличенные до 512 px, рядом с ремастером в 512 px](assets/comparison.png)
 
-## Как оно двигается
+## Анимация в движении
 
 Анимированы пять указателей: **AppStarting**, **Hand** на ссылке, **Handwriting**, **NO** и **Wait**.
 
@@ -101,7 +99,7 @@ plasma-apply-cursortheme "Chrome Glass Remastered"                              
 
 ## Оригинал
 
-Chrome Glass - [работа yoyos](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). Это неофициальный ремастер, сделанный как дань уважения и сохраняющий авторство рядом с графикой. Если вы автор и хотите что-то изменить или убрать, откройте issue - это будет сделано.
+Chrome Glass - [работа yoyos](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). Это неофициальный ремастер, сделанный как дань уважения и сохраняющий авторство рядом с графикой.
 
 Лицензия MIT **не распространяется** на графику курсоров, см. [`NOTICE`](NOTICE). Код сборки и упаковки - под MIT, см. [`LICENSE`](LICENSE).
 
@@ -109,4 +107,3 @@ Chrome Glass - [работа yoyos](https://www.deviantart.com/yoyos/art/Chrome-
 
 - **[docs/DETAILS.ru.md](docs/DETAILS.ru.md)** - что внутри каждого пакета, что умеет и чего не умеет каждая платформа, полное удаление, контрольные суммы, длинный разбор проблем.
 - **[docs/BUILD.ru.md](docs/BUILD.ru.md)** - собрать самому. Python, Pillow, NumPy, без видеокарты.
-- Что-то сломалось? [Создайте issue](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/issues) и укажите систему и окружение рабочего стола, версию релиза, размер указателя и способ установки.

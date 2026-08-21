@@ -22,7 +22,7 @@ This is the same set, redrawn up to 512 px. Shape, colour and timing stay the au
 
 Checked on Windows 11 and Debian 13 (GNOME on X11). The macOS cape is built and validated by the build, but nobody has applied it on a real Mac yet.
 
-## What to download
+## Installation
 
 All files live in the [latest release](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest).
 
@@ -31,8 +31,6 @@ All files live in the [latest release](https://github.com/mikedigriz/Chrome-Glas
 | Windows 10/11 | `ChromeGlassRemastered-windows.zip` | right-click `Install.inf`, choose **Install** |
 | Linux | `.deb`, or `ChromeGlassRemastered-linux.tar.gz` | install the package, or unpack into `~/.local/share/icons` |
 | macOS 15+ | `ChromeGlassRemastered.cape` | open it with [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
-
-## Get it running
 
 <details open>
 <summary><b>🪟 &nbsp;Windows 10 / 11</b></summary>
@@ -79,13 +77,13 @@ To put the system cursors back: **File → Reset System Cursor**, or <kbd>⌘</k
 
 </details>
 
-## What it looked like, what it looks like now
+## Before / After
 
 Left, the 2006 file the way your desktop enlarges it today. Right, the same two pointers drawn at 512 px. Arrow on top, Wait below.
 
 ![The original 32 px Arrow and Wait enlarged to 512 px beside the remaster rendered at 512 px](assets/comparison.png)
 
-## How it moves
+## Animation in motion
 
 Five pointers are animated: **AppStarting**, **Hand** on a link, **Handwriting**, **NO** and **Wait**.
 
@@ -101,7 +99,7 @@ Everything else, plus full removal per platform: **[docs/DETAILS.md](docs/DETAIL
 
 ## The original
 
-Chrome Glass is [yoyos' work](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork. If you are the author and want something changed or taken down, open an issue and it will be done.
+Chrome Glass is [yoyos' work](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
 
 The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
@@ -109,4 +107,3 @@ The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE
 
 - **[docs/DETAILS.md](docs/DETAILS.md)** - what is inside each package, what each platform can and cannot do, full removal, checksums, the longer troubleshooting list.
 - **[docs/BUILD.md](docs/BUILD.md)** - build it yourself. Python, Pillow, NumPy, no GPU.
-- Something broken? [Open an issue](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/issues) with your OS and desktop, the release version, your pointer size, and how you installed it.
