@@ -23,13 +23,13 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Regenerate traced silhouettes
-        run: python trace.py
+        run: python -m cgr.trace
 
       - name: Traced silhouettes must match the committed ones
-        run: git diff --exit-code traced.json
+        run: git diff --exit-code data/traced.json
 
       - name: Build cursor themes and packages
-        run: python build.py
+        run: python -m cgr.build
 
       - uses: actions/upload-artifact@v4
         with:
@@ -65,7 +65,7 @@ jobs:
       # misses several of its own targets today, and those are printed as debt.
       # Anything that moves further from a target fails here.
       - name: Geometry, colour and motion gate
-        run: python tools/analyze.py --check metrics-baseline.json --jobs $(nproc)
+        run: python tools/analyze.py --check data/metrics-baseline.json --jobs $(nproc)
 
   # Everything below exercises the install paths a byte-comparison cannot see:
   # maintainer scripts, alternatives registration, symlink resolution, makepkg.

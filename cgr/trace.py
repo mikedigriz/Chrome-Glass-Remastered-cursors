@@ -2,7 +2,7 @@
 the vector edition keeps the authentic shapes.
 
 Output, per cursor frame: a simplified polygon in 32-logical coordinates, with
-a per-vertex corner flag. Cached to traced.json and read by hybrid._mask at
+a per-vertex corner flag. Cached to data/traced.json and read by hybrid._mask at
 build time. (Earlier revisions also fitted a linear gradient and a highlight
 polygon here; nothing ever consumed them, so both are gone.)
 """
@@ -10,11 +10,12 @@ import json, math, os, statistics
 import numpy as np
 from PIL import Image
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+from .paths import ART, DATA
+
 # Every logical<->raw conversion below hardcodes the 4x of a 128px source
 # (128 / 32 logical). Pointing this at another level silently scales the whole
 # geometry, so the size is asserted per frame in trace_frame.
-SRC = os.environ.get("LG_FRAMES", os.path.join(HERE, "src", "ai"))
+SRC = os.environ.get("LG_FRAMES", os.path.join(ART, "ai"))
 SRC_PX = 128
 
 
@@ -815,7 +816,7 @@ def snap_corners(frames):
     them. A genuinely moving corner (spread beyond SNAP_R) is left alone.
 
     Consumes the "_apex" key. Iteration order is fixed so the JSON stays
-    byte-identical run to run - CI diffs traced.json."""
+    byte-identical run to run - CI diffs data/traced.json."""
     apex = [f.pop("_apex") for f in frames]
     if len(frames) < 2:
         return
@@ -861,9 +862,9 @@ def main():
                                 for i in range(n)]}
         snap_corners(out[name]["frames"])
         print("traced", name, "x", n)
-    with open(os.path.join(HERE, "traced.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(DATA, "traced.json"), "w", encoding="utf-8") as f:
         json.dump(out, f)
-    print("wrote traced.json")
+    print("wrote data/traced.json")
 
 
 if __name__ == "__main__":

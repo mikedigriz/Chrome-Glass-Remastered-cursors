@@ -12,7 +12,7 @@
 
 **Windows 10/11 · Linux · macOS 15+**
 
-<img src="preview.png" alt="Витрина Chrome Glass Remastered: Arrow, Help, IBeam, Cross, SizeAll, курсоры изменения размера, UpArrow, Pin, Person, NO, Wait и AppStarting">
+<img src="assets/preview.png" alt="Витрина Chrome Glass Remastered: Arrow, Help, IBeam, Cross, SizeAll, курсоры изменения размера, UpArrow, Pin, Person, NO, Wait и AppStarting">
 
 </div>
 

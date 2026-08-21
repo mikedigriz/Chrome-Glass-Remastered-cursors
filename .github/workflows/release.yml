@@ -31,15 +31,15 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Regenerate traced silhouettes
-        run: python trace.py
+        run: python -m cgr.trace
 
       - name: Traced silhouettes must match the committed ones
-        run: git diff --exit-code traced.json
+        run: git diff --exit-code data/traced.json
 
       - name: Build cursor themes and packages
         env:
           RELEASE_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
-        run: python build.py
+        run: python -m cgr.build
 
       - name: Checksums
         working-directory: packages

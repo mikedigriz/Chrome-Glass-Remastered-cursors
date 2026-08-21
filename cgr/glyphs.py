@@ -9,8 +9,8 @@ import functools, math
 import numpy as np
 from PIL import Image
 
-import hybrid as H
-import vectorlib as V
+from . import hybrid as H
+from . import vectorlib as V
 
 # amber glass sampled from the original UpArrow (light / dark quantiles)
 LIGHT = (246, 233, 180, 235)

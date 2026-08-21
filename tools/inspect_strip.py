@@ -25,7 +25,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import hybrid as H  # noqa: E402
+from cgr import hybrid as H  # noqa: E402
 
 WEBP = dict(lossless=False, quality=90, method=6)
 

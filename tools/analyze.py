@@ -8,14 +8,14 @@ shading that steps between animation frames, a fold that stops short of the
 point, and a morph that falls apart mid-sequence. Each of those has a number
 here, measured off hybrid.frame_image directly - no dist/ build needed.
 
-    python tools/analyze.py --check metrics-baseline.json    the gate
+    python tools/analyze.py --check data/metrics-baseline.json    the gate
     python tools/analyze.py --baseline base.json             full snapshot
-    python tools/analyze.py --ratchet metrics-baseline.json  move the baseline
+    python tools/analyze.py --ratchet data/metrics-baseline.json  move the baseline
 
 Thresholds are the target. When one does not pass, the fix is the pipeline, not
 the threshold.
 
-metrics-baseline.json is where the set actually stands, and it is committed.
+data/metrics-baseline.json is where the set actually stands, and it is committed.
 A value that misses its threshold but is no worse than that file is debt: it
 gets printed every run and it does not fail the build. A value that moves away
 from the target fails immediately. That is what lets the gate run today - the
@@ -36,7 +36,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import hybrid as H  # noqa: E402
+from cgr import hybrid as H  # noqa: E402
 
 LADDER = [32, 48, 64, 96, 128, 256, 384, 512]
 LADDER_FULL = LADDER
@@ -1478,7 +1478,7 @@ def edge_straight(name, idx=0, size=_RIM_SIZE, get=frame):
     window. Reported in logical units, so it is a property of the vector rather
     than of the rung it was rasterised at.
 
-    It is a vector defect. traced.json stores a straight edge as a run of
+    It is a vector defect. data/traced.json stores a straight edge as a run of
     vertices alternating either side of it, and C.smooth turns that sawtooth
     into a slower S-curve rather than removing it - which is why the wander
     grows with size instead of averaging out, and why it is fixed in trace.py
@@ -1486,7 +1486,7 @@ def edge_straight(name, idx=0, size=_RIM_SIZE, get=frame):
 
     Arrow, Arrow_Down, UpArrow, Hand, Wait and AppStarting all read the same
     number, and that is right, not a bug worth chasing: in this set they are
-    one arrow in six colours, and traced.json stores one 51-vertex polygon for
+    one arrow in six colours, and data/traced.json stores one 51-vertex polygon for
     all of them. rim_layers separates them because it reads the render; this
     reads the silhouette, and the silhouette is shared."""
     mask = H._mask(name, idx, size)
@@ -1564,7 +1564,7 @@ def mirror_asym(name, idx=0, size=_RIM_SIZE, get=frame):
 
     A remaster should make a symmetric drawing more symmetric, not less. Ours
     runs about twice the author's and grows with size, because the asymmetry is
-    in traced.json - the outline itself - and rasterising it finer reproduces it
+    in data/traced.json - the outline itself - and rasterising it finer reproduces it
     more faithfully rather than averaging it away.
 
     Read at two rungs, and they answer different questions. `native` is 32px,
@@ -2038,7 +2038,7 @@ def _flat(e):
 
 
 _KNOWN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      "metrics-known-issues.json")
+                      "data", "metrics-known-issues.json")
 
 
 def _known_issues(path):
@@ -2096,7 +2096,7 @@ def main():
                     help="cursors to measure in parallel (one process each)")
     ap.add_argument("--known", metavar="FILE", default=_KNOWN,
                     help="complaints that carry no number and are already "
-                         "accepted (default: metrics-known-issues.json)")
+                         "accepted (default: data/metrics-known-issues.json)")
     args = ap.parse_args()
 
     sizes = LADDER_FAST if args.fast else LADDER_FULL if args.full else LADDER
@@ -2133,7 +2133,7 @@ def main():
         # a complaint that carries no number ("this could not be measured at
         # all") cannot be ratcheted, so it lands in `bad` on every run and would
         # wedge the gate shut for good. Those are listed in
-        # metrics-known-issues.json with a note on each. Reading it here is what
+        # data/metrics-known-issues.json with a note on each. Reading it here is what
         # makes CI and the local build gate say the same thing - without it the
         # two disagreed, and the workflow that runs this command was red on
         # exactly the entries build.py had already accepted.

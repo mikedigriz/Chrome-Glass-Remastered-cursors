@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 import analyze as A  # noqa: E402
-import hybrid as H  # noqa: E402
+from cgr import hybrid as H  # noqa: E402
 
 SIZE = A.JITTER_SIZE
 FAILED = []
@@ -383,7 +383,7 @@ def test_straighten_runs():
     stage that exists to remove it to actually remove it - and, just as
     importantly, to leave the two anchors exactly where they were. A pass that
     straightens a corner away would score beautifully on this and be useless."""
-    import trace as T                                   # noqa: E402
+    from cgr import trace as T                          # noqa: E402
     eps = 0.7 / 4.0
     n = 12
     # One straight edge the way a cursor actually holds one: a flagged corner at

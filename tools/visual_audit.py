@@ -34,9 +34,9 @@ from PIL import Image, ImageDraw
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-import build as B
-import hybrid as H
-import vectorlib as V
+from cgr import build as B
+from cgr import hybrid as H
+from cgr import vectorlib as V
 
 # Light is the one the grey family is accused on, dark is what the READMEs use,
 # and mid grey is where a too-dark outline and a too-pale fill both show.

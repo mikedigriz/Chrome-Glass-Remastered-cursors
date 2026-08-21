@@ -1,14 +1,14 @@
 """Hybrid frame pipeline: an AI colour master inside a vector-crisp edge.
 
 Per frame:
-  colour - a native src/ai512 master from an illustration-tuned Real-ESRGAN
+  colour - a native art/ai512 master from an illustration-tuned Real-ESRGAN
            (anime_6B), Reinhard-anchored to the original 32px frame's
            per-channel stats. Every cursor uses it, grey glass included: the
            anime model keeps flat glass clean instead of speckling it, so there
            is no pale-cursor bypass. Crispness is one deterministic unsharp at
            the anchor, its dark overshoot damped so glass folds soften rather
            than blacken; smaller sizes downsample the sharpened master.
-  alpha  - (vector mask / 255) x an AI alpha master (src/aialpha, blended with
+  alpha  - (vector mask / 255) x an AI alpha master (art/aialpha, blended with
            a plain Lanczos): the original's translucency inside a crisp traced
            silhouette, at any size.
   sat    - anchored at the shipped size to the original's level x1.05.
@@ -22,14 +22,14 @@ import functools, json, os
 import numpy as np
 from PIL import Image, ImageFilter
 
-import cursors as C
-import vectorlib as V
+from . import cursors as C
+from . import vectorlib as V
+from .paths import ART
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ORIG = os.path.join(HERE, "src", "orig")
-AI = os.path.join(HERE, "src", "ai")
+ORIG = os.path.join(ART, "orig")
+AI = os.path.join(ART, "ai")
 
-MANIFEST = json.load(open(os.path.join(HERE, "src", "manifest.json")))
+MANIFEST = json.load(open(os.path.join(ART, "manifest.json")))
 BY_NAME = {m["name"]: m for m in MANIFEST}
 
 STATIC = [m["name"] for m in MANIFEST if m["kind"] == "cur"]
@@ -350,7 +350,7 @@ def _hue_outlier_weight(name, idx, rgb, sat_floor, sat_span, cos_thresh, cos_spa
 def _declutter_hue_outliers(name, idx, rgb):
     """Real-ESRGAN is blind to alpha, and can invent a stray colour cast right
     at a high-contrast silhouette edge - Arrow_Down (blue glass) got a thin
-    orange fringe tracing its whole outline, baked into the raw src/ai512
+    orange fringe tracing its whole outline, baked into the raw art/ai512
     master itself, where the original crease (and UpArrow's identical fold)
     is neutral grey. Any pixel with real chroma pointing well away from the
     frame's own dominant hue is such an outlier - desaturate it back toward
@@ -373,7 +373,7 @@ _ENGRAVED_DETAIL = {"Help"}   # see _declutter_engraved_detail
 def _declutter_engraved_detail(name, idx, rgb, size):
     """Some AI colour masters hallucinate a second copy of a glyph that the AI
     alpha master already draws correctly through translucency alone - Help's
-    "?" curl is one: the original defines it as a ~1px opacity dip (src/aialpha
+    "?" curl is one: the original defines it as a ~1px opacity dip (art/aialpha
     renders it as a clean single stroke), but the anime colour net, fed that
     same thin feature, paints an extra parallel fold beside it. Composited
     together, the two strokes read as one doubled, "melted" line.
@@ -385,7 +385,7 @@ def _declutter_engraved_detail(name, idx, rgb, size):
     heavily blurred copy of the same master."""
     if name not in _ENGRAVED_DETAIL:
         return rgb
-    path = os.path.join(HERE, "src", "aialpha", _key(name, idx) + ".png")
+    path = os.path.join(ART, "aialpha", _key(name, idx) + ".png")
     if not os.path.exists(path):
         return rgb
     ai = np.asarray(Image.open(path).convert("L"), dtype=np.float64)
@@ -876,7 +876,7 @@ def _mblur(a, m, sigma_px):
 # The author's own frames 3-5 are a cross-dissolve - two silhouettes at partial
 # opacity, the arrow going and the pen arriving - so the colour handed to
 # Real-ESRGAN there has no crisp structure to enlarge, and what came back is a
-# scene of shards over a grey gradient (look at src/ai512 for those keys). The
+# scene of shards over a grey gradient (look at art/ai512 for those keys). The
 # alpha is not the problem: on a common interior set at 32 our alpha and
 # luminance sit within 2-4 levels of the author's on every one of the nine
 # frames. Only the colour is invented, and only from 128 px up does the
@@ -1031,13 +1031,13 @@ def _material_keepout(name, idx, size):
 def _master_raw(name, idx):
     """Colour master -> (rgb HxWx3 float, anchor px), sharpened once at the anchor.
 
-    Every cursor now anchors on the native anime src/ai512 (grey/pale included -
+    Every cursor now anchors on the native anime art/ai512 (grey/pale included -
     the anime_6B model invents no colour on flat glass, so the old honest-Lanczos
     bypass is gone and the pale Size*/IBeam/Cross cursors finally carry real
     network detail).
 
-    There used to be a src/ai256 level and a plain-Lanczos level under this one.
-    Neither could ever fire: src/ai512 is committed and complete, so the fallback
+    There used to be an art/ai256 level and a plain-Lanczos level under this one.
+    Neither could ever fire: art/ai512 is committed and complete, so the fallback
     chain only cost 3.9 MB of unreachable masters in the repository. A missing
     master is now a hard error instead of a silent quality drop nobody would
     notice until the cursors shipped soft.
@@ -1049,7 +1049,7 @@ def _master_raw(name, idx):
     frame_image, at the shipped size (see there)."""
     key = _key(name, idx)
     anchor = 512
-    path = os.path.join(HERE, "src", f"ai{anchor}", key + ".png")
+    path = os.path.join(ART, f"ai{anchor}", key + ".png")
     if not os.path.exists(path):
         raise SystemExit("missing colour master %s - regenerate with "
                          "tools/upscale512.py" % path)
@@ -1093,7 +1093,7 @@ def _ai_tonality(key):
     only a crisper outline - and its own median-matched level is a poor
     estimate of the glass, so it is leaned back toward the Lanczos and its
     dropouts are repaired (see _ai_dropout)."""
-    a = np.asarray(Image.open(os.path.join(HERE, "src", "aialpha", key + ".png"))
+    a = np.asarray(Image.open(os.path.join(ART, "aialpha", key + ".png"))
                    .convert("L"), dtype=np.float64)
     body = (a > 10).sum()
     if not body:
@@ -1141,7 +1141,7 @@ def _ai_dropout(key, size):
     would reinstate it at full strength on a size that cannot resolve it
     anyway, where the right answer is the blurred fraction this resample
     gives."""
-    ai = np.asarray(Image.open(os.path.join(HERE, "src", "aialpha", key + ".png"))
+    ai = np.asarray(Image.open(os.path.join(ART, "aialpha", key + ".png"))
                     .convert("L"), dtype=np.float64)
     native = ai.shape[0]
     _, ref = _resize(_orig(key), native)
@@ -1187,7 +1187,7 @@ def _up_alpha_native(key):
     opacity draws a second bright ridge parallel to the whole contour. That is
     a facet the cursor never had. Reverted; the drift left over without it is
     a twentieth of a logical unit and invisible."""
-    path = os.path.join(HERE, "src", "aialpha", key + ".png")
+    path = os.path.join(ART, "aialpha", key + ".png")
     ai = np.asarray(Image.open(path).convert("L"), dtype=np.float64)
     native = ai.shape[0]
     _, ref = _resize(_orig(key), native)
@@ -1338,7 +1338,7 @@ def _up_alpha(name, idx, size):
     """Silhouette translucency at `size`. The vector mask already gives a crisp
     edge; this is the glass *inside* it. A plain Lanczos of the 32px original
     alpha goes soft when stretched, so the inner sheen turns to mush at large
-    sizes - the committed Real-ESRGAN alpha master (src/aialpha, native 512,
+    sizes - the committed Real-ESRGAN alpha master (art/aialpha, native 512,
     tools/upscale_alpha.py) keeps that gradient crisp instead.
 
     The AI alpha is rescaled so its visible-zone median matches the plain
@@ -1365,7 +1365,7 @@ def _up_alpha(name, idx, size):
     distribution, and it traded 0.03 -> 0.15 logical units of coverage drift
     for the 2..4% of interior level it recovered."""
     key = _key(name, idx)
-    if not os.path.exists(os.path.join(HERE, "src", "aialpha", key + ".png")):
+    if not os.path.exists(os.path.join(ART, "aialpha", key + ".png")):
         return _resize(_orig(key), size)[1]
     a = _up_alpha_raw(key, size)
     if size == _LEVEL_REF:
@@ -2053,7 +2053,7 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
 # invents a fold of its own here that the author never drew (confirmed on
 # Wait - see NEXT.md item 7, the render splits into two lobes even with every
 # stage in this file that touches the point switched off, so it is baked into
-# `src/ai512`). Flattening the band erases that invented split instead of
+# `art/ai512`). Flattening the band erases that invented split instead of
 # adding a second one on top of it.
 #
 # `taper` is shared by both shapes: it is how far back from the point the
@@ -2505,7 +2505,7 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     """Cap the AI master's second, spurious crease line that runs parallel to
     the outer silhouette edge on every wedge-shaped cursor.
 
-    Baked into src/ai512 before any stage in this file runs (present with
+    Baked into art/ai512 before any stage in this file runs (present with
     _tip_relight, _match_author_level and _notch_declutter all off): a thin
     dark band sits a little over a logical unit in from the traced edge,
     between the chrome rim highlight and the facet - the network's own
@@ -2653,7 +2653,7 @@ def _notch_declutter(rgb, name, idx, size):
     along `_fold_chord` near its notch end (t=0.99, composited on a light
     background), the master's dip reaches 124-188 luma levels on Arrow, Hand
     and Arrow_Down against the author's 22-30 there. It is baked into
-    `src/ai` before any stage in this file runs - present with `_tip_relight`
+    `art/ai` before any stage in this file runs - present with `_tip_relight`
     and `_match_author_level` both switched off - so it is corrected here the
     same way `_tip_relight` corrects the master's invented second point: by
     replacing, not shading on top.
@@ -3446,7 +3446,7 @@ _LEVEL_CAP_NATIVE = 40.0 # ...and the cap on his own grid, where neither guard
                          # What the two guards were costing there is the dark
                          # outline. His 32px art carries a full logical unit of
                          # near-black around the silhouette; ours inherits a
-                         # fifth of a unit from src/ai512 and averages it away
+                         # fifth of a unit from art/ai512 and averages it away
                          # on the trip down, so the darkest pixel over the mask
                          # composited on 240 came out 145 against his 106 and
                          # the cursor read washed out on a light desktop. 12
@@ -3986,7 +3986,7 @@ def anim_frames(name, size, interp=True):
     count and cycle length are untouched, so the .ani timing is unchanged."""
     n = len(BY_NAME[name]["frames"])
     if name in INTERP and LIGHT_ANIM:
-        import lightanim                 # imports this module: has to stay lazy
+        from . import lightanim          # imports this module: has to stay lazy
         out_n = n * INTERP_N if interp else n
         frames, _ = lightanim.anim_frames_lighting(name, size, out_n=out_n)
         return frames, ([1] * out_n if interp else list(BY_NAME[name]["rates"]))

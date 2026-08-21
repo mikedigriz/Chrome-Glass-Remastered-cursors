@@ -1,4 +1,4 @@
-"""Regenerate src/aialpha: a Real-ESRGAN x4 pass over the original 32px alpha
+"""Regenerate art/aialpha: a Real-ESRGAN x4 pass over the original 32px alpha
 channel alone, carried to native 512px (32 -> 128 -> 512).
 
 The silhouette edge is already vector-crisp (traced.json), but the glass
@@ -16,7 +16,7 @@ and rejected.) That blend is a deliberate trade against the build's alpha-drift
 metric, tuned to the bracket recorded at hybrid._BLEND_AI.
 
 Same deps/caveats as upscale512 (py-real-esrgan, opencv, torch). Results are
-committed; the build falls back to plain Lanczos when src/aialpha is absent.
+committed; the build falls back to plain Lanczos when art/aialpha is absent.
 """
 import os, sys
 
@@ -30,12 +30,12 @@ if not hasattr(huggingface_hub, "cached_download"):
 import numpy as np
 from PIL import Image
 
-import hybrid as H
-import upscale_lib as U
+from cgr import hybrid as H
+from cgr import upscale_lib as U
 
 
 def main():
-    out_dir = os.path.join(ROOT, "src", "aialpha")
+    out_dir = os.path.join(ROOT, "art", "aialpha")
     os.makedirs(out_dir, exist_ok=True)
     device = U.pick_device()
     print("device:", device)

@@ -9,11 +9,11 @@ get back to the last state that measured better.
     python tools/loop.py diagnose --fast      what is broken, and what to try
     python tools/loop.py checkpoint pinch-r5  commit + snapshot the metrics
     python tools/loop.py rollback --reason .. undo it and mark the dead end
-    python tools/loop.py progress "note"      append the iteration to PROGRESS.md
+    python tools/loop.py progress "note"      append the iteration to docs/dev/PROGRESS.md
 
 The rule the loop runs on: one change, then the gate. A change that fails the
-gate is rolled back and its name goes into DEAD_ENDS.md, so the next pass does
-not spend another iteration rediscovering it. PLAN.md section 5 is 36 attempts
+gate is rolled back and its name goes into docs/dev/DEAD_ENDS.md, so the next pass does
+not spend another iteration rediscovering it. docs/dev/PLAN.md section 5 is 36 attempts
 long because nothing wrote them down while they were happening.
 """
 
@@ -33,9 +33,9 @@ sys.path.insert(0, HERE)
 import analyze as A  # noqa: E402
 
 METRICS = os.path.join(ROOT, ".metrics")
-PROGRESS = os.path.join(ROOT, "PROGRESS.md")
-DEAD_ENDS = os.path.join(ROOT, "DEAD_ENDS.md")
-RATCHET = os.path.join(ROOT, "metrics-baseline.json")
+PROGRESS = os.path.join(ROOT, "docs", "dev", "PROGRESS.md")
+DEAD_ENDS = os.path.join(ROOT, "docs", "dev", "DEAD_ENDS.md")
+RATCHET = os.path.join(ROOT, "data", "metrics-baseline.json")
 
 # Every gate failure belongs to exactly one artifact, and every artifact has a
 # fixed order of things to try. The point is not that the order is optimal - it
@@ -47,7 +47,7 @@ RATCHET = os.path.join(ROOT, "metrics-baseline.json")
 # is the other half of what these loops waste their time on.
 DECISION_TREE = {
     "topology": [
-        ("check_trace_input", "src/ai frames feeding trace.py"),
+        ("check_trace_input", "art/ai frames feeding trace.py"),
         ("check_snap_corners", "trace.snap_corners, SNAP_R"),
         ("retrace_tolerance", "trace.trace_frame eps"),
         ("escalate", ""),
@@ -167,7 +167,7 @@ def ratchet():
 
 
 def dead_ends():
-    """Fix names already tried and rolled back, from DEAD_ENDS.md."""
+    """Fix names already tried and rolled back, from docs/dev/DEAD_ENDS.md."""
     if not os.path.exists(DEAD_ENDS):
         return set()
     with open(DEAD_ENDS, encoding="utf-8") as fh:
@@ -314,7 +314,7 @@ def cmd_progress(args):
              + " | ".join(cols) + " |\n|" + "---|" * (len(cols) + 4))
     note(PROGRESS, f"| {datetime.date.today()} | {args.note} | {len(bad)} | {len(debt)} | "
                    + " | ".join(f"{worst.get(c, float('nan')):.3f}" for c in cols) + " |")
-    print(f"{len(bad)} regressions, {len(debt)} debt, row appended to PROGRESS.md")
+    print(f"{len(bad)} regressions, {len(debt)} debt, row appended to docs/dev/PROGRESS.md")
     return 0
 
 

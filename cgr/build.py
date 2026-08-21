@@ -9,7 +9,8 @@ for:
   * Linux   - native Xcursor theme (multi-size + animated) with name aliases
   * Debian  - installable .deb (aliases as symlinks)
   * packages/ - release artifacts: windows .zip, linux .tar.gz, .deb
-  * preview.png + animated assets/*.webp (the READMEs embed these) and a .gif
+  * assets/preview.png + animated assets/*.webp (the READMEs embed these) and
+    a .gif
     of each, for the places that still refuse animated webp - forum posts,
     DeviantArt, Reddit. Nothing in the repo links the gifs; they exist to be
     uploaded by hand.
@@ -22,11 +23,10 @@ import concurrent.futures as cf
 import numpy as np
 from PIL import Image, ImageDraw
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import hybrid as H
-import glyphs as G
-import curlib
+from . import hybrid as H
+from . import glyphs as G
+from . import curlib
+from .paths import ASSETS, DATA, ROOT, TOOLS
 
 THEME = "Chrome Glass Remastered"
 PKG = "chrome-glass-remastered-cursors"
@@ -489,7 +489,7 @@ def build_deb(linux_dir, aliases, packages):
     entries = _linux_entries(linux_dir, aliases, root)
     # Policy 12.5: every package needs a copyright file. LICENSE covers the
     # code, NOTICE the artwork, and both matter here.
-    copyright_txt = b"\n\n".join(open(os.path.join(HERE, fn), "rb").read() for fn in LEGAL)
+    copyright_txt = b"\n\n".join(open(os.path.join(ROOT, fn), "rb").read() for fn in LEGAL)
     entries.append(("usr/share/doc/%s/copyright" % PKG, copyright_txt, 0o644, None))
     entries.append(("usr/share/doc/%s/changelog.gz" % PKG, _deb_changelog(mtime), 0o644, None))
     total = sum(len(d) for _, d, _, _ in entries if d)
@@ -634,10 +634,10 @@ def build_artifacts(win_dir, linux_dir, aliases, packages):
             if fn not in WIN_UNSHIPPED:
                 z.write(os.path.join(win_dir, fn), THEME + "/" + fn)
         for fn in LEGAL:
-            z.write(os.path.join(HERE, fn), THEME + "/" + fn)
+            z.write(os.path.join(ROOT, fn), THEME + "/" + fn)
     tpath = os.path.join(packages, "ChromeGlassRemastered-linux.tar.gz")
     entries = _linux_entries(linux_dir, aliases, THEME)
-    entries += [(THEME + "/" + fn, open(os.path.join(HERE, fn), "rb").read(), 0o644, None)
+    entries += [(THEME + "/" + fn, open(os.path.join(ROOT, fn), "rb").read(), 0o644, None)
                 for fn in LEGAL]
     open(tpath, "wb").write(_tar_gz(entries, int(time.time())))
     return zpath, tpath
@@ -689,7 +689,9 @@ def build_preview(root=None):
         r, c = divmod(i, cols); x = pad + c * (cell + pad); y = pad + r * (cell + pad + lab)
         sheet.alpha_composite(_onbg(img, light=(84, 87, 96), dark=(66, 69, 77)), (x, y))
         d.text((x + 2, y + cell + 3), name, fill=(198, 200, 206), font=f)
-    sheet.convert("RGB").save(os.path.join(root or HERE, "preview.png"))
+    assets = os.path.join(root, "assets") if root else ASSETS
+    os.makedirs(assets, exist_ok=True)
+    sheet.convert("RGB").save(os.path.join(assets, "preview.png"))
 
 
 def _pad(img, box):
@@ -730,7 +732,7 @@ def _encode_anim_job(job):
 
 
 def build_animations(root=None):
-    assets = os.path.join(root or HERE, "assets")
+    assets = os.path.join(root, "assets") if root else ASSETS
     os.makedirs(assets, exist_ok=True)
     # Only clear what this function rewrites. Wiping the whole directory also
     # took assets/social-preview.png with it - that one is committed and comes
@@ -935,15 +937,16 @@ def _rel(p):
     """Path for the summary lines. relpath raises across Windows drives, and
     --out-dir routinely points at another one, so fall back to the absolute."""
     try:
-        return os.path.relpath(p, HERE)
+        return os.path.relpath(p, ROOT)
     except ValueError:
         return p
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build the cursor theme.")
-    ap.add_argument("--out-dir", default=HERE, metavar="DIR",
-                    help="where dist/, packages/, assets/ and preview.png are "
+    ap.add_argument("--out-dir", default=ROOT, metavar="DIR",
+                    help="where dist/, packages/ and assets/ (preview.png, "
+                         "the animations) are "
                          "written (default: the repo itself). Point it "
                          "somewhere else to render an experiment without "
                          "overwriting the committed preview and assets.")
@@ -972,7 +975,7 @@ def main(argv=None):
     print("Linux   :", _rel(lin), "-", len(os.listdir(os.path.join(lin, "cursors"))), "cursor files")
     print("Debian  :", _rel(deb))
     print("Zips    :", _rel(zpath), "+", _rel(tpath))
-    print("Preview :", _rel(os.path.join(out, "preview.png")),
+    print("Preview :", _rel(os.path.join(out, "assets", "preview.png")),
           "  Animations:", _rel(os.path.join(out, "assets")) + "/*.webp")
     print("Checks:")
     check_packages(win)
@@ -984,8 +987,8 @@ def main(argv=None):
     check_quality()
 
 
-_BASELINE = os.path.join(HERE, "metrics-baseline.json")
-_KNOWN = os.path.join(HERE, "metrics-known-issues.json")
+_BASELINE = os.path.join(DATA, "metrics-baseline.json")
+_KNOWN = os.path.join(DATA, "metrics-known-issues.json")
 
 
 def check_quality():
@@ -1008,10 +1011,10 @@ def check_quality():
 
     Skipped if the baseline is missing rather than treated as a failure - a
     fresh clone should build - and overridable the same way check_metrics is."""
-    sys.path.insert(0, os.path.join(HERE, "tools"))
+    sys.path.insert(0, TOOLS)
     import analyze as A
     if not os.path.exists(_BASELINE):
-        print("  quality : skipped, no metrics-baseline.json")
+        print("  quality : skipped, no data/metrics-baseline.json")
         return
     with open(_BASELINE) as fh:
         base = json.load(fh)
@@ -1024,7 +1027,7 @@ def check_quality():
     # The ratchet compares numbers, so a complaint that carries no number -
     # "this could not be measured at all" - lands in `bad` on every run,
     # baseline or not, and would wedge the build shut for good. Those are
-    # listed in metrics-known-issues.json with a note on each, so the standing
+    # listed in data/metrics-known-issues.json with a note on each, so the standing
     # ones are visible and only a new one stops a build.
     new = [b for b in bad if " ".join(b.split()) not in known]
     seen = len(bad) - len(new)
@@ -1037,7 +1040,7 @@ def check_quality():
             print("    " + b)
         if os.environ.get("ALLOW_METRIC_WARN") != "1":
             raise SystemExit(f"check_quality: {len(new)} regression(s) vs "
-                             "metrics-baseline.json (set ALLOW_METRIC_WARN=1 to ship anyway)")
+                             "data/metrics-baseline.json (set ALLOW_METRIC_WARN=1 to ship anyway)")
 
 
 if __name__ == "__main__":

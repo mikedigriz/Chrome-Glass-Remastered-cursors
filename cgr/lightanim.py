@@ -28,8 +28,8 @@ import functools
 
 import numpy as np
 
-import hybrid as H
-import vectorlib as V
+from . import hybrid as H
+from . import vectorlib as V
 
 LIGHT_ANIM = ("AppStarting", "Hand", "Wait")
 

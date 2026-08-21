@@ -12,7 +12,7 @@
 
 **Windows 10/11 · Linux · macOS 15+**
 
-<img src="preview.png" alt="Chrome Glass Remastered cursor showcase: Arrow, Help, IBeam, Cross, SizeAll, resize cursors, UpArrow, Pin, Person, NO, Wait and AppStarting">
+<img src="assets/preview.png" alt="Chrome Glass Remastered cursor showcase: Arrow, Help, IBeam, Cross, SizeAll, resize cursors, UpArrow, Pin, Person, NO, Wait and AppStarting">
 
 </div>
 

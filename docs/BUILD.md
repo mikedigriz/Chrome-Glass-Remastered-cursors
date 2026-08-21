@@ -6,7 +6,7 @@ All AI masters are already committed, so a normal build needs no GPU and no torc
 
 ```sh
 pip install -r requirements.txt
-python3 build.py
+python3 -m cgr.build
 ```
 
 This rebuilds `dist/`, `packages/` and the previews, then checks the result against the original (alpha, saturation, timing) and warns if anything drifted.
@@ -24,41 +24,41 @@ Two escape hatches:
 
 | Folder / file | What's in it |
 |---|---|
-| `src/orig/` | untouched 2006 art, 32 px - the source of truth |
-| `src/ai/` | a 128 px AI upscale, the input `trace.py` reads shapes from |
-| `src/ai512/` | the AI color master, native resolution |
-| `src/aialpha/` | AI upscale of transparency, kept separate from color |
-| `traced.json` | vector outlines from `trace.py` |
+| `art/orig/` | untouched 2006 art, 32 px - the source of truth |
+| `art/ai/` | a 128 px AI upscale, the input `trace.py` reads shapes from |
+| `art/ai512/` | the AI color master, native resolution |
+| `art/aialpha/` | AI upscale of transparency, kept separate from color |
+| `data/traced.json` | vector outlines from `trace.py` |
 
 Build order:
 
 ```
-src/ -> trace.py -> traced.json -> hybrid.py + glyphs.py -> build.py -> curlib.py / vectorlib.py
+art/ -> trace.py -> data/traced.json -> hybrid.py + glyphs.py -> build.py -> curlib.py / vectorlib.py
 ```
 
 A couple of details are hand-drawn in `cursors.py` instead of auto-traced - like the dot under the question mark on Help, which sits apart from the arrow and the tracer just misses it.
 
 ## Checking the render
 
-`build.py`'s own gate only watches median alpha and saturation. Everything else - a silhouette whose size depends on the size it is drawn at, a fold broken into pieces, a colour that has drifted off the author's, an animation that hurries - is measured by `tools/analyze.py`, straight off `hybrid.frame_image` with no build needed:
+`cgr/build.py`'s own gate only watches median alpha and saturation. Everything else - a silhouette whose size depends on the size it is drawn at, a fold broken into pieces, a colour that has drifted off the author's, an animation that hurries - is measured by `tools/analyze.py`, straight off `hybrid.frame_image` with no build needed:
 
 ```
-python tools/analyze.py --check metrics-baseline.json --jobs 8
+python tools/analyze.py --check data/metrics-baseline.json --jobs 8
 ```
 
-`metrics-baseline.json` is where the set stands today and it is committed. A value that misses its target but is no worse than that file prints as debt and does not fail; a value that moves further from a target fails on the spot. `--fast` is the short ladder for iterating, `--full` adds 512 and is what acceptance runs on, and `--ratchet FILE` rewrites the baseline once an improvement is real.
+`data/metrics-baseline.json` is where the set stands today and it is committed. A value that misses its target but is no worse than that file prints as debt and does not fail; a value that moves further from a target fails on the spot. `--fast` is the short ladder for iterating, `--full` adds 512 and is what acceptance runs on, and `--ratchet FILE` rewrites the baseline once an improvement is real.
 
 `tools/selftest.py` plants a defect of each kind and asserts the metric that owns it moves. Run it before trusting a clean gate: a metric that cannot fail reports a clean run on a broken cursor.
 
-`tools/loop.py diagnose` groups whatever is failing into artifacts and names the next thing to try; `checkpoint`, `rollback` and `progress` keep `PROGRESS.md` and `DEAD_ENDS.md`.
+`tools/loop.py diagnose` groups whatever is failing into artifacts and names the next thing to try; `checkpoint`, `rollback` and `progress` keep `docs/dev/PROGRESS.md` and `docs/dev/DEAD_ENDS.md`.
 
 ## Preview assets
 
-`build.py` also generates everything the READMEs embed:
+`cgr/build.py` also generates everything the READMEs embed:
 
 | Asset | What it is |
 |---|---|
-| `preview.png` | the 15-tile showcase grid |
+| `assets/preview.png` | the 15-tile showcase grid |
 | `assets/comparison.png` | 2006 stretched vs remaster at native 512 px |
 | `assets/animations.webp` | all five animated cursors side by side |
 | `assets/<name>.webp` | each animated cursor on its own |
@@ -75,9 +75,9 @@ Only needed if you want to recompute the upscales instead of using what's alread
 ```sh
 pip install -r requirements-ai.txt
 
-python3 tools/upscale128.py     # src/orig -> src/ai       (128 px base)
-python3 tools/upscale512.py     # src/ai   -> src/ai512    (color master)
-python3 tools/upscale_alpha.py  # src/orig -> src/aialpha  (alpha master)
+python3 tools/upscale128.py     # art/orig -> art/ai       (128 px base)
+python3 tools/upscale512.py     # art/ai   -> art/ai512    (color master)
+python3 tools/upscale_alpha.py  # art/orig -> art/aialpha  (alpha master)
 ```
 
 You need one weights file, `RealESRGAN_x4plus_anime_6B.pth` (~18 MB, illustration-tuned) - drop it in `weights/` yourself (`upscale_lib.load_model` loads it locally, no auto-download). Results are already committed, so nobody else has to do this.

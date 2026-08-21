@@ -21,7 +21,7 @@ PKGBUILD        text eol=lf
 *.deb           binary
 # Generated, not written by hand - keep it out of GitHub's language stats and
 # collapsed in diffs.
-traced.json     linguist-generated=true
-src/ai/**       linguist-generated=true
-src/ai512/**    linguist-generated=true
-src/aialpha/**  linguist-generated=true
+data/traced.json linguist-generated=true
+art/ai/**       linguist-generated=true
+art/ai512/**    linguist-generated=true
+art/aialpha/**  linguist-generated=true

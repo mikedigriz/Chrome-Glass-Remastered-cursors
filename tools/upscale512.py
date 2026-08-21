@@ -1,4 +1,4 @@
-"""Regenerate src/ai512: a Real-ESRGAN x4 pass over the 128px hybrid base, with
+"""Regenerate art/ai512: a Real-ESRGAN x4 pass over the 128px hybrid base, with
 the 512px network output kept native instead of downsampled.
 
 The x4 model turns the processed 128px hybrid frame straight into 512px, and
@@ -22,12 +22,12 @@ if not hasattr(huggingface_hub, "cached_download"):        # new hub versions
 import numpy as np
 from PIL import Image
 
-import hybrid as H
-import upscale_lib as U
+from cgr import hybrid as H
+from cgr import upscale_lib as U
 
 
 def main():
-    out_dir = os.path.join(ROOT, "src", "ai512")
+    out_dir = os.path.join(ROOT, "art", "ai512")
     os.makedirs(out_dir, exist_ok=True)
     device = U.pick_device()
     print("device:", device)

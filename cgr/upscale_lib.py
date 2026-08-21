@@ -47,9 +47,9 @@ def load_model(device, scale=4, weights="RealESRGAN_x4plus_anime_6B.pth", num_bl
     import os
     from py_real_esrgan.model import RealESRGAN
     from py_real_esrgan.rrdbnet_arch import RRDBNet
-    root = os.path.dirname(os.path.abspath(__file__))
+    from .paths import WEIGHTS
     model = RealESRGAN(device, scale=scale)
     model.model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64,
                           num_block=num_block, num_grow_ch=32, scale=scale)
-    model.load_weights(os.path.join(root, "weights", weights), download=False)
+    model.load_weights(os.path.join(WEIGHTS, weights), download=False)
     return model
