@@ -3652,6 +3652,83 @@ def _facet_gain(name, idx):
     return float(np.clip(body, 1.0 / _FACET_GAIN_CAP, _FACET_GAIN_CAP))
 
 
+_TIP_LEVEL_CURSORS = {"Arrow", "Arrow_Down", "Hand", "UpArrow"}
+                         # the wedges whose point is relit. AppStarting and Wait
+                         # are wedges too and are deliberately out: their level
+                         # near the apex is part of the travelling highlight and
+                         # belongs to lightanim. Measured, not assumed - with
+                         # them in, AppStarting `tip_extreme_contrast` goes
+                         # 0.138 -> 0.066 against the author's own 0.069, a new
+                         # failure, and Wait 0.130 -> 0.083.
+_TIP_LEVEL_BAND = 3.0    # logical units down the fold chord the correction holds
+_TIP_LEVEL_FADE = 1.5    # ...and the units it fades out over past that
+
+
+def _tip_level(rgb, name, idx, size):
+    """Bring the point's own luma to the author's. One number, not a field.
+
+    The wedge points ship 18-30 levels lighter than the author draws them, at
+    every rung: the tip zone reads 115-129 against his 99-102, which on a grey
+    desktop is the cursor's own point sitting at the background's value and
+    disappearing into it. Alpha is not the problem and never was - at 32 ours
+    is 0.55-0.57 against his 0.54-0.55 - and neither is the silhouette or the
+    width of the rim. Only the level. So only the level moves here: luma over a
+    band along the fold chord, chroma and alpha and geometry untouched.
+
+    Deliberately one constant over the band, and the two better-looking
+    alternatives were built and measured before this was settled (NEXT.md 45):
+
+    Solving the mask's own attenuation out - the band is weighted, so a shift
+    of d delivers d * sum(w*w)/sum(w) and lands short - does bring the mean
+    error to zero (+4.4/+6.6/+4.1/+3.5 -> +0.8/+1.8/+1.0/+0.2) and buys it with
+    local overshoot: Arrow's profile then reads -8 at the point, +3 in the
+    middle, +10 further down, where this one never crosses -2.5.
+
+    Fitting a correction that varies along the chord flattens the profile
+    outright (mean under 1 level, span +/-7 instead of +/-35) and breaks the
+    fold: UpArrow `fold_gap` 0.125 -> 0.750, Hand `fold_wander` 0.207 -> 0.568,
+    Arrow_Down `fold_jag` 55.8 -> 89.4. Smoothing it does not help - sigma 1.5,
+    4.0 and 8.0 along t give fold numbers identical to the digit. The crease
+    runs along the same axis the correction would vary on, so any tilt of the
+    level along it is read by the tracker as the crease moving. A constant
+    cannot do that, and this one leaves every fold reading where it found it.
+
+    What is left is +2.7..+8.1 levels of the author's own falloff, and that is
+    the price of not touching the fold. Closing it needs the correction to live
+    where the fold lives, in `_tip_relight`'s own trough model, so that one
+    object owns both - not a second luma stage arguing with the first."""
+    if name not in _TIP_LEVEL_CURSORS:
+        return rgb
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (tx, ty), (nx_, ny_) = ch
+    dx, dy = nx_ - tx, ny_ - ty
+    seg = float(np.hypot(dx, dy))
+    if seg < 1e-6:
+        return rgb
+    ux, uy = dx / seg, dy / seg
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    t = ((xs + 0.5) / L - tx) * ux + ((ys + 0.5) / L - ty) * uy
+    w = np.clip((_TIP_LEVEL_BAND + _TIP_LEVEL_FADE - t) / _TIP_LEVEL_FADE, 0.0, 1.0)
+    w = np.where(t < -0.5, 0.0, w)
+    w = w * w * (3 - 2 * w)
+    # weighted by what will actually be visible, not by the silhouette: a band
+    # pixel under a tenth of glass should not get a tenth of a vote in the level
+    ours_w = w * (_mask(name, idx, size) / 255.0) * (_up_alpha(name, idx, size) / 255.0)
+    if ours_w.sum() < 1e-6:
+        return rgb
+    au = np.asarray(original(name, idx).convert("RGBA")
+                    .resize((size, size), Image.LANCZOS), dtype=np.float64)
+    au_w = w * (au[..., 3] / 255.0)
+    if au_w.sum() < 1e-6:
+        return rgb
+    ours = float((rgb.mean(2) * ours_w).sum() / ours_w.sum())
+    theirs = float((au[..., :3].mean(2) * au_w).sum() / au_w.sum())
+    return np.clip(rgb + (theirs - ours) * w[..., None], 0, 255)
+
+
 def _facet_split(rgb, name, idx, size):
     """Rebuild the point out of two surfaces that meet at it.
 
@@ -3787,6 +3864,7 @@ def frame_image(name, idx, size):
     rgb = _rim_transfer(rgb, name, idx, size)
     rgb = _fold_transfer(rgb, name, idx, size)
     rgb = _facet_split(rgb, name, idx, size)
+    rgb = _tip_level(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #
