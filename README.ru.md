@@ -2,144 +2,111 @@
 
 # Chrome Glass Remastered
 
-**Помните стеклянные курсоры из 2006-го? Они вернулись - и больше не превращаются в кашу на 4K.**
+**Курсоры Chrome Glass 2006 года, перерисованные под современные экраны.**
 
 [![English version](https://img.shields.io/badge/README-in%20English-0B67A0?style=flat-square)](README.md)
-[![Release](https://img.shields.io/github/v/release/mikedigriz/chrome-glass-remastered-cursors?style=flat-square&color=1E3A8A)](../../releases/latest)
-[![License](https://img.shields.io/badge/код-MIT-green?style=flat-square)](LICENSE)
+[![Релиз](https://img.shields.io/github/v/release/mikedigriz/chrome-glass-remastered-cursors?style=flat-square&color=1E3A8A)](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest)
+[![Лицензия](https://img.shields.io/badge/код-MIT-green?style=flat-square)](LICENSE)
 
-[![Скачать последний релиз](https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D0%BF%D0%BE%D1%81%D0%BB%D0%B5%D0%B4%D0%BD%D0%B8%D0%B9%20%D1%80%D0%B5%D0%BB%D0%B8%D0%B7-1E3A8A?style=for-the-badge)](../../releases/latest)
+[![Скачать последний релиз](https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D0%BF%D0%BE%D1%81%D0%BB%D0%B5%D0%B4%D0%BD%D0%B8%D0%B9%20%D1%80%D0%B5%D0%BB%D0%B8%D0%B7-1E3A8A?style=for-the-badge)](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest)
 
-Windows · Linux · macOS · 17 курсоров · бесплатно
+**Windows 10/11 · Linux · macOS 15+**
 
-<img src="preview.png" alt="Набор в статике: Arrow, Help, IBeam, Cross, SizeAll, четыре стрелки resize, UpArrow, Pin, Person, NO, Wait и AppStarting">
+<img src="preview.png" alt="Витрина Chrome Glass Remastered: Arrow, Help, IBeam, Cross, SizeAll, курсоры изменения размера, UpArrow, Pin, Person, NO, Wait и AppStarting">
 
 </div>
 
-В 2006 году на DeviantArt вышел набор курсоров «Chrome Glass» - стеклянный, живой, но нарисованный под 32 px, поэтому на 4K превращается в кашу. Я пересобрал его для больших экранов, сохранив шарм.
+23 апреля 2006 года yoyos выложил на DeviantArt набор [Chrome Glass](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748): стеклянные указатели под ЭЛТ и первые ЖК, 32 пикселя, XP на 1280x1024. Двадцать лет спустя система растягивает те же 32 пикселя на указатель вчетверо больше, и от стекла остаётся мыло.
 
-## В чём разница
+Здесь тот же набор, перерисованный в размерах до 512 пикселей. Форма, цвет и тайминг остались авторскими: 32-пиксельные кадры внутри курсоров лежат байт в байт как в 2006-м. Изменилось всё, что выше 32 пикселей, то есть ровно то, что вы сегодня и видите.
 
-Те же два курсора так, как их показывает экран 4K: слева оригинал 2006 года, 32 px, растянутый системой. Справа ремастер, нарисованный нативно в 512.
+Проверено на Windows 11 и Debian 13 (GNOME, X11). Cape для macOS собирается и проходит проверку сборки, но на живой Mac его пока никто не ставил.
 
-![Оригинал 2006 года, растянутый до 512 px, рядом с ремастером в нативных 512 px, для курсоров Arrow и Wait](assets/comparison.png)
+## Что скачивать
 
-| | Chrome Glass (2006) | Chrome Glass Remastered |
+Все файлы лежат в [последнем релизе](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest).
+
+| Система | Файл | Как ставится |
 |---|---|---|
-| Разрешение | 32 px | **256 px** на Windows, **512 px** на Linux [^1] |
-| Края | битмап, мыло при увеличении | вектор, резкие на любом размере |
-| Анимация | 9 кадров, ~20 fps | **27 кадров, 60 fps** [^2] |
-| Курсоры | 15 слотов | **17** - добавлены Pin и Person из Windows 10/11, которых в 2006 году не существовало |
-| Платформы | Windows | Windows, Linux, macOS |
+| Windows 10/11 | `ChromeGlassRemastered-windows.zip` | правая кнопка по `Install.inf`, пункт **Установить** |
+| Linux | `.deb` или `ChromeGlassRemastered-linux.tar.gz` | пакет или распаковка в `~/.local/share/icons` |
+| macOS 15+ | `ChromeGlassRemastered.cape` | открыть в [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
 
-[^1]: У анимированных потолок ниже: 96 px на Windows, 384 px на Linux. Windows отказывается принимать анимированные кадры крупнее, а кадр анимации в 512 px весит около мегабайта.
-[^2]: На Windows и macOS - у ожидания, запуска и руки-указателя. На Linux эти три идут на ~20 fps, как в оригинале, именно поэтому они не мигают. Handwriting и NO везде сохраняют авторский тайминг.
-
-## Установка
-
-Всё лежит в [последнем релизе](../../releases/latest). Выберите свою систему:
+## Поставить
 
 <details open>
 <summary><b>🪟 &nbsp;Windows 10 / 11</b></summary>
 
-1. Скачайте и распакуйте `ChromeGlassRemastered-windows.zip`.
-2. ПКМ по `Install.inf` -> **Установить**.
-3. Параметры -> Мышь -> *Дополнительные параметры мыши* -> **Указатели** -> схема **Chrome Glass Remastered** -> Применить.
-4. **Увеличьте размер указателя.** Параметры -> Специальные возможности -> Указатель мыши. По умолчанию Windows стоит на самом мелком из 15 размеров - ровно на том, где этот набор ничем не отличается от любого другого. Всё, что крупнее, и есть то, ради чего он пересобран.
+1. Распакуйте `ChromeGlassRemastered-windows.zip`.
+2. Нажмите правой кнопкой по `Install.inf` и выберите **Установить**. В Windows 11 сначала откройте **Показать дополнительные параметры**, если пункт скрыт.
+3. Откройте **Параметры → Bluetooth и устройства → Мышь → Дополнительные параметры мыши → Указатели**, выберите **Chrome Glass Remastered** в списке *Схема* и нажмите **Применить**.
+4. Стоит сделать: **Параметры → Специальные возможности → Указатель мыши и сенсорное управление** и увеличить размер указателя. Всё, ради чего это перерисовывалось, видно выше минимального размера.
 
-**Удаление.** Пункта *Удалить* в контекстном меню нет: для `.inf` Windows регистрирует ровно один пункт, и это *Установить*. Поэтому в два шага:
-
-1. Верните на вкладке **Указатели** схему *Windows Default (системная схема)*. Именно сначала: шаг 2 удаляет файлы курсоров, и если схема осталась применённой, указатели будут ссылаться на несуществующие файлы.
-2. Выполните секцию `[DefaultUninstall]`, которая уже есть в установщике, указав полный путь к `Install.inf`:
-
-```
-rundll32.exe setupapi,InstallHinfSection DefaultUninstall 132 "C:\путь\к\Install.inf"
-```
-
-Схема удалится из реестра, а скопированные курсоры - из `%WINDIR%\Chrome Glass Remastered`. Сама папка останется пустой, удалите её вручную, если мешает.
+Как убрать: та же вкладка **Указатели**, выберите схему, нажмите **Удалить**, затем вернитесь на **Стандартная Windows**. Файлы останутся в `%WINDIR%`, пока вы их не удалите сами: см. [полное удаление](docs/DETAILS.ru.md#windows).
 
 </details>
 
 <details>
-<summary><b>🐧 &nbsp;Linux (Xcursor)</b></summary>
+<summary><b>🐧 &nbsp;Linux</b></summary>
 
-| Дистрибутив | Установка | Удаление |
-|---|---|---|
-| Debian / Ubuntu / Mint | `sudo dpkg -i chrome-glass-remastered-cursors_*_all.deb` | `sudo dpkg -r chrome-glass-remastered-cursors` |
-| Arch / Manjaro | `cd packaging && makepkg -si` | `sudo pacman -R chrome-glass-remastered-cursors` |
-| Без root | `mkdir -p ~/.icons/ && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.icons/` | `rm -rf ~/.icons/"Chrome Glass Remastered"` |
+| Дистрибутив | Установка |
+|---|---|
+| Debian / Ubuntu / Mint | `sudo apt install ./chrome-glass-remastered-cursors_*_all.deb` |
+| Arch / Manjaro | скачайте `PKGBUILD` из релиза и выполните `makepkg -si` в его каталоге |
+| Любой, без root | `mkdir -p ~/.local/share/icons && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.local/share/icons/` |
 
-`.deb` дополнительно регистрирует тему через `update-alternatives`, поэтому она может стать системной; удаление пакета откатывает это начисто. У [PKGBUILD](packaging/PKGBUILD) из релиза уже заполнена контрольная сумма.
-
-Дальше включите тему:
+Дальше выберите **Chrome Glass Remastered** в GNOME Tweaks или в **Параметры системы → Внешний вид → Курсоры** на KDE Plasma. Из терминала:
 
 ```sh
 gsettings set org.gnome.desktop.interface cursor-theme "Chrome Glass Remastered"  # GNOME
-plasma-apply-cursortheme "Chrome Glass Remastered"                                # KDE
+plasma-apply-cursortheme "Chrome Glass Remastered"                                # KDE Plasma
 ```
 
-Или выберите её в GNOME Tweaks / параметрах KDE. На голом X11/Wayland пропишите `XCURSOR_THEME="Chrome Glass Remastered"`.
-
-**Курсор не меняется?** Некоторые архиваторы при «Извлечь в папку...» создают лишнюю папку-обёртку. Проверьте, что тема лежит прямо в `~/.icons/Chrome Glass Remastered/`, а не на уровень глубже. После смены темы GNOME на X11 нужно перезапустить Shell (`killall -3 gnome-shell`), на Wayland и в KDE - перелогиниться.
-
-**Курсор мигает?** Раньше анимация шла на 60 fps и периодически не попадала в такт с 60-герцовым экраном. Теперь ожидание, запуск и рука-указатель на Linux идут на ~20 fps, как в оригинале, мигать нечему. Если мигает после обновления темы - перезапустите приложение: курсоры кэшируются при старте.
+Как убрать: `sudo apt remove chrome-glass-remastered-cursors`, `sudo pacman -R chrome-glass-remastered-cursors` или `rm -rf ~/.local/share/icons/"Chrome Glass Remastered"` для ручной установки.
 
 </details>
 
 <details>
-<summary><b>🍎 &nbsp;macOS (Mousecape)</b></summary>
+<summary><b>🍎 &nbsp;macOS 15+</b></summary>
 
-Темы курсоров на macOS ставит бесплатный [Mousecape](https://github.com/alexzielenski/Mousecape):
+1. Установите [Mousecape SwiftUI](https://github.com/sdmj76/Mousecape-swiftUI/releases) - обычную сборку, не Debug. Нужна macOS Sequoia 15 или новее, приложение universal, идёт на Intel и Apple Silicon.
+2. Скачайте `ChromeGlassRemastered.cape` из последнего релиза.
+3. Откройте cape двойным щелчком или импортируйте его в Mousecape, затем выберите и примените.
 
-1. `brew install --cask mousecape`
-2. Скачайте `ChromeGlassRemastered.cape`, откройте двойным кликом.
-3. ПКМ по cape -> **Apply**.
+Заменяются двенадцать системных курсоров: Arrow, IBeam, Move, Wait, Crosshair, Pointing Hand, Forbidden, Help и четыре направления изменения размера. Остальные остаются системными.
 
-Cape меняет двенадцать курсоров: стрелку, текст, руку-указатель, крест, перемещение, ожидание, запрет, справку и четыре стрелки resize. Остальные - системные.
-
-**Удаление:** ПКМ по cape в Mousecape -> **Restore**, затем удалите его из библиотеки.
-
-**Важно:** с каждой версией macOS Apple всё сильнее закручивает гайки на тему курсоров. Mousecape требует частично отключённого SIP и может не работать на Apple Silicon вовсе. Если `Apply` ничего не даёт - это ограничение Mousecape/macOS, не баг набора. Загляните в [issues Mousecape](https://github.com/alexzielenski/Mousecape/issues), прежде чем писать сюда.
+Вернуть системные: **File → Reset System Cursor** или <kbd>⌘</kbd>+<kbd>R</kbd>.
 
 </details>
 
-В каждом релизе есть `SHA256SUMS`, если хотите проверить скачанное до запуска установщика: `sha256sum -c SHA256SUMS`.
+## Как это выглядело и как выглядит
 
-## В движении
+Слева файл 2006 года в том виде, в каком его сегодня растягивает система. Справа те же два указателя, нарисованные в 512 пикселей. Сверху Arrow, снизу Wait.
 
-Пять курсоров анимированы. Слева направо: **AppStarting**, **Hand** (наведение на ссылку), **Handwriting**, **NO**, **Wait**.
+![Оригинальные Arrow и Wait размером 32 px, увеличенные до 512 px, рядом с ремастером в 512 px](assets/comparison.png)
 
-![Пять анимированных курсоров, проигрываются рядом](assets/animations.webp)
+## Как оно двигается
 
-## Как это устроено
+Анимированы пять указателей: **AppStarting**, **Hand** на ссылке, **Handwriting**, **NO** и **Wait**.
 
-Курсор - это три слоя: **оригинал 32 px** для подлинности, **AI-апскейл до 512 px** для цвета и переливов (посчитан один раз и лежит в репозитории - ужать чище, чем растянуть) и **векторный контур** для чётких краёв на любом масштабе. Апскейлер настроен под иллюстрации, поэтому даже бледные курсоры (Help, IBeam, Cross, стрелки resize) получают ровный цвет без шума, а отдельный проход резкости подчёркивает края.
+![Анимированные AppStarting, Hand, Handwriting, NO и Wait рядом](assets/animations.webp)
 
-Прозрачность увеличивают отдельно от цвета: растянутая прямо с 32 px, она теряет стеклянный блеск. Цвета в альфа-канале нет и портить нечего, поэтому увеличенную версию используют все курсоры, включая бледные.
+## Не работает?
 
-## Собрать самому
+- **Темы нет в списке или указатель остался прежним.** Выйдите из сеанса и войдите снова. Приложения запоминают курсор при запуске, так что перезапустите те, где он не сменился.
+- **Анимация идёт медленнее, чем на Windows.** Так и задумано: на Linux стоит авторский темп ~20 fps, потому что на 60 fps под X11 картинка мерцает.
+- **На macOS курсор сменился не везде.** Часть приложений рисует свои курсоры, и Mousecape не может их безопасно подменить.
 
-Все AI-мастера уже в репозитории, поэтому для обычной сборки не нужны ни GPU, ни torch:
+Остальные симптомы и полное удаление по платформам: **[docs/DETAILS.ru.md](docs/DETAILS.ru.md)**.
 
-```sh
-pip install -r requirements.txt
-python3 build.py
-```
+## Оригинал
 
-Скрипт пересобирает `dist/`, `packages/` и превью, а в конце сверяет результат с оригиналом и ругается, если что-то поехало. Подробности - структура репозитория, порядок сборки, пересчёт AI-апскейлов - в **[docs/BUILD.ru.md](docs/BUILD.ru.md)**.
+Chrome Glass - [работа yoyos](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). Это неофициальный ремастер, сделанный как дань уважения и сохраняющий авторство рядом с графикой. Если вы автор и хотите что-то изменить или убрать, откройте issue - это будет сделано.
 
-## Лицензия
+Лицензия MIT **не распространяется** на графику курсоров, см. [`NOTICE`](NOTICE). Код сборки и упаковки - под MIT, см. [`LICENSE`](LICENSE).
 
-Оригинальная графика: [«Chrome Glass» от yoyos, DeviantArt, 2006](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748) (см. [`NOTICE`](NOTICE)). Код - **MIT** ([`LICENSE`](LICENSE)).
+## Дальше
 
-Chrome Glass годами остаётся моим любимым набором курсоров - спасибо, yoyos.
-
-Что-то не работает? Откройте issue и укажите ОС, версию релиза и размер указателя - эти три пункта закрывают большую часть вопросов.
-
----
-
-<div align="center">
-
-*Накрыло ностальгией? Поставьте звезду - так курсоры найдут остальных, кто скучает по 2006-му.* ⭐
-
-</div>
+- **[docs/DETAILS.ru.md](docs/DETAILS.ru.md)** - что внутри каждого пакета, что умеет и чего не умеет каждая платформа, полное удаление, контрольные суммы, длинный разбор проблем.
+- **[docs/BUILD.ru.md](docs/BUILD.ru.md)** - собрать самому. Python, Pillow, NumPy, без видеокарты.
+- Что-то сломалось? [Создайте issue](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/issues) и укажите систему и окружение рабочего стола, версию релиза, размер указателя и способ установки.

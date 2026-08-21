@@ -2,144 +2,111 @@
 
 # Chrome Glass Remastered
 
-**Remember the glass cursors from 2006? They're back - and finally don't turn to mush on 4K.**
+**The 2006 Chrome Glass cursors, redrawn for today's screens.**
 
 [![Русская версия](https://img.shields.io/badge/README-на%20русском-0B67A0?style=flat-square)](README.ru.md)
-[![Release](https://img.shields.io/github/v/release/mikedigriz/chrome-glass-remastered-cursors?style=flat-square&color=1E3A8A)](../../releases/latest)
+[![Release](https://img.shields.io/github/v/release/mikedigriz/chrome-glass-remastered-cursors?style=flat-square&color=1E3A8A)](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest)
 [![License](https://img.shields.io/badge/code-MIT-green?style=flat-square)](LICENSE)
 
-[![Download the latest release](https://img.shields.io/badge/%E2%AC%87%20Download%20the%20latest%20release-1E3A8A?style=for-the-badge)](../../releases/latest)
+[![Download the latest release](https://img.shields.io/badge/%E2%AC%87%20Download%20the%20latest%20release-1E3A8A?style=for-the-badge)](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest)
 
-Windows · Linux · macOS · 17 cursors · free
+**Windows 10/11 · Linux · macOS 15+**
 
-<img src="preview.png" alt="The set as still images: Arrow, Help, IBeam, Cross, SizeAll, the four resize arrows, UpArrow, Pin, Person, NO, Wait and AppStarting">
+<img src="preview.png" alt="Chrome Glass Remastered cursor showcase: Arrow, Help, IBeam, Cross, SizeAll, resize cursors, UpArrow, Pin, Person, NO, Wait and AppStarting">
 
 </div>
 
-In 2006 a cursor set called "Chrome Glass" showed up on DeviantArt - glassy, alive, but drawn for 32 px, so on 4K it turns to mush. I rebuilt it for big screens without losing the charm.
+On 23 April 2006 yoyos posted [Chrome Glass](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748) on DeviantArt: glass pointers for CRTs and the first LCDs, 32 px, Windows XP at 1280x1024. Twenty years on, the desktop still stretches those same 32 px across a pointer four times the size, and the glass turns to mush.
 
-## The difference
+This is the same set, redrawn up to 512 px. Shape, colour and timing stay the author's: the 32 px images inside the shipped cursors are his original frames, byte for byte. What changed is everything above 32 px, which is all you actually see now.
 
-The same two cursors as a 4K screen shows them: on the left the 2006 original at 32 px, stretched by the OS. On the right the remaster, drawn natively at 512.
+Checked on Windows 11 and Debian 13 (GNOME on X11). The macOS cape is built and validated by the build, but nobody has applied it on a real Mac yet.
 
-![The 2006 original stretched to 512 px next to the remaster rendered natively at 512 px, for the Arrow and Wait cursors](assets/comparison.png)
+## What to download
 
-| | Chrome Glass (2006) | Chrome Glass Remastered |
+All files live in the [latest release](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest).
+
+| Your system | File | How it goes on |
 |---|---|---|
-| Resolution | 32 px | **256 px** on Windows, **512 px** on Linux [^1] |
-| Edges | bitmap, mush when scaled | vector, sharp at any size |
-| Animation | 9 frames, ~20 fps | **27 frames, 60 fps** [^2] |
-| Cursors | 15 slots | **17** - adds Windows 10/11's Pin and Person, which didn't exist in 2006 |
-| Platforms | Windows | Windows, Linux, macOS |
+| Windows 10/11 | `ChromeGlassRemastered-windows.zip` | right-click `Install.inf`, choose **Install** |
+| Linux | `.deb`, or `ChromeGlassRemastered-linux.tar.gz` | install the package, or unpack into `~/.local/share/icons` |
+| macOS 15+ | `ChromeGlassRemastered.cape` | open it with [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
 
-[^1]: Animated cursors cap lower: 96 px on Windows, 384 px on Linux. Windows refuses animated frames larger than that, and a 512 px animation would be ~1 MB per frame.
-[^2]: On Windows and macOS, for wait, app-starting and the link hand. Linux runs those at ~20 fps like the original, which is what stops them flickering. Handwriting and NO keep the author's own timing everywhere.
-
-## Install
-
-Everything is in the [latest release](../../releases/latest). Pick your system:
+## Get it running
 
 <details open>
 <summary><b>🪟 &nbsp;Windows 10 / 11</b></summary>
 
-1. Download and unpack `ChromeGlassRemastered-windows.zip`.
-2. Right-click `Install.inf` -> **Install**.
-3. Settings -> Mouse -> *Additional mouse settings* -> **Pointers** tab -> pick **Chrome Glass Remastered** -> Apply.
-4. **Turn the pointer size up.** Settings -> Accessibility -> Mouse pointer. Windows ships at the smallest of 15 sizes, which is the one place this set looks the same as any other. Everything above is what it was rebuilt for.
+1. Unpack `ChromeGlassRemastered-windows.zip`.
+2. Right-click `Install.inf` and choose **Install**. On Windows 11, open **Show more options** first if the command is hidden.
+3. Go to **Settings → Bluetooth & devices → Mouse → Additional mouse settings → Pointers**, pick **Chrome Glass Remastered** under *Scheme*, click **Apply**.
+4. Worth doing: **Settings → Accessibility → Mouse pointer and touch**, and drag the pointer size up. Above the minimum size is where the redrawn artwork shows.
 
-**Uninstall.** There is no *Uninstall* item in the right-click menu - Windows registers exactly one verb for `.inf`, and it is *Install*. So it takes two steps:
-
-1. Switch the **Pointers** tab back to *Windows Default (system scheme)*. Do this first: step 2 deletes the cursor files, and if the scheme is still applied you are left pointing at files that no longer exist.
-2. Run the `[DefaultUninstall]` section the installer already carries, with the full path to `Install.inf`:
-
-```
-rundll32.exe setupapi,InstallHinfSection DefaultUninstall 132 "C:\path\to\Install.inf"
-```
-
-That drops the scheme from the registry and deletes the cursors it copied into `%WINDIR%\Chrome Glass Remastered`. The folder itself is left behind empty; delete it by hand if you mind.
+To remove it: same **Pointers** tab, select the scheme, click **Delete**, then switch back to **Windows Default**. The files stay in `%WINDIR%` until you delete them - see [full removal](docs/DETAILS.md#windows).
 
 </details>
 
 <details>
-<summary><b>🐧 &nbsp;Linux (Xcursor)</b></summary>
+<summary><b>🐧 &nbsp;Linux</b></summary>
 
-| Distro | Install | Uninstall |
-|---|---|---|
-| Debian / Ubuntu / Mint | `sudo dpkg -i chrome-glass-remastered-cursors_*_all.deb` | `sudo dpkg -r chrome-glass-remastered-cursors` |
-| Arch / Manjaro | `cd packaging && makepkg -si` | `sudo pacman -R chrome-glass-remastered-cursors` |
-| No root | `mkdir -p ~/.icons/ && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.icons/` | `rm -rf ~/.icons/"Chrome Glass Remastered"` |
+| Distro | Install |
+|---|---|
+| Debian / Ubuntu / Mint | `sudo apt install ./chrome-glass-remastered-cursors_*_all.deb` |
+| Arch / Manjaro | download the release `PKGBUILD`, run `makepkg -si` in its directory |
+| Any, no root | `mkdir -p ~/.local/share/icons && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.local/share/icons/` |
 
-The `.deb` also registers the theme with `update-alternatives`, so it can become the system cursor theme; removing the package undoes that cleanly. The [PKGBUILD](packaging/PKGBUILD) attached to the release has its checksum filled in.
-
-Then switch the theme:
+Then pick **Chrome Glass Remastered** in GNOME Tweaks, or **System Settings → Appearance → Cursors** on KDE Plasma. From a terminal:
 
 ```sh
 gsettings set org.gnome.desktop.interface cursor-theme "Chrome Glass Remastered"  # GNOME
-plasma-apply-cursortheme "Chrome Glass Remastered"                                # KDE
+plasma-apply-cursortheme "Chrome Glass Remastered"                                # KDE Plasma
 ```
 
-Or pick it in GNOME Tweaks / KDE System Settings. On bare X11/Wayland set `XCURSOR_THEME="Chrome Glass Remastered"`.
-
-**Cursor not changing?** Some archive tools extract into an extra wrapper folder. Make sure the theme lands directly at `~/.icons/Chrome Glass Remastered/`, not one level deeper. After switching, GNOME on X11 needs a Shell restart (`killall -3 gnome-shell`); Wayland and KDE need a re-login.
-
-**Cursor flickering?** The old 60 fps animation drifted out of sync with a 60 Hz screen. Wait, app-starting and the link hand now run at ~20 fps on Linux, like the original, so there is nothing left to flicker. Still happens after a theme update? Restart the app - cursors get cached at startup.
+To remove it: `sudo apt remove chrome-glass-remastered-cursors`, `sudo pacman -R chrome-glass-remastered-cursors`, or `rm -rf ~/.local/share/icons/"Chrome Glass Remastered"` for the manual install.
 
 </details>
 
 <details>
-<summary><b>🍎 &nbsp;macOS (Mousecape)</b></summary>
+<summary><b>🍎 &nbsp;macOS 15+</b></summary>
 
-Cursor themes on macOS are applied by the free [Mousecape](https://github.com/alexzielenski/Mousecape):
+1. Install [Mousecape SwiftUI](https://github.com/sdmj76/Mousecape-swiftUI/releases) - the regular build, not Debug. It needs macOS Sequoia 15 or later and runs on Intel and Apple Silicon.
+2. Download `ChromeGlassRemastered.cape` from the latest release.
+3. Double-click the cape, or import it in Mousecape, then select it and apply.
 
-1. `brew install --cask mousecape`
-2. Download `ChromeGlassRemastered.cape`, double-click it.
-3. Right-click the cape -> **Apply**.
+Twelve system cursors get replaced: Arrow, IBeam, Move, Wait, Crosshair, Pointing Hand, Forbidden, Help and the four resize directions. The rest stay stock.
 
-The cape replaces twelve cursors: arrow, text, pointing hand, crosshair, move, wait, forbidden, help and the four resize arrows. Everything else stays default.
-
-**Uninstall:** right-click the cape in Mousecape -> **Restore**, then delete it from the library.
-
-**Heads up:** every macOS release locks cursor theming down further. Mousecape needs SIP partially disabled and may not work at all on Apple Silicon. If `Apply` does nothing, that's a Mousecape/macOS limitation, not a bug here. Check [Mousecape's issues](https://github.com/alexzielenski/Mousecape/issues) before filing one.
+To put the system cursors back: **File → Reset System Cursor**, or <kbd>⌘</kbd>+<kbd>R</kbd>.
 
 </details>
 
-Every release also ships `SHA256SUMS`, if you'd rather check what you downloaded before running an installer: `sha256sum -c SHA256SUMS`.
+## What it looked like, what it looks like now
 
-## See it move
+Left, the 2006 file the way your desktop enlarges it today. Right, the same two pointers drawn at 512 px. Arrow on top, Wait below.
 
-Five of the cursors are animated. Left to right: **AppStarting**, **Hand** (link hover), **Handwriting**, **NO**, **Wait**.
+![The original 32 px Arrow and Wait enlarged to 512 px beside the remaster rendered at 512 px](assets/comparison.png)
 
-![The five animated cursors playing side by side](assets/animations.webp)
+## How it moves
 
-## How it works
+Five pointers are animated: **AppStarting**, **Hand** on a link, **Handwriting**, **NO** and **Wait**.
 
-Each cursor is three layers: **the original 32 px art** for authenticity, **an AI upscale to 512 px** for color and shine (computed once, committed to the repo - shrinking down looks cleaner than stretching up), and **a vector outline** for sharp edges at any scale. The upscaler is tuned for illustration, so even the pale, near-grey cursors (Help, IBeam, Cross, the resize arrows) get even color with no noise, and a separate sharpening pass crisps up the edges.
+![AppStarting, Hand, Handwriting, NO and Wait animated side by side](assets/animations.webp)
 
-Transparency is upscaled separately from color: stretched straight from 32 px, it loses the glassy glow. There's no color in an alpha channel to get wrong, so every cursor, pale ones included, uses the upscaled version.
+## Not working?
 
-## Build it yourself
+- **The theme is missing from the list, or the old pointer is still there.** Log out and back in. Applications cache the cursor at startup, so restart the ones that still look wrong.
+- **The animations look slower than on Windows.** They are, on purpose: Linux ships the author's own ~20 fps cadence, because 60 fps flickers on X11.
+- **macOS changed the pointer only in some places.** Some applications draw their own cursors, and Mousecape cannot safely replace those.
 
-All AI masters are already in the repo, so a normal build needs no GPU and no torch:
+Everything else, plus full removal per platform: **[docs/DETAILS.md](docs/DETAILS.md)**.
 
-```sh
-pip install -r requirements.txt
-python3 build.py
-```
+## The original
 
-That rebuilds `dist/`, `packages/` and the previews, then diffs the result against the original and warns if anything drifted. Full details - repo layout, build order, recomputing the AI upscales - are in **[docs/BUILD.md](docs/BUILD.md)**.
+Chrome Glass is [yoyos' work](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork. If you are the author and want something changed or taken down, open an issue and it will be done.
 
-## License
+The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
-Original artwork: ["Chrome Glass" by yoyos, DeviantArt, 2006](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748) (see [`NOTICE`](NOTICE)). Code is **MIT** ([`LICENSE`](LICENSE)).
+## More
 
-Chrome Glass has been my favorite cursor set for years - thanks, yoyos.
-
-Something broken? Open an issue with your OS, the release version and your pointer size - those three answer most of it.
-
----
-
-<div align="center">
-
-*Feeling nostalgic? Star the repo - it helps other 2006 diehards find their way back.* ⭐
-
-</div>
+- **[docs/DETAILS.md](docs/DETAILS.md)** - what is inside each package, what each platform can and cannot do, full removal, checksums, the longer troubleshooting list.
+- **[docs/BUILD.md](docs/BUILD.md)** - build it yourself. Python, Pillow, NumPy, no GPU.
+- Something broken? [Open an issue](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/issues) with your OS and desktop, the release version, your pointer size, and how you installed it.

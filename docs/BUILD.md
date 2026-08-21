@@ -1,6 +1,6 @@
 # Building Chrome Glass Remastered
 
-[На русском](BUILD.ru.md) · [back to the README](../README.md)
+[На русском](BUILD.ru.md) · [back to the README](../README.md) · [what is in the packages](DETAILS.md)
 
 All AI masters are already committed, so a normal build needs no GPU and no torch.
 

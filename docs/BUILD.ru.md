@@ -1,6 +1,6 @@
 # Сборка Chrome Glass Remastered
 
-[In English](BUILD.md) · [назад к README](../README.ru.md)
+[In English](BUILD.md) · [назад к README](../README.ru.md) · [что внутри пакетов](DETAILS.ru.md)
 
 Все AI-мастера уже закоммичены, поэтому для обычной сборки не нужны ни GPU, ни torch.
 
