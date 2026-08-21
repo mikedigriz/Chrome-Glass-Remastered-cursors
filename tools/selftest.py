@@ -259,8 +259,9 @@ def test_fold_unmeasured():
     reading the baseline had and this run has not is still a regression. This is
     attempt 36, written down as a test."""
     rep = {"Arrow": {"scale_drift": 0.0, "density": 0.0, "tip_convergence": 0.0,
-                     "tip_convergence_orig": 0.0, "tip_contrast": 1.0,
-                     "tip_contrast_orig": 0.0, "topology": [],
+                     "tip_convergence_orig": 0.0, "tip_extreme_contrast": 1.0,
+                     "tip_extreme_contrast_orig": 0.0, "tip_profile": 1.0,
+                     "topology": [],
                      "multiscale": {"worst": {k: 0.0 for k in
                                               ("gap", "luma_step", "wander", "jag", "tip")},
                                     "resolved": [], "per_size": {}},

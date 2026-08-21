@@ -109,8 +109,9 @@ THRESHOLDS = {
     "morph_iou": 1.0,           # min IoU between morph frames, as a share of the
                                 # author's own (1.0 = must be at least as coherent)
     "morph_peak": 1.0,          # peak/mean of a morph's frame deltas, same basis
-    "tip_contrast": 1.0,        # point contrast on a background, as a share of the
-                                # author's own
+    "tip_extreme_contrast": 1.0,  # the most visible pixel at a point, as a share
+                                # of the author's own. tip_profile is reported
+                                # beside it and is not gated - see tip_profile.
     # --- geometry read at every size, on every frame (validate_multiscale) ---
     "fold_gap": 0.0,            # logical units of fold missing mid-line. Zero is
                                 # reachable and is the point: a fold either runs
@@ -1072,14 +1073,38 @@ def morph_health(name, get=frame):
 
 _BACKGROUNDS = {"white": 255.0, "grey": 128.0, "black": 0.0}
 
+_TIP_SIZE = 256       # where the points are read
+_TIP_REACH = 1.5      # logical units of the disc the extremum is taken over
+_TIP_RING = 0.25      # width of one ring of the profile
+_TIP_BAND = (0.75, 1.5)
+                      # the stretch of the approach tip_profile compares. It
+                      # starts at 0.75 because the reference is a 32px drawing
+                      # resampled up: closer in than that the author's frame
+                      # carries the resampler's ringing rather than his hand,
+                      # and a crisp vector edge cannot be judged against it. It
+                      # stops at 1.5 because past that the disc has left the
+                      # point and is reading the body, which is where an apex
+                      # that is simply too dark earns its marks.
 
-def tip_contrast(name, size=256, get=frame):
-    """Point contrast measured after compositing, not on the raw RGBA.
+
+def tip_extreme_contrast(name, size=_TIP_SIZE, get=frame):
+    """The single most visible pixel within reach of a point, composited.
 
     Straight RGBA overstates a translucent point: the pixels can be dark while
     the alpha under them is low enough that nothing of it survives on the
     actual desktop. Compositing first is the only reading that matches what is
-    seen, and the worst background is the one that counts."""
+    seen, and the worst background is the one that counts.
+
+    Named for what it is rather than for what it was once taken to mean. This
+    is an extremum over a disc of 1.5 logical units - one pixel decides it, and
+    the author's own frames put a single fully opaque pixel at each arrow's
+    apex, so on those cursors the comparison hangs on whether one pixel of the
+    2006 art was reproduced. It also cannot tell a well-drawn point from a
+    point that is merely too dark: the reading is alpha times the departure
+    from the background, so shading the apex 20 levels below the author's
+    raises it exactly as reproducing his opacity would. Kept, and kept gated,
+    because it is a floor and a floor is worth having; read tip_profile beside
+    it for the shape the extremum cannot see."""
     a = get(name, 0, size)
     al = a[..., 3] / 255.0
     lum = a[..., :3].mean(-1)
@@ -1088,7 +1113,7 @@ def tip_contrast(name, size=256, get=frame):
     out = {}
     for (px, py), _ in corners(name):
         ax, ay = px * L, py * L
-        near = np.hypot(xs - ax, ys - ay) < 1.5 * L
+        near = np.hypot(xs - ax, ys - ay) < _TIP_REACH * L
         if near.sum() < 4:
             continue
         lbl = f"{px:.1f},{py:.1f}"
@@ -1098,6 +1123,67 @@ def tip_contrast(name, size=256, get=frame):
             worst = min(worst, float(np.abs(comp[near] - bg).max() / 255.0))
         out[lbl] = worst
     return (min(out.values()) if out else 0.0), out
+
+
+def tip_rings(name, size=_TIP_SIZE, get=frame):
+    """Composited contrast ring by ring out from each traced corner.
+
+    Same reading as tip_extreme_contrast, taken over annuli instead of one
+    disc, so the approach to a point is a curve rather than a number. The max
+    within a ring, not a mean: a ring is mostly background at a sharp point and
+    averaging would score the emptiness around the drawing, not the drawing."""
+    a = get(name, 0, size)
+    al = a[..., 3] / 255.0
+    lum = a[..., :3].mean(-1)
+    L = size / 32.0
+    ys, xs = np.mgrid[0:size, 0:size]
+    lo, hi = _TIP_BAND
+    edges = np.arange(lo, hi + 1e-9, _TIP_RING)
+    out = {}
+    for (px, py), _ in corners(name):
+        r = np.hypot(xs - px * L, ys - py * L)
+        if (r < _TIP_REACH * L).sum() < 4:
+            continue
+        rings = []
+        for u in edges:
+            m = (r >= (u - _TIP_RING) * L) & (r < u * L)
+            if not m.any():
+                rings.append(0.0)
+                continue
+            worst = 1.0
+            for bg in _BACKGROUNDS.values():
+                comp = lum * al + bg * (1.0 - al)
+                worst = min(worst, float(np.abs(comp[m] - bg).max() / 255.0))
+            rings.append(worst)
+        out[f"{px:.1f},{py:.1f}"] = rings
+    return out
+
+
+def tip_profile(name, size=_TIP_SIZE):
+    """How much of the author's own approach to a point survives, ring by ring.
+
+    The share of his contrast we carry at the weakest ring of the weakest
+    corner. 1.0 means the point reads as far into its own tip as his does; 0.5
+    means half of it is gone somewhere along the last logical unit.
+
+    This is the reading tip_extreme_contrast cannot give. That one is a max
+    over the whole disc, so a body one ring too dark covers for an apex two
+    rings too pale, and one author pixel sets the bar. Here every ring is
+    compared with the ring at the same distance, so neither can pay for the
+    other. Reported, not gated: the numbers it opens with are worse than the
+    extremum's on three cursors, and which of those are defects and which are a
+    crisp remaster honestly departing from a blurred original is a decision
+    about the drawing, not about the instrument."""
+    ours, theirs = tip_rings(name, size), tip_rings(name, size, orig_frame)
+    out = {}
+    for k, o in ours.items():
+        t = theirs.get(k)
+        if not t:
+            continue
+        pairs = [(a, b) for a, b in zip(o, t) if b > 1e-6]
+        out[k] = min(a / b for a, b in pairs) if pairs else None
+    vals = [v for v in out.values() if v is not None]
+    return (min(vals) if vals else None), out
 
 
 _RIM_SIZE = 512       # where the rim is measured. The band this looks for is a
@@ -1633,8 +1719,9 @@ def _collect_one(job):
     e["density"], e["density_ladder"] = density(name, sizes)
     e["tip_convergence"], _ = tip_convergence(name)
     e["tip_convergence_orig"], _ = tip_convergence(name, get=orig_frame)
-    e["tip_contrast"], _ = tip_contrast(name)
-    e["tip_contrast_orig"], _ = tip_contrast(name, get=orig_frame)
+    e["tip_extreme_contrast"], _ = tip_extreme_contrast(name)
+    e["tip_extreme_contrast_orig"], _ = tip_extreme_contrast(name, get=orig_frame)
+    e["tip_profile"], _ = tip_profile(name)
     e["rim_layers"] = rim_layers(name)
     e["rim_layers_orig"] = rim_layers_author(name)
     e["edge_straight"] = edge_straight(name)
@@ -1766,8 +1853,14 @@ def gate(rep, base=None):
     # losing most of the headroom above the floor is the regression.
     for name, e in rep.items():
         f, prev = _flat(e), was.get(name, {})
-        for key in ("tip_contrast", "tip_sheen"):
-            got, ref = f.get(key), prev.get(key)
+        for key in ("tip_extreme_contrast", "tip_profile", "tip_sheen"):
+            got = f.get(key)
+            # baselines written before the rename hold the extremum under its
+            # old name; reading both keeps those files comparable instead of
+            # quietly dropping the ratchet on the metric it was written for
+            ref = prev.get(key)
+            if ref is None and key == "tip_extreme_contrast":
+                ref = prev.get("tip_contrast")
             if got is None or ref is None:
                 continue
             if got < ref * (1.0 - _RATCHET_SLACK):
@@ -1842,9 +1935,11 @@ def gate(rep, base=None):
         # reference as converged everywhere, which is not a standard anything
         # can be held to. Judge the points on the zoomed render instead; the
         # number is here to show movement between runs.
-        if e["tip_contrast"] < e["tip_contrast_orig"] * T["tip_contrast"]:
-            fail(name, "tip_contrast", e["tip_contrast"], "<",
-                 round(e["tip_contrast_orig"] * T["tip_contrast"], 3))
+        if (e["tip_extreme_contrast"]
+                < e["tip_extreme_contrast_orig"] * T["tip_extreme_contrast"]):
+            fail(name, "tip_extreme_contrast", e["tip_extreme_contrast"], "<",
+                 round(e["tip_extreme_contrast_orig"]
+                       * T["tip_extreme_contrast"], 3))
         it = e.get("interp")
         if it:
             if it["ghost_rgb"] > T["ghost_rgb"]:
@@ -1893,7 +1988,11 @@ def _flat(e):
         "scale_drift": e["scale_drift"],
         "density": e["density"],
         "tip_convergence": e["tip_convergence"],
-        "tip_contrast": e["tip_contrast"],
+        # .get, not [], so a report file written before the extremum was
+        # renamed still flattens - the ratchet needs those baselines readable
+        "tip_extreme_contrast": e.get("tip_extreme_contrast",
+                                      e.get("tip_contrast")),
+        "tip_profile": e.get("tip_profile"),
         # None, not zero, when no size resolved the fold. The zeros these used to
         # carry are what let an unmeasured fold read as a perfect one, in the file
         # the gate compares everything against.
@@ -1945,7 +2044,8 @@ def _known_issues(path):
 
 def show(rep, base=None):
     cols = [("drift(L)", "scale_drift", 10, ".3f"), ("dens%", "density", 7, ".2f"),
-            ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_contrast", 7, ".3f"),
+            ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_extreme_contrast", 7, ".3f"),
+            ("tipprof", "tip_profile", 8, ".2f"),
             ("gap", "fold_gap", 6, ".2f"), ("wander", "fold_wander", 7, ".2f"),
             ("jag", "fold_jag", 6, ".0f"), ("dE", "delta_e", 6, ".2f"),
             ("sheen", "tip_sheen", 7, ".2f"), ("wob", "tip_wobble", 6, ".2f"),

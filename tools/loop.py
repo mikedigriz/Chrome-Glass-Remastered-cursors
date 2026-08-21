@@ -119,7 +119,7 @@ _ARTIFACT = [
     ("fold_wander", "staircase_edge"), ("fold_jag", "staircase_edge"),
     ("inner_jitter", "fold_jitter"), ("temporal_fold", "fold_jitter"),
     ("temporal_body", "fold_jitter"),
-    ("tip_contrast", "tip_split"), ("tip_convergence", "tip_split"),
+    ("tip_extreme_contrast", "tip_split"), ("tip_convergence", "tip_split"),
     ("scale_drift", "scale_drift"), ("density", "scale_drift"),
     ("delta_e", "color_shift"),
     ("ghost_rgb", "ghost_rgb"),
@@ -284,7 +284,7 @@ def cmd_progress(args):
     # Most of these are worst-is-highest. Two are not: a point's contrast and a
     # morph's overlap are both worst at their lowest, and taking a max of them
     # would report the healthiest cursor in the set as the state of the set.
-    lower_is_worse = {"morph_iou", "tip_contrast"}
+    lower_is_worse = {"morph_iou", "tip_extreme_contrast", "tip_profile"}
     worst = {}
     for name, e in rep.items():
         for k, v in A._flat(e).items():
@@ -292,14 +292,16 @@ def cmd_progress(args):
                 continue
             worst[k] = (min(worst.get(k, 1e9), v) if k in lower_is_worse
                         else max(worst.get(k, 0.0), v))
-    cols = ["tip_contrast", "tip_convergence", "temporal_fold", "inner_jitter",
+    cols = ["tip_extreme_contrast", "tip_profile", "tip_convergence",
+            "temporal_fold", "inner_jitter",
             "fold_gap", "fold_wander", "fold_jag", "delta_e", "scale_drift"]
     if not os.path.exists(PROGRESS):
         note(PROGRESS,
              "# Progress\n\n"
              "One row per iteration. Every number is the worst over all sixteen "
              "cursors, so a row only improves when the weakest one does. "
-             "`tip_contrast` is worst at its lowest; everything else is worst "
+             "`tip_extreme_contrast` and `tip_profile` are worst at their "
+             "lowest; everything else is worst "
              "at its highest.\n\n"
              "`reg` counts values that moved away from a target since the last "
              "committed baseline: that column has to stay at zero. `debt` counts "

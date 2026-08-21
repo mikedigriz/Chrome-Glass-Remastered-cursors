@@ -10,6 +10,10 @@ loop can see them. Everything after that is written by `loop.py rollback`.
 
 Written in English to match the code these names live in.
 
+`tip_contrast` was renamed `tip_extreme_contrast` on 2026-08-21 (NEXT.md 41).
+Entries below keep the old name, which is the name the run that wrote them used;
+the formula did not change.
+
 ## Fold and the dividing line
 
 - `_flatten_rim` (PLAN.md 1) Plateau along the contour. Lifted the author's thin outline to full opacity and drew a second bright facet down the whole silhouette.
