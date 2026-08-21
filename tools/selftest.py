@@ -266,11 +266,11 @@ def test_fold_unmeasured():
                                               ("gap", "luma_step", "wander", "jag", "tip")},
                                     "resolved": [], "per_size": {}},
                      "delta_e": {"mean": 0.0, "p95": 0.0, "frame": 0}}}
-    bad, _, unmeasured = A.gate(rep)
+    bad, _, unmeasured, _ = A.gate(rep)
     check("fold unmeasured", any("fold" in u for u in unmeasured) and not bad,
           unmeasured[0] if unmeasured else "gate passed an unmeasured fold in silence")
     # ...and the same reading, once the baseline has one, is a regression.
-    bad, _, _ = A.gate(rep, {"Arrow": {"fold_gap": 0.5}})
+    bad, _, _, _ = A.gate(rep, {"Arrow": {"fold_gap": 0.5}})
     check("fold unmeasured vs baseline", any("fold_unmeasured" in b for b in bad),
           bad[0] if bad else "gate lost a fold reading without saying so")
 
@@ -450,12 +450,42 @@ def test_material_basis():
               "moved %s, expected %s" % (sorted(moved), sorted(expect)))
 
 
+def test_material_dc():
+    """The material layer carries texture, not level.
+
+    Its alpha-weighted mean over the region it is composited onto has to be
+    zero: it transfers high frequencies, and a level it did not mean to move is
+    a level nobody downstream is watching for. This is not a planted defect -
+    it is the contract itself, checked directly, because the last time it broke
+    the only symptom was Handwriting[4] shipping +2.1 L bright and delta_e
+    drifting 3.55 -> 4.68 under the gate's threshold, where nothing complained
+    (NEXT.md 47). Read before the clip: that is a separate nonlinearity, worth
+    its own measurement if it ever grows.
+
+    Not a picture check either. A layer may be wrong about where it puts its
+    contrast and still pass here; what it may not do is quietly relight the
+    frame."""
+    size = 256
+    for (name, idx), donor in sorted(H._MATERIAL_BASIS.items()):
+        detail = H._material_detail(name, idx, donor, size)
+        w = (H._mask(name, idx, size) / 255.0) * (H._up_alpha(name, idx, size) / 255.0)
+        wsum = max(w.sum(), 1e-9)
+        dc = float((detail[..., 0] * w).sum() / wsum)
+        # What the clip then adds back, reported but not asserted: it is a
+        # separate nonlinearity and it is currently small (0.02-0.36 levels).
+        # If it grows, measure the clipped mass by sign before touching it.
+        own = H._resize(H._orig(H._key(name, idx)), size)[0]
+        after = float(((np.clip(own + detail, 0, 255) - own).mean(2) * w).sum() / wsum)
+        check("material DC %s[%d]" % (name, idx), abs(dc) < 0.05,
+              "mean residual %+.4f levels, %+.4f after the clip" % (dc, after))
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
               test_rim_layers, test_edge_straight, test_mirror_asym,
-              test_straighten_runs, test_material_basis):
+              test_straighten_runs, test_material_basis, test_material_dc):
         t()
     print()
     if FAILED:

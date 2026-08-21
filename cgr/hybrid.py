@@ -1000,17 +1000,56 @@ def _material_layer(name, idx, donor, size):
     degree of freedom here, and the one variant that does move it moves it the
     wrong way - the donor's cast lands as a blue wash across the sheet, plain
     in the residual. Colour stays the author's by construction rather than by
-    luck."""
+    luck.
+
+    Level stays the author's the same way. The layer is a high-pass transfer,
+    so over the region it lands on its alpha-weighted mean has to be zero; for
+    a while it was not, and Handwriting[4] shipped +2.1 L brighter than the
+    author because of it. Two things were wrong and both are fixed below: the
+    low-pass averaged in the background outside the outline, and nothing
+    checked the residual afterwards. `tools/selftest.py` now holds the contract
+    to its face on all four frames."""
     own = _resize(_orig(_key(name, idx)), size)[0]
+    return np.clip(own + _material_detail(name, idx, donor, size), 0, 255)
+
+
+def _material_detail(name, idx, donor, size):
+    """The borrowed material on its own, before it is laid on the frame.
+
+    Split out from _material_layer so the contract above can be read directly
+    instead of reconstructed from the composite: past the clip the residual is
+    no longer recoverable by subtraction, and a test that works around that by
+    dropping the clipped pixels measures its own subset rather than the layer
+    (which is exactly what the first version of it did). tools/selftest.py
+    calls this."""
     tm = _mask(name, idx, size) / 255.0
     dm = _mask(name, donor, size) / 255.0
     _iou, qx, qy = _moment_map(tm, dm)
     warped = _sample(_master_rgb(name, donor, size), qx, qy)
-    detail = warped - _gauss(warped, _MATERIAL_SPLIT * size / V.LOGICAL)
+    # _mblur, not _gauss: outside the silhouette the master runs 80-100 levels
+    # darker, and a plain blur drags that in, so the low-pass reads too dark
+    # near the edge and the residual comes out positive there. On Handwriting[4]
+    # that alone was +3.61 levels of level masquerading as material, and the
+    # frame is all edge - its pencil is thinner than the split radius, so it has
+    # no interior for the honest part of the residual to come from (NEXT.md 47).
+    detail = warped - _mblur(warped, tm[..., None],
+                             _MATERIAL_SPLIT * size / V.LOGICAL)
     detail = detail.mean(2)[..., None]                 # material, not colour
     detail = np.where(detail < 0, detail * _MATERIAL_DARK, detail)
-    detail = detail * (_MATERIAL_GAIN * _material_keepout(name, idx, size)[..., None])
-    return np.clip(own + detail, 0, 255)
+    keep = _material_keepout(name, idx, size)
+    detail = detail * (_MATERIAL_GAIN * keep[..., None])
+    # The contract, enforced rather than hoped for: what crosses is material,
+    # so over the region it is composited onto it must carry no level of its
+    # own. Projected out after the gain and the keep-out, because the keep-out
+    # crops the residual asymmetrically - it sits on the fold, where the dark
+    # half of the detail lives - and can hand a mean back to something that had
+    # none. Scaled by `keep` rather than subtracted flat, so the band the
+    # keep-out protects stays at zero instead of receiving the correction.
+    w = tm * (_up_alpha(name, idx, size) / 255.0)
+    den = float((keep * w).sum())
+    if den > 1e-6:
+        detail = detail - (float((detail[..., 0] * w).sum()) / den) * keep[..., None]
+    return detail
 
 
 def _material_keepout(name, idx, size):
