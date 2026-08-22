@@ -302,6 +302,8 @@ def cmd_progress(args):
             "temporal_fold", "fold_jitter",
             "fold_unres", "fold_s_conv", "fold_notch", "inner_tip",
             "delta_e", "scale_drift"]
+    head = "| when | what changed | reg | debt | " + " | ".join(cols) + " |"
+    rule = "|" + "---|" * (len(cols) + 4)
     if not os.path.exists(PROGRESS):
         note(PROGRESS,
              "# Progress\n\n"
@@ -316,9 +318,12 @@ def cmd_progress(args):
              "column the work is for, and it starts at 84.\n\n"
              "Targets: drift 0.10 logical units, gap and wander 0, delta_e 5, "
              "temporal 1.0. The full list is THRESHOLDS in tools/analyze.py, "
-             "each with why it is that number.\n\n"
-             "| when | what changed | reg | debt | "
-             + " | ".join(cols) + " |\n|" + "---|" * (len(cols) + 4))
+             "each with why it is that number.\n\n" + head + "\n" + rule)
+    elif head not in open(PROGRESS, encoding="utf-8").read():
+        # The column set changed - the fold contract was replaced on 2026-08-22.
+        # A row written under the old header would line its numbers up with the
+        # wrong names and nothing would say so.
+        note(PROGRESS, "\n" + head + "\n" + rule)
     note(PROGRESS, f"| {datetime.date.today()} | {args.note} | {len(bad)} | {len(debt)} | "
                    + " | ".join(f"{worst.get(c, float('nan')):.3f}" for c in cols) + " |")
     print(f"{len(bad)} regressions, {len(debt)} debt, row appended to docs/dev/PROGRESS.md")
