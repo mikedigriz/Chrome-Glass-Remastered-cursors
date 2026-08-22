@@ -33,6 +33,7 @@ sys.path.insert(0, HERE)
 
 import analyze as A  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
+from cgr import vectorlib as V  # noqa: E402
 
 SIZE = A.JITTER_SIZE
 FAILED = []
@@ -270,9 +271,164 @@ def test_fold_unmeasured():
     check("fold unmeasured", any("fold" in u for u in unmeasured) and not bad,
           unmeasured[0] if unmeasured else "gate passed an unmeasured fold in silence")
     # ...and the same reading, once the baseline has one, is a regression.
-    bad, _, _, _ = A.gate(rep, {"Arrow": {"fold_gap": 0.5}})
+    bad, _, _, _ = A.gate(rep, {"Arrow": {"fold_cover": 0.8}})
     check("fold unmeasured vs baseline", any("fold_unmeasured" in b for b in bad),
           bad[0] if bad else "gate lost a fold reading without saying so")
+
+
+def _normal_field(name, idx, size):
+    """Signed distance from the fold chord along its normal, logical units.
+
+    The same coordinate foldfit.section samples along, built for the whole
+    canvas at once so a fold of a known shape can be painted onto the glass."""
+    (x0, y0), (x1, y1) = H._fold_chord(name, idx)
+    dx, dy = x1 - x0, y1 - y0
+    ln = math.hypot(dx, dy)
+    ux, uy = dx / ln, dy / ln
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    return ((xs + 0.5) / L - x0) * (-uy) + ((ys + 0.5) / L - y0) * ux
+
+
+def paint_fold(a, name, idx, size, width, notch=0.0):
+    """Replace the glass with a fold of known width and known notch depth.
+
+    A fitting instrument gets a calibration control, not only a damage control:
+    the question is not whether the number moves when the picture is spoiled but
+    whether it returns the width it was given. Painted in logical units, so
+    reading the same frame at two rungs also asks whether the answer is a width
+    or the pixel pitch - which is the defect this whole contract exists for."""
+    n = _normal_field(name, idx, size)
+    lum = 110.0 + 70.0 * 0.5 * (1.0 + np.tanh(n / width))
+    if notch:
+        lum = lum - notch * np.exp(-(n / 0.3) ** 2)
+    # Geometric, and reaching further in than the section does (which starts at
+    # _FOLD_INSET): an alpha test picks the opaque core only, and the strip the
+    # fit actually reads then keeps the render's own profile underneath.
+    inside = H._edge_distance_at(name, idx, size) > 0.4
+    for c in range(3):
+        a[..., c] = np.where(inside, np.clip(lum, 0, 255), a[..., c])
+    return a
+
+
+def test_fold_width():
+    """The width that comes back has to be the width that was painted, and the
+    same one at 128 as at 256."""
+    for want in (0.15, 0.60):
+        got = {}
+        for size in (128, 256):
+            restore = damaged("Arrow", 0, size,
+                              lambda a, w=want, s=size: paint_fold(a, "Arrow", 0, s, w))
+            try:
+                got[size] = A.fold_step_profile("Arrow", 0, size)
+            finally:
+                restore()
+        ok = all(0.7 <= g["s"] / want <= 1.4 and g["unres"] == 0.0
+                 for g in got.values())
+        check("fold width %.2f" % want, ok,
+              "painted %.2f, read %.2f at 128 and %.2f at 256, unresolved %.0f%%/%.0f%%"
+              % (want, got[128]["s"], got[256]["s"],
+                 100 * got[128]["unres"], 100 * got[256]["unres"]))
+
+
+def test_fold_discontinuity():
+    """A transition under one hardware pixel is the defect the old gate could
+    not name. It must come back as unresolved rather than as a small number.
+
+    Not every station: a step painted with no width at all still reaches the fit
+    through a bilinear sampler, which gives it about 0.08 logical units, and at
+    256 that is over one pixel on the stations where the phase suits it. What the
+    reading has to do is clear the threshold the gate rejects on, with room."""
+    size = 256
+    restore = damaged("Arrow", 0, size,
+                      lambda a: paint_fold(a, "Arrow", 0, size, 0.02))
+    try:
+        p = A.fold_step_profile("Arrow", 0, size)
+    finally:
+        restore()
+    want = 3.0 * A.THRESHOLDS["fold_unres"]
+    check("fold discontinuity", p["unres"] >= want and p["s"] < 0.15,
+          "s %.3f, %.0f%% of stations under one hardware pixel (gate rejects at %.0f%%)"
+          % (p["s"], 100 * p["unres"], 100 * A.THRESHOLDS["fold_unres"]))
+
+
+def test_fold_notch():
+    """Paint the same fold with and without the notch the author draws on it.
+    This is the one reading that separated the isotropic broadener from a local
+    re-step, so it has to be shown to respond to a notch and to nothing else -
+    the width is identical in both halves here."""
+    size = 256
+    out = {}
+    for tag, depth in (("clean", 0.0), ("notched", 14.0)):
+        restore = damaged("Arrow", 0, size,
+                          lambda a, d=depth: paint_fold(a, "Arrow", 0, size, 0.6, d))
+        try:
+            out[tag] = A.fold_step_profile("Arrow", 0, size)
+        finally:
+            restore()
+    check("fold notch", out["notched"]["notch"] > out["clean"]["notch"] + 5.0
+          and abs(out["notched"]["s"] - out["clean"]["s"]) < 1e-9,
+          "notch %.1f -> %.1f levels, width %.2f -> %.2f"
+          % (out["clean"]["notch"], out["notched"]["notch"],
+             out["clean"]["s"], out["notched"]["s"]))
+
+
+def test_inner_tip():
+    """Wash the strip the inner tip is drawn in into one monotone ramp.
+
+    The separator and the ridge are the two turning points the reading counts,
+    and a wash has neither. This is the defect of 2026-08-21 planted on purpose:
+    the fold's own numbers improve when it happens, so nothing in the fold
+    contract can be trusted to catch it."""
+    size = 256
+    name = "UpArrow"
+    clean = A.inner_tip_kept(name, 0, size)
+    d = H._edge_distance_at(name, 0, size)
+    strip = (d > 0.1) & (d < 1.6)
+
+    def wash(a):
+        lum = a[..., :3].mean(-1)
+        lo = float(np.median(lum[(d > 0.1) & (d < 0.3)]))
+        hi = float(np.median(lum[(d > 1.4) & (d < 1.6)]))
+        ramp = lo + (hi - lo) * np.clip((d - 0.1) / 1.5, 0, 1)
+        for c in range(3):
+            a[..., c] = np.where(strip, ramp, a[..., c])
+        return a
+
+    restore = damaged(name, 0, size, wash)
+    try:
+        hurt = A.inner_tip_kept(name, 0, size)
+    finally:
+        restore()
+    check("inner tip", hurt < clean - 0.25,
+          "%.0f%% -> %.0f%% of stations keep the separator and the ridge"
+          % (100 * clean, 100 * hurt))
+
+
+def test_fold_jitter():
+    """The same damage test_inner_jitter plants, read by the step-aware fit.
+
+    Both instruments are kept because they fail differently: the dark-line one
+    stops resolving when the render stops drawing a dark line, which reads as a
+    jitter regression on a render whose fold has not moved."""
+    name = "Hand"
+    clean = A.fold_jitter(name)
+    frames = [f.copy() for f in A.product_frames(name)]
+    band = A._fold_band(name, A.JITTER_SIZE)
+    for i, f in enumerate(frames):
+        if i % 3 == 0:
+            f[..., :3][band] = np.roll(f[..., :3], 2, axis=1)[band]
+    key = (name, A.JITTER_SIZE)
+    keep = A._product_cache[key]
+    try:
+        A._product_cache[key] = frames
+        hurt = A.fold_jitter(name)
+    finally:
+        A._product_cache[key] = keep
+    check("fold jitter", hurt["p95"] > clean["p95"] * 2.0
+          and hurt["stations"] >= A._JITTER_STATIONS,
+          f"p95 {clean['p95']:.3f} -> {hurt['p95']:.3f} logical units on "
+          f"{hurt['stations']} stations, coverage {hurt['pair_coverage']:.2f}")
 
 
 def test_rim_layers():
@@ -484,6 +640,8 @@ def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
+              test_fold_width, test_fold_discontinuity, test_fold_notch,
+              test_inner_tip, test_fold_jitter,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_material_basis, test_material_dc):
         t()

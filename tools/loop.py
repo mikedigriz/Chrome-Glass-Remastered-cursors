@@ -115,10 +115,14 @@ DECISION_TREE = {
 # on the staircase rather than on the broken fold.
 _ARTIFACT = [
     ("topology", "topology"), ("fold_unmeasured", "topology"),
-    ("fold_gap", "fold_broken"), ("fold_luma_step", "fold_broken"),
-    ("fold_wander", "staircase_edge"), ("fold_jag", "staircase_edge"),
-    ("inner_jitter", "fold_jitter"), ("temporal_fold", "fold_jitter"),
-    ("temporal_body", "fold_jitter"),
+    ("fold_cover", "fold_broken"), ("fold_step", "fold_broken"),
+    ("fold_notch", "fold_broken"),
+    ("fold_unres", "staircase_edge"), ("fold_s_thin", "staircase_edge"),
+    ("fold_s_wide", "staircase_edge"), ("fold_s_conv", "staircase_edge"),
+    ("fold_curv", "staircase_edge"),
+    ("inner_tip", "tip_split"),
+    ("fold_jitter", "fold_jitter"), ("jitter_unmeasured", "fold_jitter"),
+    ("temporal_fold", "fold_jitter"), ("temporal_body", "fold_jitter"),
     ("tip_extreme_contrast", "tip_split"), ("tip_convergence", "tip_split"),
     ("scale_drift", "scale_drift"), ("density", "scale_drift"),
     ("delta_e", "color_shift"),
@@ -284,7 +288,9 @@ def cmd_progress(args):
     # Most of these are worst-is-highest. Two are not: a point's contrast and a
     # morph's overlap are both worst at their lowest, and taking a max of them
     # would report the healthiest cursor in the set as the state of the set.
-    lower_is_worse = {"morph_iou", "tip_extreme_contrast", "tip_profile"}
+    lower_is_worse = {"morph_iou", "tip_extreme_contrast", "tip_profile",
+                      "fold_cover", "fold_s_min_ratio", "fold_step",
+                      "fold_notch", "inner_tip"}
     worst = {}
     for name, e in rep.items():
         for k, v in A._flat(e).items():
@@ -293,8 +299,9 @@ def cmd_progress(args):
             worst[k] = (min(worst.get(k, 1e9), v) if k in lower_is_worse
                         else max(worst.get(k, 0.0), v))
     cols = ["tip_extreme_contrast", "tip_profile", "tip_convergence",
-            "temporal_fold", "inner_jitter",
-            "fold_gap", "fold_wander", "fold_jag", "delta_e", "scale_drift"]
+            "temporal_fold", "fold_jitter",
+            "fold_unres", "fold_s_conv", "fold_notch", "inner_tip",
+            "delta_e", "scale_drift"]
     if not os.path.exists(PROGRESS):
         note(PROGRESS,
              "# Progress\n\n"

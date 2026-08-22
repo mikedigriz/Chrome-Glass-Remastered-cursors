@@ -35,7 +35,9 @@ from PIL import Image
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import foldfit as FF  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
 
 LADDER = [32, 48, 64, 96, 128, 256, 384, 512]
@@ -74,17 +76,37 @@ _JITTER_COVER = 0.60       # ...and the share of neighbouring frame pairs the
                            # tracker has to resolve on them. Both are about
                            # whether the instrument has enough data, never about
                            # what the number came out as
-# Image diagnostics: read off the render, no absolute target. Their zero targets
-# said the fold has to be a mathematically straight line of constant brightness
-# with an identical cross-section on every row - which is not a property of lit
-# glass, and it put thirty-five of fifty-eight debt lines on the board saying so.
-# Nothing to calibrate them against either: fold_profile returns nothing at all
-# on the author's own 32px frames, at every size, for all six wedges. So they are
-# judged against the render that was accepted by eye - the committed baseline -
-# and only a move away from it, past a slack wide enough that the eye would see
-# it first, is a regression.
-_FOLD_DIAG = ("wander", "luma_step", "jag")
-_DIAG_SLACK = 0.20
+# The dark-line tracker's readings. Diagnostic only since 2026-08-22: they are
+# measured, printed and recorded, and they decide nothing.
+#
+# What they measure is a dark line drawn on flat glass, found as the darkest
+# interior pixel of a row with a prominence around it. The author did not draw
+# one. His cross-section is a transition between two facet levels with a shallow
+# notch on it, and measured this way his own frames come back unmeasured at every
+# size on every wedge - so there was never a reference to calibrate these
+# against, and the zeros they were first given (a fold must be a straight line of
+# constant brightness with an identical cross-section on every row) are not a
+# property of lit glass. They were then judged against the committed baseline
+# instead, which pinned the render to the shape the old instrument could see.
+#
+# The step-aware readings below replace them as the acceptance test. These stay
+# because a number that suddenly starts resolving, or moves a long way, is still
+# information - see gate() and docs/dev/DEAD_ENDS.md.
+_FOLD_DIAG = ("gap", "wander", "luma_step", "jag")
+
+# --- the fold read as a step between two facets (foldfit) ---
+_STEP_SIZES = (128, 256, 512)   # rungs a cross-section exists at
+_TIP_SIZES = (256, 512)         # ...and the ones the inner tip is resolvable at.
+                                # At 128 the separator and the ridge are a pixel
+                                # apart and the render that ships scores 1..6
+                                # stations of 12 - that is the raster, not a lost
+                                # feature.
+_STEP_STATIONS_MIN = 6          # stations a summary needs before it means anything
+_STEP_JUMP = 1.0                # logical units of second difference above which
+                                # the centre has not wandered, it has jumped to
+                                # another feature. Counted and printed, not gated:
+                                # the author's own path does this on Arrow at 512
+                                # and on Arrow_Down at every size.
 _SOLID_FRAC = 0.85         # of a frame's own peak alpha: the glass proper
 _GHOST_FRAC = 0.05         # ...and below this, nothing that can be seen
 _FOLD_DEPTH = 6.0          # luma a dip must have to count as a fold and not as flat glass
@@ -118,13 +140,40 @@ THRESHOLDS = {
     "tip_extreme_contrast": 1.0,  # the most visible pixel at a point, as a share
                                 # of the author's own. tip_profile is reported
                                 # beside it and is not gated - see tip_profile.
-    # --- geometry read at every size, on every frame (validate_multiscale) ---
-    "fold_gap": 0.0,            # logical units of fold missing mid-line. Zero is
-                                # reachable and is the point: a fold either runs
-                                # the length of the crease or it is broken. This
-                                # one is structural, so it keeps an absolute
-                                # target; wander, luma_step and jag no longer do -
-                                # see _FOLD_DIAG.
+    # --- the fold, read at every size on every frame (validate_multiscale) ---
+    # Every one of these is calibrated against the author, because the author can
+    # now be read: the numbers in the comments are his own, measured 2026-08-22
+    # at 128, 256 and 512 on the ten cursors that carry a fold.
+    "fold_cover": 0.40,         # share of stations along the chord that resolve.
+                                # He reads 0.83 on the wedges and 0.50 on SizeAll,
+                                # whose chord runs out of silhouette either end.
+    "fold_unres": 0.10,         # share of stations whose transition is narrower
+                                # than one hardware pixel. His is 0.00 at every
+                                # rung; a render that follows the pixel pitch down
+                                # is drawing the fold as a discontinuity.
+    "fold_s_min": 0.50,         # transition width as a share of his own, and
+    "fold_s_max": 2.00,         # ...the other side: neither a razor nor a smear.
+    "fold_s_conv": 1.60,        # widest over narrowest across the three rungs. A
+                                # width in logical units does not change with
+                                # resolution; his worst is 1.25.
+    "fold_curv": 0.35,          # logical units the centre's path may bend,
+                                # median over stations. His is 0.075..0.175 on the
+                                # wedges; where his own path is noisier than that
+                                # the bound follows him instead - see gate().
+    "fold_step": 0.45,          # step between the two facets, as a share of his.
+                                # This is what stops a wide transition being had
+                                # by flattening both facets into each other.
+    "fold_notch": 0.40,         # notch depth on the transition, as a share of
+                                # his. He draws one 4..5 levels deep (Wait 12) and
+                                # a fold without it is smooth where his is not.
+                                # This is the reading, and the only one, that
+                                # separates the isotropic broadener of 2026-08-22
+                                # from a local re-step: the two agree on width,
+                                # amplitude, residual and inner-tip topology.
+    "fold_jitter": 0.25,        # logical units the transition centre may move
+                                # between two frames of a cycle, p95. A fifth of a
+                                # logical unit, the same figure inner_jitter
+                                # carried as 2.0 px at 256.
     # --- colour and motion ---
     "temporal": 1.0,            # frame-to-frame step over cycle amplitude, scaled so
                                 # a sinusoid sampled n times reads 1.0
@@ -797,6 +846,138 @@ def fold_profile(name, idx, size, get=frame):
     }
 
 
+def fold_step_profile(name, idx, size, get=frame):
+    """The fold as a step between two facets, summarised along the chord.
+
+    The acceptance reading since 2026-08-22. fold_profile above looks for a dark
+    line and cannot see the author's fold at all; this fits each cross-section as
+    two facets joined by a transition, which is the thing he actually drew. The
+    fitting itself is in foldfit, shared with tools/fold_tracker.py so that the
+    number a person reads at the command line and the number a commit has to pass
+    are the same number.
+
+    Every quantity here is a summary over stations, and the station set is fixed
+    (foldfit.T_LO..T_HI), so the same point on the chord is read at every size.
+
+    `curv` is the median second difference of the centre's path, not a
+    percentile: a single station where the fit lands on another feature moves a
+    p95 by four logical units, and the author's own frames do that at one rung of
+    Arrow and at every rung of Arrow_Down. Those dislocations are counted
+    separately as `jumps` and printed rather than gated."""
+    if size < _FOLD_MIN_SIZE:
+        return None
+    slots = FF.track_slots(name, idx, size, get)
+    got = [m for m in slots if m is not None]
+    if len(got) < _STEP_STATIONS_MIN:
+        return None
+    curv = [abs(slots[i - 1]["c"] - 2 * slots[i]["c"] + slots[i + 1]["c"])
+            for i in range(1, len(slots) - 1)
+            if slots[i - 1] and slots[i] and slots[i + 1]]
+    s = np.array([m["s"] for m in got])
+    return {
+        "stations": int(len(got)),
+        "cover": float(len(got)) / float(len(slots)),
+        "s": float(np.median(s)),
+        "s_p10": float(np.percentile(s, 10)),
+        "unres": float(sum(1 for m in got if not m["s_resolved"])) / len(got),
+        "curv": float(np.median(curv)) if curv else 0.0,
+        "jumps": int(sum(1 for v in curv if v > _STEP_JUMP)),
+        "step": float(np.median([abs(m["step"]) for m in got])),
+        "notch": float(np.median([m["d"] for m in got])),
+        "rms": float(np.percentile([m["rms"] for m in got], 95)),
+        "c": float(np.median([m["c"] for m in got])),
+    }
+
+
+@functools.lru_cache(maxsize=None)
+def fold_step_orig(name, idx, size):
+    """The same reading on the author's own frame - the standard the render's
+    width, step and notch are shares of. Cached because every size of every
+    frame asks for it once and it does not depend on the render."""
+    p = fold_step_profile(name, idx, size, get=orig_frame)
+    return None if p is None else tuple(sorted(p.items()))
+
+
+def _orig_step(name, idx, size):
+    t = fold_step_orig(name, idx, size)
+    return None if t is None else dict(t)
+
+
+def inner_tip_kept(name, idx, size, get=frame):
+    """Share of stations where the lit inner facet is still its own feature.
+
+    Its own acceptance class, deliberately not folded into the fold reading. The
+    two can move in opposite directions: a change that washes the inner facet
+    into the fold improves the fold's width, notch and residual at once, because
+    a flat field has nothing left to disagree with itself. That is not a
+    hypothetical - it is what happened on 2026-08-21 (DEAD_ENDS.md, "Зонный
+    temper"), and the numbers looked like a success.
+
+    Not judged against the author: his frame is 32px art with no such structure
+    in it. Judged against what this repo has already shipped and accepted by eye,
+    which is what the baseline records."""
+    r = FF.inner_tip(name, idx, size, get)
+    if not r:
+        return None
+    return float(sum(x["ok"] for x in r)) / len(r)
+
+
+_JITTER_STATIONS = 8        # stations carrying at least one frame pair
+
+
+def fold_jitter(name):
+    """How far the transition centre moves between frames, in logical units.
+
+    The step-aware replacement for inner_jitter. Same question, same rules -
+    pairs of neighbouring frames rather than rows resolved in every frame, the
+    loop's own seam included, coverage reported next to the number so a tracker
+    that found three comfortable stations cannot report a still animation - and a
+    different instrument underneath, because the old one is looking for a dark
+    line the author never drew and stops resolving the moment the render stops
+    drawing one either.
+
+    In logical units, not pixels: the stations are the same points on the chord
+    at every size, so there is nothing left that a pixel would be the unit of."""
+    frames = product_frames(name, JITTER_SIZE)
+    n = len(frames)
+    if n < 2:
+        return None
+    # Geometry from frame 0, pixels from frame i. These cursors are the ones
+    # whose silhouette is frozen, so there is one chord for the whole cycle and
+    # anything that moves is the shading - which is the question. It also has to
+    # be frame 0: the cycle that ships is interpolated to 27 frames and only 9 of
+    # them have a traced outline to ask for a chord.
+    C = np.full((n, FF.STATIONS), np.nan)
+    for i in range(n):
+        slots = FF.track_slots(name, 0, JITTER_SIZE,
+                               lambda _nm, _i, _sz, f=frames[i]: f)
+        for j, m in enumerate(slots):
+            if m is not None:
+                C[i, j] = m["c"]
+    seen = np.isfinite(C)
+    pair = seen & np.roll(seen, -1, axis=0)
+    cols = pair.any(0)
+    if not cols.any():
+        return {"stations": 0, "pair_coverage": 0.0,
+                "why": "the fit resolved no two neighbouring frames on any station"}
+    step = np.abs(np.roll(C, -1, axis=0) - C)[pair]
+    cover = float(pair[:, cols].sum()) / float(n * cols.sum())
+    out = {
+        "stations": int(cols.sum()),
+        "pair_coverage": cover,
+        "mean": float(step.mean()),
+        "p95": float(np.percentile(step, 95)),
+        "max": float(step.max()),
+    }
+    if out["stations"] < _JITTER_STATIONS:
+        out["why"] = (f"the fit resolved {out['stations']} stations, "
+                      f"fewer than the {_JITTER_STATIONS} a reading needs")
+    elif cover < _JITTER_COVER:
+        out["why"] = (f"the fit resolved {cover:.0%} of the neighbouring "
+                      f"pairs, under the {_JITTER_COVER:.0%} a reading needs")
+    return out
+
+
 def validate_multiscale(name, sizes=VALIDATE_SIZES):
     """Every geometric defect, looked for at every size, on every frame.
 
@@ -828,7 +1009,82 @@ def validate_multiscale(name, sizes=VALIDATE_SIZES):
         tip, _ = tip_convergence(name, size=s)
         worst["tip"] = max(worst["tip"], tip)
         per[str(s)] = {"tip": tip, "frames": {str(i): p for i, p in rows}}
-    return {"worst": worst, "resolved": resolved, "per_size": per}
+    return {"worst": worst, "resolved": resolved, "per_size": per,
+            "step": _step_multiscale(name, sizes)}
+
+
+def _ratio(got, ref, floor):
+    """got/ref, or None where the reference has nothing to be a share of."""
+    if ref is None or abs(ref) < floor:
+        return None
+    return abs(got) / abs(ref)
+
+
+def _step_multiscale(name, sizes):
+    """The step-aware fold reading, worst case over every size and frame.
+
+    Worst case, not an average, and against the author frame by frame: a fold
+    that reads well at 512 and is a discontinuity at 128 is a fold that is wrong
+    at 128, and the ladder is where that shows.
+
+    The inner tip is collected here too but kept in its own key. It is a separate
+    acceptance class - see inner_tip_kept - and merging it into a fold score
+    would let a candidate trade the feature for the shape, which is exactly the
+    trade that has already been made once by mistake."""
+    sizes = [s for s in sizes if s in _STEP_SIZES]
+    out = {"resolved": [], "cover": 1.0, "unres": 0.0, "curv": 0.0,
+           "curv_orig": 0.0, "jumps": 0, "rms": 0.0, "s_conv": 1.0,
+           "s_ratio_lo": None, "s_ratio_hi": None, "step": None,
+           "notch": None, "tip": None, "s_at": {}, "per_size": {}}
+    if not sizes:
+        return out
+    seen = {}
+    for size in sizes:
+        rows = {}
+        for idx in range(nframes(name)):
+            p = fold_step_profile(name, idx, size)
+            if p is None:
+                continue
+            rows[idx] = p
+            o = _orig_step(name, idx, size)
+            seen.setdefault(idx, {})[size] = p["s"]
+            out["cover"] = min(out["cover"], p["cover"])
+            out["unres"] = max(out["unres"], p["unres"])
+            out["curv"] = max(out["curv"], p["curv"])
+            out["jumps"] = max(out["jumps"], p["jumps"])
+            out["rms"] = max(out["rms"], p["rms"])
+            if o is None:
+                continue
+            out["curv_orig"] = max(out["curv_orig"], o["curv"])
+            for key, r in (("s_ratio", _ratio(p["s"], o["s"], 1e-3)),
+                           ("step", _ratio(p["step"], o["step"], 1.0)),
+                           ("notch", _ratio(p["notch"], o["notch"], 1.0))):
+                if r is None:
+                    continue
+                if key == "s_ratio":
+                    lo, hi = out["s_ratio_lo"], out["s_ratio_hi"]
+                    out["s_ratio_lo"] = r if lo is None else min(lo, r)
+                    out["s_ratio_hi"] = r if hi is None else max(hi, r)
+                else:
+                    out[key] = r if out[key] is None else min(out[key], r)
+        if rows:
+            out["resolved"].append(size)
+            out["s_at"][str(size)] = float(np.median([p["s"] for p in rows.values()]))
+            out["per_size"][str(size)] = {str(i): p for i, p in rows.items()}
+        if size in _TIP_SIZES:
+            for idx in range(nframes(name)):
+                k = inner_tip_kept(name, idx, size)
+                if k is not None:
+                    out["tip"] = k if out["tip"] is None else min(out["tip"], k)
+    # A width in logical units is the same width at every resolution. Compared
+    # within a frame, so a cursor that redraws itself is not being asked to hold
+    # one number across two different pictures.
+    for _idx, by_size in seen.items():
+        if len(by_size) > 1:
+            v = [x for x in by_size.values() if x > 0]
+            if v:
+                out["s_conv"] = max(out["s_conv"], max(v) / min(v))
+    return out
 
 
 def _fold_band(name, size):
@@ -1753,6 +2009,7 @@ def _collect_one(job):
         e["tip_sheen_orig"] = tip_sheen(name, author_frames(name))
         if name in H.INTERP:
             e["inner_jitter"] = inner_jitter(name)
+            e["fold_jitter"] = fold_jitter(name)
         else:
             e["morph"] = morph_health(name)
             e["morph_orig"] = morph_health(name, get=orig_frame)
@@ -1811,12 +2068,10 @@ def gate(rep, base=None):
     is judged as a share of his own frame. His drawing is the standard; ours
     does not get to invent one.
 
-    Image diagnostics - fold wander, luma step and jag - have no target at all
-    (see _FOLD_DIAG). They were written as zeros, which said the fold must be a
-    straight line of constant brightness with an identical cross-section on
-    every row, and that is not a property of lit glass. They are still measured,
-    still printed, and still fail on a move away from the accepted render - they
-    just no longer sit in the debt column forever for being above nothing.
+    Image diagnostics - the dark-line tracker's gap, wander, luma step and jag -
+    decide nothing (see _FOLD_DIAG). They measure a feature the author never
+    drew, and their targets were this repo's own guesses about a shape it had no
+    reference for. They are still measured, still printed and still recorded.
 
     Unmeasured is its own answer, not a pass and not a defect of the render: the
     tracker could not see this fold at all. It is returned separately so it stays
@@ -1837,7 +2092,7 @@ def gate(rep, base=None):
     bad, debt, unmeasured, attention = [], [], [], []
     was = {n: (_flat(v) if "multiscale" in v else v) for n, v in (base or {}).items()}
 
-    def fail(name, metric, got, op, want, key=None):
+    def fail(name, metric, got, op, want, key=None, fresh=False):
         line = f"{name:12s} {metric:18s} {got:8.3f} {op} {want}"
         prev = was.get(name, {}).get(key or metric)
         # A tenth of a percent of slack. The render is deterministic, so this is
@@ -1846,21 +2101,16 @@ def gate(rep, base=None):
         # that never moved fails against its own record.
         tol = abs(prev) * 1e-3 + 1e-6 if prev is not None else 0.0
         if prev is None:
-            bad.append(line)
+            # A reading the baseline never recorded cannot have regressed. Only
+            # metrics that say so (`fresh`) get this: for everything else a
+            # missing baseline entry means the file is stale or the wrong one,
+            # and treating that as a pass is how a gate stops gating.
+            (debt if fresh else bad).append(
+                line + ("   (no baseline reading yet)" if fresh else ""))
         elif (got > prev + tol) if op == ">" else (got < prev - tol):
             bad.append(f"{line}  (was {prev:.3f})")
         else:
             debt.append(line)
-
-    def drift(name, worst, prev):
-        """The diagnostic class: no target, only a distance from the baseline."""
-        for k in _FOLD_DIAG:
-            got, ref = worst[k], prev.get("fold_" + k)
-            if ref is None:
-                continue
-            if got > ref * (1.0 + _DIAG_SLACK) + 1e-6:
-                bad.append(f"{name:12s} {'fold_' + k:18s} {got:8.3f} > "
-                           f"{ref * (1.0 + _DIAG_SLACK):.3f}  (was {ref:.3f})")
 
     # Ratcheted whatever they read. Every other check here only consults the
     # baseline once a value has already missed its threshold, which leaves a
@@ -1891,24 +2141,64 @@ def gate(rep, base=None):
             fail(name, "scale_drift", e["scale_drift"], ">", T["scale_drift"])
         if e["density"] > T["density"]:
             fail(name, "density_%", e["density"], ">", T["density"], "density")
+        declares_fold = any(getattr(H.C, "CURSOR_TOPOLOGY", {})
+                            .get(name, {}).get("fold", []))
         ms = e.get("multiscale")
         if ms:
-            if ms["worst"]["gap"] > T["fold_gap"]:
-                fail(name, "fold_gap", ms["worst"]["gap"], ">", T["fold_gap"])
-            drift(name, ms["worst"], was.get(name, {}))
-            # Declared but never read is not a pass - but it is also not a defect
-            # of the render. It says the tracker could not see a fold this faint,
-            # which is a state of the instrument, so it is reported on its own.
-            # What would be a regression is losing a reading the baseline had:
-            # that is how the fold measurement sat broken for 36 attempts.
-            top = getattr(H.C, "CURSOR_TOPOLOGY", {}).get(name, {})
-            if any(top.get("fold", [])) and not ms["resolved"]:
-                if was.get(name, {}).get("fold_gap") is not None:
+            st = ms.get("step") or {}
+            if st.get("resolved"):
+                if st["cover"] < T["fold_cover"]:
+                    fail(name, "fold_cover", st["cover"], "<", T["fold_cover"],
+                         fresh=True)
+                if st["unres"] > T["fold_unres"]:
+                    fail(name, "fold_unres", st["unres"], ">", T["fold_unres"],
+                         fresh=True)
+                lo, hi = st["s_ratio_lo"], st["s_ratio_hi"]
+                if lo is not None and lo < T["fold_s_min"]:
+                    fail(name, "fold_s_thin", lo, "<", T["fold_s_min"],
+                         "fold_s_min_ratio", fresh=True)
+                if hi is not None and hi > T["fold_s_max"]:
+                    fail(name, "fold_s_wide", hi, ">", T["fold_s_max"],
+                         "fold_s_max_ratio", fresh=True)
+                if st["s_conv"] > T["fold_s_conv"]:
+                    fail(name, "fold_s_conv", st["s_conv"], ">", T["fold_s_conv"],
+                         fresh=True)
+                # Where the author's own path bends more than the flat bound, his
+                # is the standard: SizeAll's chord is short and his centre swings
+                # 1.4 logical units along it, which no render has to beat.
+                want = max(T["fold_curv"], 2.0 * st["curv_orig"])
+                if st["curv"] > want:
+                    fail(name, "fold_curv", st["curv"], ">", round(want, 3),
+                         fresh=True)
+                if st["step"] is not None and st["step"] < T["fold_step"]:
+                    fail(name, "fold_step", st["step"], "<", T["fold_step"],
+                         fresh=True)
+                if st["notch"] is not None and st["notch"] < T["fold_notch"]:
+                    fail(name, "fold_notch", st["notch"], "<", T["fold_notch"],
+                         fresh=True)
+            elif declares_fold:
+                # Declared but never read is not a pass - but it is also not a
+                # defect of the render. It says the instrument could not see this
+                # fold, so it is reported on its own. What would be a regression
+                # is losing a reading the baseline had: that is how the fold
+                # measurement sat broken for 36 attempts.
+                if was.get(name, {}).get("fold_cover") is not None:
                     bad.append(f"{name:12s} {'fold_unmeasured':18s} "
                                f"the baseline resolved this fold and this run does not")
                 else:
                     unmeasured.append(f"{name:12s} {'fold':18s} "
                                       f"declared in CURSOR_TOPOLOGY, no size resolved it")
+            # The inner tip has no target and never will: the author's frames are
+            # 32px art and carry no such structure, so the only standard is the
+            # render this repo has already accepted by eye. One station of twelve
+            # is the resolution of the reading and is allowed to move; two is a
+            # feature coming apart.
+            tip, tip_was = st.get("tip"), was.get(name, {}).get("inner_tip")
+            if tip is not None and tip_was is not None:
+                slack = 1.0 / FF.INNER_STATIONS + 1e-9
+                if tip < tip_was - slack:
+                    bad.append(f"{name:12s} {'inner_tip':18s} {tip:8.3f} < "
+                               f"{tip_was - slack:.3f}  (was {tip_was:.3f})")
         de = e.get("delta_e")
         if de and de["mean"] > T["delta_e"]:
             fail(name, f"delta_e[{de['frame']}]", de["mean"], ">", T["delta_e"], "delta_e")
@@ -1980,22 +2270,25 @@ def gate(rep, base=None):
                 want = it["cycle_motion_keys"] * T["liveliness_min"]
                 if it["cycle_motion"] < want:
                     fail(name, "sheen_damped", it["cycle_motion"], "<", round(want, 2))
-        ij = e.get("inner_jitter")
-        if ij and ij.get("why") is None:
-            if ij["p95"] > T["inner_jitter"]:
-                fail(name, "inner_jitter_p95", ij["p95"], ">", T["inner_jitter"], "inner_jitter")
-        elif name in H.INTERP and any(
-                getattr(H.C, "CURSOR_TOPOLOGY", {}).get(name, {}).get("fold", [])):
-            # Same rule as fold_unmeasured, for the same reason. AppStarting's
-            # crease is four to seven levels deep where Arrow's is eighteen to
-            # twenty-three, so few enough rows resolve that this returns nothing
-            # at all - and nothing at all must not read as a pass.
-            if was.get(name, {}).get("inner_jitter") is not None:
+        # inner_jitter is the dark-line tracker's reading and is diagnostic now,
+        # migrated with the rest of that instrument: it is built on _fold_track,
+        # so a render that stops drawing a dark line stops being measurable by it,
+        # and that showed up as a jitter regression on a candidate whose fold had
+        # not moved at all.
+        fj = e.get("fold_jitter")
+        if fj and fj.get("why") is None:
+            if fj["p95"] > T["fold_jitter"]:
+                fail(name, "fold_jitter_p95", fj["p95"], ">", T["fold_jitter"],
+                     "fold_jitter", fresh=True)
+        elif name in H.INTERP and declares_fold:
+            # Same rule as fold_unmeasured, for the same reason: nothing at all
+            # must not read as a pass.
+            if was.get(name, {}).get("fold_jitter") is not None:
                 bad.append(f"{name:12s} {'jitter_unmeasured':18s} "
                            f"the baseline measured this jitter and this run does not")
             else:
-                unmeasured.append(f"{name:12s} {'inner_jitter':18s} "
-                                  + (ij["why"] if ij else "the cursor has no chord to anchor on"))
+                unmeasured.append(f"{name:12s} {'fold_jitter':18s} "
+                                  + (fj["why"] if fj else "the cursor has no chord to anchor on"))
         mo, mo0 = e.get("morph"), e.get("morph_orig")
         if mo and mo0:
             if mo["iou_min"] < mo0["iou_min"] * T["morph_iou"]:
@@ -2013,6 +2306,9 @@ def _flat(e):
         return e                       # already flat: a committed baseline file
     it, ij, mo = e.get("interp"), e.get("inner_jitter"), e.get("morph")
     ms, ts, de = e.get("multiscale"), e.get("temporal") or {}, e.get("delta_e")
+    fj = e.get("fold_jitter")
+    st = (ms or {}).get("step") or {}
+    got = bool(st.get("resolved"))
     return {
         "scale_drift": e["scale_drift"],
         "density": e["density"],
@@ -2025,18 +2321,42 @@ def _flat(e):
         # None, not zero, when no size resolved the fold. The zeros these used to
         # carry are what let an unmeasured fold read as a perfect one, in the file
         # the gate compares everything against.
-        "fold_gap": ms["worst"]["gap"] if ms and ms["resolved"] else None,
-        "fold_wander": ms["worst"]["wander"] if ms and ms["resolved"] else None,
-        "fold_luma_step": ms["worst"]["luma_step"] if ms and ms["resolved"] else None,
-        "fold_jag": ms["worst"]["jag"] if ms and ms["resolved"] else None,
+        #
+        # `legacy_` is the dark-line tracker. It decides nothing since
+        # 2026-08-22 - it reads a defect the author does not have, and it stops
+        # reading at all once the render stops having it either - but it is
+        # recorded, because a diagnostic that changes is still information.
+        "legacy_fold_gap": ms["worst"]["gap"] if ms and ms["resolved"] else None,
+        "legacy_fold_wander": ms["worst"]["wander"] if ms and ms["resolved"] else None,
+        "legacy_fold_luma_step": ms["worst"]["luma_step"] if ms and ms["resolved"] else None,
+        "legacy_fold_jag": ms["worst"]["jag"] if ms and ms["resolved"] else None,
+        # ...and these are the acceptance readings: the fold fitted as a step
+        # between two facets, worst case over every size and frame, as a share of
+        # the author's own where he has one to be a share of.
+        "fold_cover": st["cover"] if got else None,
+        "fold_unres": st["unres"] if got else None,
+        "fold_s": (st["s_at"][str(max(st["resolved"]))] if got else None),
+        "fold_s_min_ratio": st.get("s_ratio_lo") if got else None,
+        "fold_s_max_ratio": st.get("s_ratio_hi") if got else None,
+        "fold_s_conv": st["s_conv"] if got else None,
+        "fold_curv": st["curv"] if got else None,
+        "fold_jumps": st["jumps"] if got else None,
+        "fold_step": st.get("step") if got else None,
+        "fold_notch": st.get("notch") if got else None,
+        "fold_rms": st["rms"] if got else None,
+        # Its own class, never merged into a fold score - see inner_tip_kept.
+        "inner_tip": st.get("tip"),
         "delta_e": de["mean"] if de else None,
         "ghost_rgb": it["ghost_rgb"] if it else None,
         "cadence": it["visible_peak_over_mean"] if it else None,
         # None the moment the reading is not trusted: a number kept next to its
         # own "not enough data" note is a number something will compare against
-        "inner_jitter": ij.get("p95") if ij and ij.get("why") is None else None,
-        "jitter_rows": ij.get("rows") if ij else None,
-        "jitter_coverage": ij.get("pair_coverage") if ij else None,
+        "fold_jitter": fj.get("p95") if fj and fj.get("why") is None else None,
+        "fold_jitter_stations": fj.get("stations") if fj else None,
+        "fold_jitter_coverage": fj.get("pair_coverage") if fj else None,
+        "legacy_inner_jitter": ij.get("p95") if ij and ij.get("why") is None else None,
+        "legacy_jitter_rows": ij.get("rows") if ij else None,
+        "legacy_jitter_coverage": ij.get("pair_coverage") if ij else None,
         "morph_iou": mo["iou_min"] if mo else None,
         "temporal_fold": ts.get("fold"),
         "temporal_body": ts.get("body"),
@@ -2075,11 +2395,14 @@ def show(rep, base=None):
     cols = [("drift(L)", "scale_drift", 10, ".3f"), ("dens%", "density", 7, ".2f"),
             ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_extreme_contrast", 7, ".3f"),
             ("tipprof", "tip_profile", 8, ".2f"),
-            ("gap", "fold_gap", 6, ".2f"), ("wander", "fold_wander", 7, ".2f"),
-            ("jag", "fold_jag", 6, ".0f"), ("dE", "delta_e", 6, ".2f"),
+            ("cover", "fold_cover", 6, ".2f"), ("unres", "fold_unres", 6, ".2f"),
+            ("s", "fold_s", 6, ".2f"), ("sconv", "fold_s_conv", 6, ".2f"),
+            ("curv", "fold_curv", 6, ".2f"), ("stepR", "fold_step", 6, ".2f"),
+            ("notchR", "fold_notch", 7, ".2f"), ("tip", "inner_tip", 5, ".2f"),
+            ("dE", "delta_e", 6, ".2f"),
             ("sheen", "tip_sheen", 7, ".2f"), ("wob", "tip_wobble", 6, ".2f"),
             ("ghost", "ghost_rgb", 7, ".2f"), ("cad", "cadence", 6, ".2f"),
-            ("jit95", "inner_jitter", 7, ".2f"), ("iou", "morph_iou", 6, ".3f"),
+            ("jit95", "fold_jitter", 7, ".2f"), ("iou", "morph_iou", 6, ".3f"),
             ("tsm", "temporal_fold", 6, ".2f"), ("rim", "rim_layers", 6, ".2f"),
             ("straight", "edge_straight", 9, ".3f"), ("mirr", "mirror_asym", 6, ".1f")]
     hdr = f"{'cursor':12s}" + "".join(h.rjust(w) for h, _, w, _ in cols)
