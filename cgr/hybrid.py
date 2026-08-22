@@ -3459,6 +3459,171 @@ _TEMPER_PER_CURSOR = {}
 # measuring a flat wash as an improvement. See NEXT.md item 22.
 
 
+_RESTEP_WIDTH = 0.60      # logical units of transition to install. The author's
+                          # own, measured 2026-08-21: s = 0.60 at 128, 256 and
+                          # 512 alike, where ours followed the pixel pitch down
+_RESTEP_SUPPORT = 1.25    # logical units either side of the transition this
+                          # stage may touch. Outside it the frame is unchanged,
+                          # and tools/selftest.py checks that as a contract -
+                          # the previous attempt widened the fold by low-passing
+                          # a strip and softened the whole body with it
+                          # (DEAD_ENDS.md, "Изотропный низкочастотный фильтр")
+_RESTEP_FADE = 0.35       # logical units the correction fades out over
+_RESTEP_FIT = (0.35, 1.35)  # window either side of the edge the local tangent
+                          # is fitted in. Local, not the whole facet: the facets
+                          # are sloped and Wait's is curved, and a tangent needs
+                          # neither straightened nor modelled
+_RESTEP_PROTECT = 1.50    # logical units from the outline left alone - the
+                          # inner tip's separator sits at 0.71..0.92 and its
+                          # ridge at 0.97..1.20 on every wedge
+_RESTEP_PROTECT_FADE = 0.40
+_RESTEP_STATIONS = 96
+_RESTEP_REACH = 4.0
+_RESTEP_PITCH = 0.05
+
+
+def _restep_line(x, y):
+    """Local tangent, with outliers dropped twice."""
+    keep = np.ones(len(x), bool)
+    k = a = 0.0
+    for _ in range(3):
+        if keep.sum() < 4:
+            break
+        k, a = np.polyfit(x[keep], y[keep], 1)
+        r = y - (a + k * x)
+        med = float(np.median(r[keep]))
+        mad = float(np.median(np.abs(r[keep] - med)))
+        if mad < 1e-9:
+            break
+        new = np.abs(r - med) < 3.0 * 1.4826 * mad
+        if new.sum() < 4 or (new == keep).all():
+            break
+        keep = new
+    return float(a), float(k)
+
+
+def _fold_restep(rgb, name, idx, size):
+    """Replace the fold's cross-section transition, and nothing else.
+
+    The hard edge is the AI master's: measured 2026-08-21 the master alone reads
+    a transition width of 0.02 logical units at 256 and 512 alike, which is the
+    pixel grid rather than a width. What the author draws instead, measured the
+    same day: two locally straight facets joined by a transition 0.60 units
+    wide. Fitting exactly that to his own frames leaves +-3..6 levels over, so
+    it is not an approximation of his fold - it is his fold. On ours the same
+    model leaves +-18..50, which is the discontinuity refusing to be described.
+
+    So, per station along the chord: find where the master's edge actually is,
+    take a local tangent either side of it, and rebuild the profile as those two
+    tangents joined by a transition of `_RESTEP_WIDTH`. Local tangents, not
+    facet models - Wait's left facet is curved and does not need straightening,
+    only a tangent at the transition.
+
+    Nothing else is preserved or synthesised. There is no notch term because
+    there is no notch: on the author the wide model leaves nothing to be one,
+    and the 4..5 levels the fold tracker reports as `notch` are that tracker
+    fitting two *flat* facets to sloped ones, not a drawn feature.
+
+    The correction is zero outside `_RESTEP_SUPPORT` of the transition and
+    inside `_RESTEP_PROTECT` of the outline, both by construction.
+    """
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (tx, ty), (nx_, ny_) = ch
+    L = size / V.LOGICAL
+    dx, dy = nx_ - tx, ny_ - ty
+    seg = float(np.hypot(dx, dy))
+    if seg < 1e-6:
+        return rgb
+    ux, uy = dx / seg, dy / seg
+    vx, vy = -uy, ux                        # unit normal, logical units
+
+    lum = rgb.mean(-1)
+    lum_c = np.ascontiguousarray(lum)
+    dist = _edge_distance_at(name, idx, size)
+    alpha = np.ascontiguousarray(_up_alpha(name, idx, size).astype(np.float64))
+    ns = np.arange(-_RESTEP_REACH, _RESTEP_REACH + _RESTEP_PITCH, _RESTEP_PITCH)
+    ts = np.linspace(0.0, 1.0, _RESTEP_STATIONS)
+    delta = np.zeros((len(ts), len(ns)))
+    smooth = max(3, int(round(0.15 / _RESTEP_PITCH)) | 1)
+    # Each station is fitted on its own, and a fit that jitters from station to
+    # station installs that jitter as brightness pulsing along the fold - which
+    # is exactly what `fold_luma_step` measures, and what it read as 21 levels
+    # on Arrow_Down before these five were smoothed along the chord.
+    par = np.full((len(ts), 5), np.nan)
+    runs = [None] * len(ts)
+
+    for k, t in enumerate(ts):
+        px, py = tx + dx * t, ty + dy * t
+        sx, sy = (px + ns * vx) * L - 0.5, (py + ns * vy) * L - 0.5
+        y = _sample1(lum_c, sx, sy)
+        d = _sample1(dist, sx, sy)
+        a = _sample1(alpha, sx, sy)
+        ok = (d >= _RESTEP_PROTECT) & (a >= 24.0) & np.isfinite(y)
+        if ok.sum() < 40:
+            continue
+        run = max(np.split(np.nonzero(ok)[0],
+                           np.nonzero(np.diff(np.nonzero(ok)[0]) > 1)[0] + 1),
+                  key=len)
+        if len(run) < 40:
+            continue
+        nn, yy = ns[run], y[run]
+        sm = np.convolve(np.pad(yy, smooth // 2, mode="edge"),
+                         np.ones(smooth) / smooth, "valid")
+        g = np.gradient(sm, nn)
+        room = _RESTEP_FIT[1] + 0.1
+        inner = (nn >= nn.min() + room) & (nn <= nn.max() - room)
+        if inner.sum() < 3:
+            continue
+        ce = float(nn[int(np.argmax(np.where(inner, np.abs(g), 0.0)))])
+        lo, hi = _RESTEP_FIT
+        left = (nn <= ce - lo) & (nn >= ce - hi)
+        right = (nn >= ce + lo) & (nn <= ce + hi)
+        if left.sum() < 6 or right.sum() < 6:
+            continue
+        al, kl = _restep_line(nn[left] - ce, yy[left])
+        ar, kr = _restep_line(nn[right] - ce, yy[right])
+        par[k] = (ce, al, kl, ar, kr)
+        runs[k] = (run, nn, yy)
+
+    good = np.nonzero(np.isfinite(par[:, 0]))[0]
+    if len(good) < 5:
+        return rgb
+    for c in range(par.shape[1]):
+        v = np.interp(np.arange(len(ts)), good, par[good, c])
+        med = np.array([np.median(v[max(0, i - 2):i + 3]) for i in range(len(v))])
+        pad = np.pad(med, 2, mode="edge")
+        par[:, c] = np.convolve(pad, np.ones(5) / 5.0, "valid")
+
+    for k in good:
+        run, nn, yy = runs[k]
+        ce, al, kl, ar, kr = par[k]
+        s = 0.5 * (1.0 + np.tanh((nn - ce) / _RESTEP_WIDTH))
+        want = (1.0 - s) * (al + kl * (nn - ce)) + s * (ar + kr * (nn - ce))
+        w = np.clip((_RESTEP_SUPPORT + _RESTEP_FADE - np.abs(nn - ce))
+                    / _RESTEP_FADE, 0.0, 1.0)
+        delta[k, run] = (want - yy) * w
+
+    # back onto the grid: every pixel reads the correction at its own (t, n)
+    ys, xs = np.mgrid[0:size, 0:size]
+    relx, rely = (xs + 0.5) / L - tx, (ys + 0.5) / L - ty
+    tt = (relx * ux + rely * uy) / seg
+    nnp = relx * vx + rely * vy
+    fk = np.clip(tt, 0.0, 1.0) * (len(ts) - 1)
+    fj = (nnp + _RESTEP_REACH) / _RESTEP_PITCH
+    k0 = np.clip(np.floor(fk).astype(int), 0, len(ts) - 2)
+    j0 = np.clip(np.floor(fj).astype(int), 0, len(ns) - 2)
+    a1, b1 = fk - k0, np.clip(fj - j0, 0.0, 1.0)
+    out = ((1 - a1) * (1 - b1) * delta[k0, j0] + a1 * (1 - b1) * delta[k0 + 1, j0]
+           + (1 - a1) * b1 * delta[k0, j0 + 1] + a1 * b1 * delta[k0 + 1, j0 + 1])
+    inside = ((tt >= 0.0) & (tt <= 1.0) & (np.abs(nnp) <= _RESTEP_REACH)
+              & (_mask(name, idx, size) > 0))
+    guard = np.clip((dist - _RESTEP_PROTECT) / _RESTEP_PROTECT_FADE, 0.0, 1.0)
+    out = np.where(inside, out, 0.0) * guard
+    return np.clip(rgb + out[..., None], 0, 255)
+
+
 def _temper(before, after, name, stage):
     """Blend a correction's output back toward its input by `_TEMPER_K[stage]`,
     but only for the six wedge tips the isolation above was measured against -
@@ -3923,6 +4088,8 @@ def frame_image(name, idx, size):
     rgb = _fold_transfer(rgb, name, idx, size)
     rgb = _facet_split(rgb, name, idx, size)
     rgb = _tip_level(rgb, name, idx, size)
+    if name in _WEDGE_TIPS:
+        rgb = _fold_restep(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #

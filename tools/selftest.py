@@ -46,6 +46,22 @@ def check(label, ok, detail):
         FAILED.append(label)
 
 
+def skip(label, detail):
+    print(f"  skip  {label:28s} {detail}")
+
+
+def legacy_gone(name, size):
+    """Whether the dark-line tracker can read this render at all.
+
+    It needs a dark line, and since `_fold_restep` the render does not draw one:
+    on Arrow at 256 it resolves two rows of the forty it used to. That is the
+    change being shipped, not a defect, so the three controls built on it cannot
+    run and must say so rather than pass quietly. They are kept because the
+    legacy numbers are still measured and printed - the day one of them starts
+    resolving again is information."""
+    return A.fold_profile(name, 0, size) is None
+
+
 def repoint():
     """Drop every cached render, from analyze's frames down to hybrid's own
     memoised geometry.
@@ -101,6 +117,10 @@ def test_topology():
 def test_fold_gap():
     """Paint the fold out over a stretch of rows. The line is then in two
     pieces, and the gap between them is the number that has to move."""
+    if legacy_gone("Arrow", SIZE):
+        skip("fold gap", "the dark-line tracker resolves under six rows of "
+             "this render - see legacy_gone")
+        return
     rows, ref = fold_rows("Arrow", SIZE)
     clean = A.fold_profile("Arrow", 0, SIZE)
     lo = rows[len(rows) // 3]
@@ -127,6 +147,10 @@ def test_fold_wander():
     """Push every other row of the fold sideways by a pixel: a staircase edge,
     exactly. Wander is curvature, so it sees this and a straight fold at any
     angle still reads zero."""
+    if legacy_gone("Arrow", SIZE):
+        skip("fold wander", "the dark-line tracker resolves under six rows of "
+             "this render - see legacy_gone")
+        return
     rows, _ = fold_rows("Arrow", SIZE)
     clean = A.fold_profile("Arrow", 0, SIZE)
 
@@ -160,6 +184,10 @@ def test_fold_jag():
     the fold at all. The control was green on an artefact, and it went red the
     moment _fold_track stopped following the tracker off the crease. Damage
     that destroys the track cannot test what the track measures."""
+    if legacy_gone("Arrow", SIZE):
+        skip("fold jag", "the dark-line tracker resolves under six rows of "
+             "this render - see legacy_gone")
+        return
     rows, ref = fold_rows("Arrow", SIZE)
     clean = A.fold_profile("Arrow", 0, SIZE)
     b = max(2, int(round(A._JAG_BAND * SIZE / 32.0)))
@@ -806,6 +834,54 @@ def test_canonical_phase():
           "; ".join(bad) or "all three loops agree with their own phase table")
 
 
+def test_restep_support():
+    """_fold_restep changes the fold's cross-section and nothing else.
+
+    Not a planted defect - a contract, and the one the previous attempt broke.
+    Widening the fold by low-passing a strip softened the whole body with it
+    (DEAD_ENDS.md, "Изотропный низкочастотный фильтр") and the fold numbers
+    improved while the render got worse, because nothing was measuring reach.
+    This measures reach: the correction has to be zero inside `_RESTEP_PROTECT`
+    of the outline, where the inner tip's separator and ridge live, and it has
+    to die out within `_RESTEP_SUPPORT + _RESTEP_FADE` either side of the
+    transition it is rebuilding.
+
+    Read along the chord's own normal rather than over the picture, because the
+    bound is stated in those coordinates. Half a level is the floor: below that
+    the correction is not a change anybody could see, and a bilinear splat off a
+    0.05-unit grid leaves that much dust."""
+    eps, bad = 0.5, []
+    reach = H._RESTEP_SUPPORT + H._RESTEP_FADE
+    for name, idx, size in (("Arrow", 0, 512), ("Hand", 0, 256), ("Wait", 0, 512)):
+        rgb = A.frame(name, idx, size)[..., :3]
+        out = np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1)
+        hit = out > eps
+        leak = int((hit & (H._edge_distance_at(name, idx, size)
+                           < H._RESTEP_PROTECT)).sum())
+        (tx, ty), (ex, ey) = H._fold_chord(name, idx)
+        L = size / V.LOGICAL
+        dx, dy = ex - tx, ey - ty
+        seg = float(np.hypot(dx, dy))
+        vx, vy = -dy / seg, dx / seg
+        ns = np.arange(-H._RESTEP_REACH, H._RESTEP_REACH + 0.02, 0.02)
+        wide = 0.0
+        for t in np.linspace(0.0, 1.0, H._RESTEP_STATIONS):
+            px, py = tx + dx * t, ty + dy * t
+            v = H._sample1(np.ascontiguousarray(out),
+                           (px + ns * vx) * L - 0.5, (py + ns * vy) * L - 0.5)
+            j = np.nonzero(v > eps)[0]
+            if len(j):
+                wide = max(wide, float(ns[j[-1]] - ns[j[0]]))
+        if leak or wide > 2 * reach:
+            bad.append(f"{name}@{size}: {leak} px inside the tip guard, "
+                       f"widest run {wide:.2f} of {2 * reach:.2f} allowed")
+        elif not hit.any():
+            bad.append(f"{name}@{size}: the stage did nothing at all")
+    check("restep touches only the fold", not bad, "; ".join(bad) or
+          "nothing inside the tip guard, no run over %.2f logical units"
+          % (2 * reach))
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
@@ -814,7 +890,7 @@ def main():
               test_inner_tip, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
-              test_canonical_phase,
+              test_canonical_phase, test_restep_support,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_material_basis, test_material_dc):
         t()
