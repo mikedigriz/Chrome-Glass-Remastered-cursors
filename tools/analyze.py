@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import foldfit as FF  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
+from cgr import lightanim as LA  # noqa: E402
 
 LADDER = [32, 48, 64, 96, 128, 256, 384, 512]
 LADDER_FULL = LADDER
@@ -247,11 +248,14 @@ def nframes(name):
 #   product_frames  exactly what goes into the .ani, the WebP and the .cape.
 #
 # Anything temporal - jitter, smoothness, sheen at the points, cadence, the
-# last-to-first seam - belongs on the third. The animated cursors are lit from
-# one canonical render now (hybrid.LIGHT_ANIM), so their per-phase masters are
-# an intermediate representation and nothing else: after that change every
-# temporal number in this file stayed identical to the last digit, because none
-# of them was looking at the animation.
+# last-to-first seam - belongs on the third, and so does the fold contract. The
+# animated cursors are lit from one canonical render now (hybrid.LIGHT_ANIM), so
+# their per-phase masters are an intermediate representation and nothing else:
+# after that change every temporal number in this file stayed identical to the
+# last digit, because none of them was looking at the animation.
+#
+# product_cycle below is the one way in. Three call sites used to assemble the
+# cycle for themselves and they did not all assemble the same one.
 _product_cache = {}
 
 
@@ -269,6 +273,68 @@ def author_frames(name, size=None):
     """The 2006 cycle, at the same size."""
     size = size or JITTER_SIZE
     return [orig_frame(name, i, size) for i in range(nframes(name))]
+
+
+_cycle_cache = {}
+
+
+def product_cycle(name, size=None):
+    """(frames, phases): the states the product renders, and where each sits.
+
+    One path, so the fold contract, the jitter and the inner tip cannot end up
+    reading three slightly different representations of the same product again.
+    A phase is a cycle fraction in the author's own indexing - his frame `j` of
+    `n` sits at `j / n` - and it is not `t / len(frames)`: the loop is sampled at
+    equal change of the picture, and on Wait that puts a frame three places of
+    twenty-seven away from where its index says it is.
+
+    Under LIGHT_ANIM the three interpolated cursors ship 27 frames lit from one
+    canonical render, and `frame_image(name, i, size)` for any other `i` is
+    shipped nowhere - it is an intermediate the fold metrics had been grading,
+    1.3 to 4.2 levels away from the nearest frame that does ship. Those 27 are
+    each an independent render of the light, so all 27 are read.
+
+    Everywhere else the cycle is the author's own frames or cross-fades of them.
+    A cross-fade introduces no rendered state that is not already in the two
+    frames it came from, so the states to read are the keyframes - which is also
+    what makes this reduce exactly to the old frame_image sweep when LIGHT_ANIM
+    is off (tools/selftest.py::test_product_cycle_static)."""
+    size = size or JITTER_SIZE
+    k = (name, size)
+    if k not in _cycle_cache:
+        n = nframes(name)
+        if name in H.INTERP and H.LIGHT_ANIM:
+            frames = product_frames(name, size)
+            phases = [float(p) for p in
+                      LA.paced_phases(name, size, out_n=n * H.INTERP_N)]
+        else:
+            frames = [frame(name, i, size) for i in range(n)]
+            phases = [i / float(n) for i in range(n)]
+        if len(frames) != len(phases):
+            raise AssertionError(f"{name}: {len(frames)} frames, "
+                                 f"{len(phases)} phases")
+        _cycle_cache[k] = (frames, phases)
+    return _cycle_cache[k]
+
+
+def _cycle_geom(name):
+    """Which authored frame the product's silhouette comes from, or None when
+    each frame of the cycle carries its own.
+
+    The lit cursors compose every frame over the canonical render's alpha, so
+    there is one outline for the whole loop and it is that frame's. On this set
+    the traced outline happens to be identical on all nine anyway (checked at
+    256: the edge distance field differs by 0.0 and the chord is the same
+    object), but the shipped alpha's provenance is the canonical frame and that
+    is what the fit should be told."""
+    if name in H.INTERP and H.LIGHT_ANIM:
+        return LA.canonical_index(name)
+    return None
+
+
+def _still(a):
+    """A `get` that hands back one fixed picture whatever it is asked for."""
+    return lambda _name, _idx, _size, _a=a: _a
 
 
 def _moments(al, size):
@@ -903,6 +969,60 @@ def _orig_step(name, idx, size):
     return None if t is None else dict(t)
 
 
+# The author's quantities that are continuous in phase, and may therefore be
+# asked for between the frames he drew. Coverage, resolution, station and jump
+# counts are properties of the instrument on one picture: interpolating them
+# would invent a reading nobody took.
+_PHASE_SCALARS = ("s", "step", "notch", "c")
+
+
+@functools.lru_cache(maxsize=None)
+def _author_cycle(name, size):
+    """His step reading on each of his own frames, None where one did not fit."""
+    return tuple(_orig_step(name, i, size) for i in range(nframes(name)))
+
+
+@functools.lru_cache(maxsize=None)
+def _orig_curv(name, size):
+    """Worst bend in his own centre path at this size, over his whole cycle.
+
+    Over the cycle rather than per frame, because a product frame between two of
+    his has no single frame of his to be compared with, and the question the
+    bound asks - how much does this drawing's fold wander before wandering means
+    something - is about the drawing, not about one phase of it."""
+    v = [p["curv"] for p in _author_cycle(name, size) if p is not None]
+    return max(v) if v else 0.0
+
+
+def author_at(name, size, key, phase):
+    """The author's `key` at an arbitrary phase of his cycle.
+
+    Interpolates the measured author scalar over phase; does not synthesize an
+    intermediate author frame. His nine readings are fitted with DC and four
+    harmonics - the same band limit lightanim lights the loop with, and a full
+    fit on nine samples, so at a phase he actually drew this returns the number
+    measured on that frame and nothing else.
+
+    Needed because the product does not stand on his phases. Comparing frame
+    `t` of twenty-seven against author frame `t // 3` is what let a candidate be
+    marked down for a notch the author is shallow at three frames earlier."""
+    if key not in _PHASE_SCALARS:
+        raise KeyError(f"{key} is not continuous in phase - see _PHASE_SCALARS")
+    cyc = _author_cycle(name, size)
+    n = len(cyc)
+    if not n:
+        return None
+    ph = float(phase) % 1.0
+    exact = round(ph * n)
+    if abs(ph * n - exact) < 1e-9:              # a phase he drew: no fit at all
+        p = cyc[exact % n]
+        return None if p is None else float(p[key])
+    if any(p is None for p in cyc):
+        return None
+    y = np.array([p[key] for p in cyc], dtype=np.float64)
+    return float(LA.periodic_at(y, [ph], LA.HARMONICS)[0])
+
+
 def inner_tip_kept(name, idx, size, get=frame):
     """Share of stations where the lit inner facet is still its own feature.
 
@@ -938,19 +1058,20 @@ def fold_jitter(name):
 
     In logical units, not pixels: the stations are the same points on the chord
     at every size, so there is nothing left that a pixel would be the unit of."""
-    frames = product_frames(name, JITTER_SIZE)
+    frames, _phases = product_cycle(name, JITTER_SIZE)
     n = len(frames)
     if n < 2:
         return None
-    # Geometry from frame 0, pixels from frame i. These cursors are the ones
-    # whose silhouette is frozen, so there is one chord for the whole cycle and
-    # anything that moves is the shading - which is the question. It also has to
-    # be frame 0: the cycle that ships is interpolated to 27 frames and only 9 of
-    # them have a traced outline to ask for a chord.
+    # Geometry from the canonical frame, pixels from frame i. These cursors are
+    # the ones whose silhouette is frozen, so there is one chord for the whole
+    # cycle and anything that moves is the shading - which is the question. It
+    # also has to be one fixed frame: the cycle that ships is 27 frames long and
+    # only nine of them have a traced outline to ask for a chord.
+    geom = _cycle_geom(name)
+    geom = 0 if geom is None else geom
     C = np.full((n, FF.STATIONS), np.nan)
     for i in range(n):
-        slots = FF.track_slots(name, 0, JITTER_SIZE,
-                               lambda _nm, _i, _sz, f=frames[i]: f)
+        slots = FF.track_slots(name, geom, JITTER_SIZE, _still(frames[i]))
         for j, m in enumerate(slots):
             if m is not None:
                 C[i, j] = m["c"]
@@ -1023,9 +1144,14 @@ def _ratio(got, ref, floor):
 def _step_multiscale(name, sizes):
     """The step-aware fold reading, worst case over every size and frame.
 
-    Worst case, not an average, and against the author frame by frame: a fold
-    that reads well at 512 and is a discontinuity at 128 is a fold that is wrong
-    at 128, and the ladder is where that shows.
+    Worst case, not an average, and against the author at each frame's own
+    phase: a fold that reads well at 512 and is a discontinuity at 128 is a fold
+    that is wrong at 128, and the ladder is where that shows.
+
+    The frames are the product's (product_cycle), not frame_image's. Until
+    2026-08-22 this walked the nine authored indices, which for the three lit
+    cursors is nine pictures that are shipped nowhere; the reading it took of
+    them is not a reading of the animation anybody sees.
 
     The inner tip is collected here too but kept in its own key. It is a separate
     acceptance class - see inner_tip_kept - and merging it into a fold score
@@ -1040,25 +1166,29 @@ def _step_multiscale(name, sizes):
         return out
     seen = {}
     for size in sizes:
+        frames, phases = product_cycle(name, size)
+        geom = _cycle_geom(name)
         rows = {}
-        for idx in range(nframes(name)):
-            p = fold_step_profile(name, idx, size)
+        out["curv_orig"] = max(out["curv_orig"], _orig_curv(name, size))
+        for t, f in enumerate(frames):
+            idx = t if geom is None else geom
+            p = fold_step_profile(name, idx, size, get=_still(f))
             if p is None:
                 continue
-            rows[idx] = p
-            o = _orig_step(name, idx, size)
-            seen.setdefault(idx, {})[size] = p["s"]
+            rows[t] = p
+            seen.setdefault(t, {})[size] = p["s"]
             out["cover"] = min(out["cover"], p["cover"])
             out["unres"] = max(out["unres"], p["unres"])
             out["curv"] = max(out["curv"], p["curv"])
             out["jumps"] = max(out["jumps"], p["jumps"])
             out["rms"] = max(out["rms"], p["rms"])
-            if o is None:
-                continue
-            out["curv_orig"] = max(out["curv_orig"], o["curv"])
-            for key, r in (("s_ratio", _ratio(p["s"], o["s"], 1e-3)),
-                           ("step", _ratio(p["step"], o["step"], 1.0)),
-                           ("notch", _ratio(p["notch"], o["notch"], 1.0))):
+            ph = phases[t]
+            for key, r in (("s_ratio",
+                            _ratio(p["s"], author_at(name, size, "s", ph), 1e-3)),
+                           ("step",
+                            _ratio(p["step"], author_at(name, size, "step", ph), 1.0)),
+                           ("notch",
+                            _ratio(p["notch"], author_at(name, size, "notch", ph), 1.0))):
                 if r is None:
                     continue
                 if key == "s_ratio":
@@ -1072,8 +1202,9 @@ def _step_multiscale(name, sizes):
             out["s_at"][str(size)] = float(np.median([p["s"] for p in rows.values()]))
             out["per_size"][str(size)] = {str(i): p for i, p in rows.items()}
         if size in _TIP_SIZES:
-            for idx in range(nframes(name)):
-                k = inner_tip_kept(name, idx, size)
+            for t, f in enumerate(frames):
+                idx = t if geom is None else geom
+                k = inner_tip_kept(name, idx, size, get=_still(f))
                 if k is not None:
                     out["tip"] = k if out["tip"] is None else min(out["tip"], k)
     # A width in logical units is the same width at every resolution. Compared

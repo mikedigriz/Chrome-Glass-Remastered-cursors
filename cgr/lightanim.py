@@ -310,22 +310,15 @@ def canonical_frame(name, size, idx=None):
     return np.asarray(H.frame_image(name, idx, size), dtype=np.float64)
 
 
-def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
-    """(frames, rates) for a sheen-only animation, geometry frozen.
+_phase_cache = {}
 
-    One canonical render, out_n light fields over it. The residual is carried
-    up from 32px by plain Lanczos on purpose: it is a light field, it has no
-    business holding detail one high-resolution pixel wide, and every such
-    detail is already in the master underneath it."""
-    if idx is None:
-        idx = canonical_index(name)
+
+def _setup(name, size, k, idx):
+    """Everything both the frames and their phases are built from."""
     base = canonical_frame(name, size, idx)
     lin = V.srgb_to_linear(np.clip(base[..., :3], 0, 255).astype(np.uint8))
     alpha = base[..., 3]
-    if SOURCE == "master":
-        raw = master_light(name, size)
-    else:
-        raw = residual_field(name)
+    raw = master_light(name, size) if SOURCE == "master" else residual_field(name)
     n = len(H.BY_NAME[name]["frames"])
     # Where the light is allowed to touch the colour at all. The canonical alpha
     # is the same for every frame, so this mask is too.
@@ -339,7 +332,46 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     # against one keyframe's: re-anchor so the loop is lit relative to the frame
     # it was rendered from, at that frame's own phase
     anchor = periodic_at(raw, [idx / n], k)
-    phases = _paced_phases(raw, lin, vis, seen, anchor, out_n, k)
+    return idx, base, lin, alpha, raw, n, vis, seen, anchor
+
+
+def paced_phases(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
+    """Where in the author's cycle each output frame of the loop actually sits.
+
+    A cycle fraction per frame, in the same units his own frames are indexed by:
+    his frame `j` of `n` sits at `j / n`. Not `t / out_n` - the loop is sampled
+    at equal change of the picture rather than at equal time, so a frame's index
+    is not its phase. Measured on this set the departure runs to three frames of
+    twenty-seven on Wait.
+
+    Public because the metrics need it: a reading of frame `t` of the product
+    has to be compared against the author at the phase that frame is really at,
+    and analyze cannot work that out from the frame alone. Cached, because
+    working it out costs one canonical render.
+    """
+    idx = canonical_index(name) if idx is None else idx
+    key = (name, size, out_n, k, idx)
+    if key not in _phase_cache:
+        _idx, _b, lin, _a, raw, _n, vis, seen, anchor = _setup(name, size, k, idx)
+        _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor, out_n, k)
+    return _phase_cache[key]
+
+
+def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
+    """(frames, rates) for a sheen-only animation, geometry frozen.
+
+    One canonical render, out_n light fields over it. The residual is carried
+    up from 32px by plain Lanczos on purpose: it is a light field, it has no
+    business holding detail one high-resolution pixel wide, and every such
+    detail is already in the master underneath it."""
+    idx = canonical_index(name) if idx is None else idx
+    _i, base, lin, alpha, raw, n, vis, seen, anchor = _setup(name, size, k, idx)
+    key = (name, size, out_n, k, idx)
+    if key in _phase_cache:
+        phases = _phase_cache[key]
+    else:
+        phases = _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor,
+                                                   out_n, k)
     field = periodic_at(raw, phases, k) - anchor
     frames = []
     for t in range(out_n):

@@ -33,6 +33,7 @@ sys.path.insert(0, HERE)
 
 import analyze as A  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
+from cgr import lightanim as LA  # noqa: E402
 from cgr import vectorlib as V  # noqa: E402
 
 SIZE = A.JITTER_SIZE
@@ -419,12 +420,15 @@ def test_fold_jitter():
         if i % 3 == 0:
             f[..., :3][band] = np.roll(f[..., :3], 2, axis=1)[band]
     key = (name, A.JITTER_SIZE)
-    keep = A._product_cache[key]
+    keep, keep_cycle = A._product_cache[key], A._cycle_cache.pop(key, None)
     try:
         A._product_cache[key] = frames
         hurt = A.fold_jitter(name)
     finally:
         A._product_cache[key] = keep
+        A._cycle_cache.pop(key, None)
+        if keep_cycle is not None:
+            A._cycle_cache[key] = keep_cycle
     check("fold jitter", hurt["p95"] > clean["p95"] * 2.0
           and hurt["stations"] >= A._JITTER_STATIONS,
           f"p95 {clean['p95']:.3f} -> {hurt['p95']:.3f} logical units on "
@@ -636,12 +640,181 @@ def test_material_dc():
               "mean residual %+.4f levels, %+.4f after the clip" % (dc, after))
 
 
+def test_product_cycle_pairs():
+    """A frame and its phase come out of the same call, one for one.
+
+    Cheap, and it is the invariant the whole phase-matched comparison stands on:
+    the moment `phases[t]` stops being the phase of `frames[t]` the gate is
+    marking the render against the wrong part of the author's cycle and nothing
+    else in this file would notice."""
+    bad = []
+    for name in ("Hand", "Wait", "AppStarting", "Handwriting", "Arrow"):
+        for size in (128, 256):
+            f, p = A.product_cycle(name, size)
+            n = A.nframes(name)
+            want = n * H.INTERP_N if (name in H.INTERP and H.LIGHT_ANIM) else n
+            if not (len(f) == len(p) == want):
+                bad.append(f"{name}@{size}: {len(f)} frames, {len(p)} phases, "
+                           f"want {want}")
+            if any(not 0.0 <= x < 1.0 for x in p) or list(p) != sorted(p):
+                bad.append(f"{name}@{size}: phases not increasing inside [0,1)")
+    check("product cycle pairs", not bad, "; ".join(bad) or
+          "frames and phases agree in count and order at every size")
+
+
+def test_author_at_exact():
+    """On a phase the author drew, author_at returns that frame's own reading.
+
+    The interpolation is DC and four harmonics over nine samples, which is a
+    full fit rather than a smoothing, so this has to hold to the last bit - and
+    it is what keeps every unanimated cursor's numbers exactly where they were
+    before the phase machinery existed."""
+    worst, where = 0.0, ""
+    for name in ("Hand", "Wait", "AppStarting"):
+        n = A.nframes(name)
+        for size in (128, 256):
+            for i in range(n):
+                o = A._orig_step(name, i, size)
+                if o is None:
+                    continue
+                for key in A._PHASE_SCALARS:
+                    got = A.author_at(name, size, key, i / n)
+                    d = abs(got - o[key])
+                    if d > worst:
+                        worst, where = d, f"{name}@{size} frame {i} {key}"
+    check("author_at on his own phases", worst < 1e-9,
+          f"worst departure {worst:.2e}" + (f" at {where}" if where else ""))
+
+
+def test_author_at_harmonics():
+    """And between them it is the exact trigonometric fit, not an approximation.
+
+    Fed a signal the fit can represent - DC and four harmonics over nine
+    samples, the same band limit the light itself is built with - it has to
+    reproduce it everywhere, not only on the samples. A cubic or a linear
+    interpolation through the same nine points passes the test above and fails
+    this one by whole levels."""
+    rng = np.random.default_rng(20260822)
+    n, k = 9, LA.HARMONICS
+    amp = rng.normal(size=(k, 2))
+    def truth(ph):
+        v = 3.0
+        for m in range(1, k + 1):
+            v += amp[m - 1, 0] * math.cos(2 * math.pi * m * ph)
+            v += amp[m - 1, 1] * math.sin(2 * math.pi * m * ph)
+        return v
+    y = np.array([truth(i / n) for i in range(n)])
+    ph = np.linspace(0.0, 1.0, 101)[:-1]
+    got = LA.periodic_at(y, ph, k)
+    worst = float(np.abs(got - np.array([truth(x) for x in ph])).max())
+    check("author_at reproduces a band-limited signal", worst < 1e-9,
+          f"worst departure {worst:.2e} over 100 phases")
+
+
+def test_product_cycle_static():
+    """With LIGHT_ANIM off the fold sweep is the old frame_image sweep again.
+
+    The anti-regression control for the whole change. The product's frames are
+    only a different set of pictures because the loop is lit from one render;
+    turn that off and the states that ship are the authored ones, so the new
+    path has to walk exactly them and compare each against exactly the author
+    frame it used to. Anything else means the rewrite moved a number by itself
+    rather than by looking at the product."""
+    name, sizes = "Hand", (128,)
+    was = H.LIGHT_ANIM
+    keep_cycle, keep_frame = dict(A._cycle_cache), dict(A._frame_cache)
+    try:
+        H.LIGHT_ANIM = False
+        A._cycle_cache.clear()
+        got = A._step_multiscale(name, sizes)
+        frames, phases = A.product_cycle(name, sizes[0])
+        # the sweep the file ran before product_cycle existed, written out
+        want = {"cover": 1.0, "unres": 0.0, "curv": 0.0, "rms": 0.0,
+                "lo": None, "hi": None, "step": None, "notch": None}
+        for idx in range(A.nframes(name)):
+            p = A.fold_step_profile(name, idx, sizes[0])
+            o = A._orig_step(name, idx, sizes[0])
+            if p is None:
+                continue
+            want["cover"] = min(want["cover"], p["cover"])
+            want["unres"] = max(want["unres"], p["unres"])
+            want["curv"] = max(want["curv"], p["curv"])
+            want["rms"] = max(want["rms"], p["rms"])
+            if o is None:
+                continue
+            r = A._ratio(p["s"], o["s"], 1e-3)
+            if r is not None:
+                want["lo"] = r if want["lo"] is None else min(want["lo"], r)
+                want["hi"] = r if want["hi"] is None else max(want["hi"], r)
+            for key, floor in (("step", 1.0), ("notch", 1.0)):
+                r = A._ratio(p[key], o[key], floor)
+                if r is not None:
+                    want[key] = r if want[key] is None else min(want[key], r)
+    finally:
+        H.LIGHT_ANIM = was
+        A._cycle_cache.clear()
+        A._cycle_cache.update(keep_cycle)
+        A._frame_cache.clear()
+        A._frame_cache.update(keep_frame)
+    same = (len(frames) == A.nframes(name)
+            and phases == [i / A.nframes(name) for i in range(A.nframes(name))]
+            and all(abs(got[a] - want[b]) < 1e-12 for a, b in
+                    (("cover", "cover"), ("unres", "unres"),
+                     ("curv", "curv"), ("rms", "rms")))
+            and all((got[a] is None) == (want[b] is None)
+                    and (got[a] is None or abs(got[a] - want[b]) < 1e-12)
+                    for a, b in (("s_ratio_lo", "lo"), ("s_ratio_hi", "hi"),
+                                 ("step", "step"), ("notch", "notch"))))
+    check("LIGHT_ANIM off: the old sweep", same,
+          "%d frames, s %s..%s, step %s, notch %s"
+          % (len(frames),
+             "-" if got["s_ratio_lo"] is None else "%.3f" % got["s_ratio_lo"],
+             "-" if got["s_ratio_hi"] is None else "%.3f" % got["s_ratio_hi"],
+             "-" if got["step"] is None else "%.3f" % got["step"],
+             "-" if got["notch"] is None else "%.3f" % got["notch"]))
+
+
+def test_canonical_phase():
+    """The frame the phase table puts at the canonical phase is the canonical
+    render.
+
+    A sanity check on the whole correspondence, and the only one that ties the
+    phases to pictures rather than to each other. At phase `idx / n` the light
+    residual is zero by construction, so that frame of the loop is the render it
+    was lit from - which means the frame nearest that phase must also be the
+    frame nearest that picture. If the table were shifted, or measured at a
+    different size than the frames, these two would pick different frames."""
+    bad = []
+    for name in ("Hand", "Wait", "AppStarting"):
+        size, n = 128, A.nframes(name)
+        idx = LA.canonical_index(name)
+        frames, phases = A.product_cycle(name, size)
+        want = idx / n
+        by_phase = min(range(len(phases)),
+                       key=lambda t: abs((phases[t] - want + 0.5) % 1.0 - 0.5))
+        canon = A.frame(name, idx, size)
+        # mean, not peak: the loop lands a little off the exact canonical phase
+        # (0.208 against 0.222 on Hand) and at a rim pixel a hundredth of a
+        # cycle of sheen is tens of levels. What the check is about is which
+        # frame, not how close it got.
+        d = [float(np.abs(f - canon).mean()) for f in frames]
+        by_pixel = min(range(len(frames)), key=lambda t: d[t])
+        if by_phase != by_pixel or d[by_phase] > 0.5:
+            bad.append(f"{name}: phase picks {by_phase}, pixels pick "
+                       f"{by_pixel} ({d[by_phase]:.2f} levels away)")
+    check("canonical frame sits at the canonical phase", not bad,
+          "; ".join(bad) or "all three loops agree with their own phase table")
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
               test_fold_width, test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_fold_jitter,
+              test_product_cycle_pairs, test_author_at_exact,
+              test_author_at_harmonics, test_product_cycle_static,
+              test_canonical_phase,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_material_basis, test_material_dc):
         t()

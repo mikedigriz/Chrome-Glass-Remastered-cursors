@@ -36,16 +36,28 @@
 Старые числа остались как `legacy_fold_*` и `legacy_inner_jitter`: их меряют,
 печатают и пишут в baseline, но PASS/FAIL они больше не решают.
 
-## Долг, 30 позиций
+Прибор смотрит на продукт, а не на промежуточное представление (NEXT.md 50). У
+Hand, Wait и AppStarting отгружаются 27 кадров, зажжённых с одного канонического
+рендера, а `frame_image` по девяти авторским индексам не отгружается нигде -
+именно его контракт складки и мерил до 2026-08-22. Один вход `product_cycle`
+отдаёт кадры вместе с фазами, эталон на дробной фазе - `author_at`, четыре
+гармоники по девяти авторским отсчётам.
+
+## Долг, 32 позиции
 
 | что | где |
 |---|---|
-| `fold_unres` > 0.10 | Wait 0.80, Handwriting 0.75, NO 0.70, AppStarting 0.60, Hand 0.60, Help 0.57, Arrow 0.50, Arrow_Down 0.50, UpArrow 0.35 |
-| `fold_s_thin` < 0.50 от авторской ширины | Handwriting 0.02, NO 0.02, Hand 0.03, Help 0.03, Wait 0.03, Arrow_Down 0.06, AppStarting 0.08, Arrow 0.08, UpArrow 0.43 |
-| `fold_s_conv` > 1.6 между 128 и 512 | NO 20.0, Arrow_Down 17.1, Handwriting 7.5, Wait 7.5, Hand 7.1, Help 5.5, Arrow 4.0, AppStarting 3.7, UpArrow 1.8 |
+| `fold_unres` > 0.10 | Wait 0.75, Handwriting 0.75, NO 0.70, Hand 0.65, Help 0.57, Arrow 0.50, Arrow_Down 0.50, AppStarting 0.45, UpArrow 0.35 |
+| `fold_s_thin` < 0.50 от авторской ширины | Handwriting 0.02, NO 0.02, Hand 0.03, Help 0.03, Wait 0.04, Arrow_Down 0.06, AppStarting 0.09, Arrow 0.08, UpArrow 0.43 |
+| `fold_s_conv` > 1.6 между 128 и 512 | NO 20.0, Arrow_Down 17.1, Hand 9.0, Handwriting 7.5, Help 5.5, Wait 5.5, Arrow 4.0, AppStarting 3.5, UpArrow 1.8 |
+| `fold_notch` < 0.40 от авторской зарубки | Wait 0.396, AppStarting 0.355 |
 | `fold_curv` выше авторского вдвое | Handwriting 2.00 при 0.90 |
 | `fold_step` < 0.45 от авторской ступени | NO 0.44 |
 | `delta_e` выше 5.0 | NO[7] 5.97 |
+
+Два `fold_notch` пришли 2026-08-22 со сменой прибора, рендер не менялся ни на
+бит: старый путь читал у AppStarting 0.68, а у Wait 0.50, на кадрах, которых нет
+в продукте.
 
 Первые три - одна и та же вещь, названная тремя числами: складка отрисована как
 разрыв, и её ширина следует шагу аппаратного пикселя вместо того, чтобы стоять в
