@@ -53,7 +53,7 @@ To remove it: same **Pointers** tab, select the scheme, click **Delete**, then s
 |---|---|
 | Debian / Ubuntu / Mint | `sudo apt install ./chrome-glass-remastered-cursors_*_all.deb` |
 | Arch / Manjaro | download the release `PKGBUILD`, run `makepkg -si` in its directory |
-| Any, no root | `mkdir -p ~/.local/share/icons && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.local/share/icons/` |
+| Any, no root | `mkdir -p "$HOME/.icons" && tar -xzf ChromeGlassRemastered-linux.tar.gz -C "$HOME/.icons"` |
 
 Then pick **Chrome Glass Remastered** in GNOME Tweaks, or **System Settings → Appearance → Cursors** on KDE Plasma. From a terminal:
 
@@ -62,7 +62,7 @@ gsettings set org.gnome.desktop.interface cursor-theme "Chrome Glass Remastered"
 plasma-apply-cursortheme "Chrome Glass Remastered"                                # KDE Plasma
 ```
 
-To remove it: `sudo apt remove chrome-glass-remastered-cursors`, `sudo pacman -R chrome-glass-remastered-cursors`, or `rm -rf ~/.local/share/icons/"Chrome Glass Remastered"` for the manual install.
+To remove it: `sudo apt remove chrome-glass-remastered-cursors`, `sudo pacman -R chrome-glass-remastered-cursors`, or `rm -rf ~/.icons/"Chrome Glass Remastered"` for the manual install.
 
 </details>
 
