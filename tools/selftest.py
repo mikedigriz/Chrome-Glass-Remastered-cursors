@@ -35,6 +35,7 @@ import analyze as A  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
 from cgr import lightanim as LA  # noqa: E402
 from cgr import vectorlib as V  # noqa: E402
+from cgr import product as P  # noqa: E402
 
 SIZE = A.JITTER_SIZE
 FAILED = []
@@ -1004,6 +1005,30 @@ def test_no_ring_support():
           "frames 0..6 untouched, 7..10 changed only within the sign")
 
 
+def test_product_manifest():
+    """cgr.product.manifest() against the platform counts already known and
+    documented (BUILD.md's own "17 scheme slots", XROLES' 15 keys,
+    MAC_CURSORS' 12 tuples) - not a re-derivation, a check that the reverse
+    mapping did not drop or double-count anything."""
+    m = P.manifest()
+    check("18 names total", len(m) == 18, f"got {len(m)}")
+    windows = [n for n, r in m.items() if r["windows"]]
+    linux = [n for n, r in m.items() if r["linux"]]
+    macos = [n for n, r in m.items() if r["macos"]]
+    check("17 names ship on windows", len(windows) == 17, f"got {len(windows)}")
+    check("15 names ship on linux", len(linux) == 15, f"got {len(linux)}")
+    check("12 names ship on macos", len(macos) == 12, f"got {len(macos)}")
+    check("Arrow_Down has no windows slot", m["Arrow_Down"]["windows"] is None,
+          str(m["Arrow_Down"]["windows"]))
+    check("Pin/Person are windows-only", all(
+        m[n]["linux"] is None and m[n]["macos"] is None for n in ("Pin", "Person")),
+          f"Pin={m['Pin']}, Person={m['Person']}")
+    mac_animated = [n for n, r in m.items()
+                    if r["macos"] and r["macos"]["ships_animated"]]
+    check("only Wait ships animated on macos", mac_animated == ["Wait"],
+          str(mac_animated))
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
@@ -1014,7 +1039,7 @@ def main():
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_restep_support,
               test_morph_steps_visible, test_no_ring_support,
-              test_hole_glass,
+              test_hole_glass, test_product_manifest,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_material_basis, test_material_dc):
         t()
