@@ -1925,6 +1925,179 @@ def _round_hole(alpha, name, idx, size):
     return np.where(near, alpha * keep, alpha)
 
 
+# --- NO's prohibition sign: a template, not a drawing ---
+#
+# Measured on the author's own frames 2026-08-22 (NEXT.md 52, 53). His ring is a
+# circle to 0.04 logical units rms, centred on (15.93, 16.02) to a thousandth on
+# every frame that carries one, and its stroke is one flat colour - Lab 46.8 /
+# 85.2 / 38.0, the same on the ring and on the bar across frames 7 to 10. Ours
+# is 0.15 short in radius, 18% thin in the stroke, twice as lumpy (the chord
+# error of a 24-vertex polygon on a circle of radius 8), and 8.3 units of chroma
+# too saturated.
+#
+# The two defects are not independent and this stage owns both. Fixing either
+# alone measurably makes the frame worse: the over-saturated red compensates for
+# the under-coverage, because a thin stroke lets the background dilute a colour
+# that is too strong. Coverage alone scores 7.749 against 6.413 for doing
+# nothing, colour alone 7.653, the pair 5.768. There is deliberately no
+# configuration of this renderer that has one without the other.
+_NO_RING = {"NO"}
+_RING_RGB = (217.0, 32.0, 24.0)   # the stroke's one flat colour, and flat is
+                         # the whole claim: no transverse profile, no angular
+                         # term, and one value for all four frames. His opaque
+                         # pixels drift (green 24.6, 28.9, 32.8, 33.0 as the
+                         # sign grows) and his edge pixels drift the other way
+                         # (alpha-weighted green 39.6 down to 35.5), because a
+                         # stroke two pixels wide is mostly edge. Following
+                         # either estimator per frame costs more than it wins:
+                         # the opaque one takes frame 7's edge from 4.299 to
+                         # 7.116 of delta_e to save 0.478 on thirty pixels
+_RING_RMS = 0.10         # circularity his own art has to reach to be redrawn.
+                         # His frames 7..10 read 0.035..0.047 and frame 6, whose
+                         # ring is four opaque pixels wide, reads 0.256 - there
+                         # is no template there to recover, only a fit to noise
+_RING_MARGIN = 0.60      # logical units either side of the band this stage owns
+_RING_FADE = 0.30        # ...and how far its authority fades out beyond that
+_RING_GREY = 80.0        # channel spread under which one of his pixels is the
+                         # pointer and not the sign. The pointer crosses the
+                         # ring, so it cannot be cut out by angle - that was
+                         # tried in the analysis and let the arrow through at
+                         # the sector's edge, 36 units of error on one pixel
+
+
+def _ring_level(a, cx, cy, ang, level, lo, hi, step=0.01):
+    """Outermost radius on this ray where the author's alpha falls through
+    `level`, in logical units."""
+    r = np.arange(lo, hi, step)
+    n = a.shape[0]
+    v = _sample1(a, (cx + r * np.cos(ang)) * n / V.LOGICAL - 0.5,
+                 (cy + r * np.sin(ang)) * n / V.LOGICAL - 0.5)
+    up = np.nonzero(v >= level)[0]
+    if not len(up) or up[-1] + 1 >= len(r):
+        return np.nan
+    i = up[-1]
+    return float(r[i] + step * (v[i] - level) / max(1e-9, v[i] - v[i + 1]))
+
+
+def _ring_kasa(x, y):
+    m = np.c_[2 * x, 2 * y, np.ones(len(x))]
+    cx, cy, c = np.linalg.lstsq(m, x * x + y * y, rcond=None)[0]
+    return float(cx), float(cy), float(np.sqrt(c + cx * cx + cy * cy))
+
+
+@functools.lru_cache(maxsize=None)
+def _ring_fit(name, idx):
+    """(cx, cy, R, r) of the prohibition ring, or None if this frame has none.
+
+    Read off the author's 32px alpha, once, the same way tools/fold_tracker
+    reads a fold: the half-maximum crossing along a ray is a subpixel edge, and
+    360 of them fit a circle to a hundredth of a logical unit even on art this
+    small. Rejection is on the residual after a fit rather than on the raw
+    radius - the pointer covers forty degrees at twice the ring's radius, and a
+    spread test around the median leaves most of it in."""
+    if name not in _NO_RING:
+        return None
+    a = np.asarray(original(name, idx), dtype=np.float64)[..., 3]
+    if a.max() < 1.0:
+        return None
+    lev = 0.5 * float(a.max())
+    ys, xs = np.nonzero(a > 0.8 * a.max())
+    cx, cy = float(xs.mean()) + 0.5, float(ys.mean()) + 0.5
+    ang = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
+    keep = rs = None
+    for _ in range(12):
+        rs = np.array([_ring_level(a, cx, cy, t, lev, 2.0, 15.0) for t in ang])
+        keep = np.isfinite(rs)
+        if keep.sum() < 40:
+            return None
+        for _ in range(8):
+            nx, ny, R = _ring_kasa(cx + rs[keep] * np.cos(ang[keep]),
+                                   cy + rs[keep] * np.sin(ang[keep]))
+            e = np.hypot(cx + rs * np.cos(ang) - nx,
+                         cy + rs * np.sin(ang) - ny) - R
+            med = np.median(e[keep])
+            mad = np.median(np.abs(e[keep] - med)) + 1e-9
+            new = np.isfinite(rs) & (np.abs(e - med) < 2.5 * 1.4826 * mad)
+            if new.sum() < 20 or (new == keep).all():
+                break
+            keep = new
+        cx, cy = nx, ny
+    e = np.hypot(cx + rs[keep] * np.cos(ang[keep]) - cx,
+                 cy + rs[keep] * np.sin(ang[keep]) - cy) - R
+    if float(e.std()) > _RING_RMS:
+        return None
+    # inward from the outer edge to where his material stops: the stroke's width
+    inner = []
+    for t, ro in zip(ang[keep], rs[keep]):
+        q = np.arange(0.2, ro, 0.01)
+        v = _sample1(a, (cx + q * np.cos(t)) * a.shape[0] / V.LOGICAL - 0.5,
+                     (cy + q * np.sin(t)) * a.shape[0] / V.LOGICAL - 0.5)
+        below = np.nonzero(v < lev)[0]
+        if len(below) and below[-1] + 1 < len(q):
+            j = below[-1]
+            inner.append(q[j] + 0.01 * (lev - v[j]) / max(1e-9, v[j + 1] - v[j]))
+    if len(inner) < 20:
+        return None
+    return (cx, cy, R, float(np.median(inner)))
+
+
+@functools.lru_cache(maxsize=None)
+def _ring_pointer(name, idx, size):
+    """His own pixels that belong to the pointer rather than to the sign.
+
+    By colourfulness, because the pointer is grey glass and the sign is one red,
+    and because the pointer crosses the ring where no angle can separate them.
+    Channel spread rather than Lab chroma: on his art the two agree - every
+    pixel under 30 of chroma is under 80 of spread and every pixel over it is
+    over 86 - and this does not drag a colour space into the renderer for one
+    threshold."""
+    o = np.asarray(original(name, idx), dtype=np.float64)
+    rgb, a = _resize(o, size) if size != o.shape[0] else (o[..., :3], o[..., 3])
+    grey = (a > 40) & (rgb.max(-1) - rgb.min(-1) < _RING_GREY)
+    return _smooth1(grey.astype(np.float64), _RING_FADE, size)
+
+
+def _no_ring(rgb, alpha, name, idx, size):
+    """Redraw NO's prohibition sign as the template the author used.
+
+    Coverage of a true annulus, and the stroke's own flat colour, written
+    together: see the note above _NO_RING for why they cannot be separated.
+
+    What this stage does not own: the pointer (protected by chroma off his own
+    art), the bar's geometry (its angle reads 42.75 against his 45.00 and is a
+    separate step), and every pixel further than `_RING_MARGIN + _RING_FADE`
+    from the ring's band, which comes through bit for bit."""
+    fit = _ring_fit(name, idx)
+    if fit is None:
+        return rgb, alpha
+    cx, cy, R, r = fit
+    mid, half = 0.5 * (R + r), 0.5 * (R - r)
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    d = np.hypot((xs + 0.5) / L - cx, (ys + 0.5) / L - cy)
+    # coverage of the annulus, one device pixel of edge
+    w = V.LOGICAL / size
+    cov = np.clip(0.5 - np.maximum(d - R, r - d) / w, 0.0, 1.0)
+    band = np.abs(d - mid) - half
+    auth = np.clip((_RING_MARGIN + _RING_FADE - band) / _RING_FADE, 0.0, 1.0)
+    keep = 1.0 - _ring_pointer(name, idx, size)
+    auth = auth * keep
+    # Outside the mid-line the annulus is the whole answer and replacing trims
+    # our own lumps - the 24-vertex polygon bulges 0.21 past the circle at 45
+    # degrees. Inside it the bar crosses, and the bar is not this stage's: where
+    # our render already carries more material than a plain annulus, that is the
+    # crossing and it stays. Without this the two junctions lose 150 levels of
+    # coverage each, which is the whole of what is left of the alpha error.
+    want = 255.0 * cov
+    want = np.where(d < mid, np.maximum(want, alpha), want)
+    alpha = auth * want + (1.0 - auth) * alpha
+    # the colour is the whole sign's, bar included: it is the same red on his
+    # art (Lab 46.5..47.4 / 83.6..86.9 / 37.4..38.6 measured on the bar alone),
+    # and recolouring only the ring would put a seam where the two cross
+    paint = (np.clip((R + _RING_MARGIN - d) / _RING_FADE, 0.0, 1.0) * keep)[..., None]
+    return paint * np.array(_RING_RGB) + (1.0 - paint) * rgb, alpha
+
+
 _DEBURR_LOGICAL = 0.14   # widest feature a burr may be, in logical units
 
 
@@ -4137,6 +4310,9 @@ def frame_image(name, idx, size):
     if orig_sat >= 0.035:
         lift = _SAT_LIFT.get(name, _SAT_LIFT_DEFAULT)
         rgb = _temper(rgb, _sat_match(rgb, alpha, orig_sat * lift), name, "sat")
+    # after the saturation anchor on purpose: the sign's colour is measured off
+    # the author, not derived from ours, and _sat_match would rescale it
+    rgb, alpha = _no_ring(rgb, alpha, name, idx, size)
     return _hide_ghost(_compose(rgb, alpha), name, size)
 
 

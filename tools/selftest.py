@@ -882,6 +882,45 @@ def test_restep_support():
           % (2 * reach))
 
 
+def test_no_ring_support():
+    """_no_ring owns the prohibition sign and nothing else on the frame.
+
+    The point of the bound is to stop this stage from growing into a general
+    "fix NO": it redraws one annulus off a template fit, so every pixel further
+    than `_RING_MARGIN + _RING_FADE` outside the outer radius has to come
+    through the old renderer bit for bit, and the frames whose ring the fit
+    refuses (0..6, where there is no template to recover) have to come through
+    whole. Compared against the stage bypassed rather than against a stored
+    picture, so the test still means this when the rest of the renderer moves."""
+    bad = []
+    for idx in range(A.nframes("NO")):
+        size = 256
+        rgb = A.frame("NO", idx, size)
+        a = rgb[..., 3].astype(np.float64)
+        c = rgb[..., :3].astype(np.float64)
+        out_rgb, out_a = H._no_ring(c.copy(), a.copy(), "NO", idx, size)
+        hit = (np.abs(out_rgb - c).max(-1) > 0.5) | (np.abs(out_a - a) > 0.5)
+        fit = H._ring_fit("NO", idx)
+        if fit is None:
+            if hit.any():
+                bad.append(f"[{idx}]: no template fit, still changed "
+                           f"{int(hit.sum())} px")
+            continue
+        cx, cy, R, _r = fit
+        L = size / V.LOGICAL
+        ys, xs = np.mgrid[0:size, 0:size]
+        d = np.hypot((xs + 0.5) / L - cx, (ys + 0.5) / L - cy)
+        reach = R + H._RING_MARGIN + H._RING_FADE
+        leak = int((hit & (d > reach)).sum())
+        if leak:
+            bad.append(f"[{idx}]: {leak} px changed past {reach:.2f} "
+                       f"logical units from the centre")
+        elif not hit.any():
+            bad.append(f"[{idx}]: the stage did nothing at all")
+    check("the ring stage stays inside the ring", not bad, "; ".join(bad) or
+          "frames 0..6 untouched, 7..10 changed only within the sign")
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
