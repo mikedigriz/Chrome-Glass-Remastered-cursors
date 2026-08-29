@@ -976,6 +976,7 @@ def main():
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_restep_support,
+              test_morph_steps_visible, test_no_ring_support,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_material_basis, test_material_dc):
         t()
