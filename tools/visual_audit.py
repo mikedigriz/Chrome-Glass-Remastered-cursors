@@ -38,6 +38,9 @@ from cgr import build as B
 from cgr import hybrid as H
 from cgr import vectorlib as V
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tools/, for analyze
+import analyze as A  # noqa: E402
+
 # Light is the one the grey family is accused on, dark is what the READMEs use,
 # and mid grey is where a too-dark outline and a too-pale fill both show.
 BGS = {"light": (245, 245, 245), "grey": (128, 128, 128), "dark": (32, 33, 36)}
@@ -314,6 +317,262 @@ def parts(names, rows=3):
                      dd[dd > 0].sum() / ref_au, -dd[dd < 0].sum() / ref_au))
 
 
+def _on_checker(img):
+    """RGBA tile over cgr.build's own checker pattern - the same one preview
+    and comparison assets already composite over, reused rather than
+    reinvented."""
+    return B._onbg(img).convert("RGB")
+
+
+def author_compare(out, names, bgs, font, zoom=8):
+    """Author's own 32px frame next to ours, box-averaged 8:1 down to 32 -
+    the exact reduction analyze.delta_e judges colour by - plus a |diff|
+    panel. Built only at 32: there is no author frame at 512 to compare
+    against, only one Lanczos-upscaled by something else, and a sheet that
+    looks like agreement at 512 would mean the resampler agrees with itself.
+    32px is blown up NEAREST, the same convention crops() uses, so no pixel
+    here is invented by this tool either."""
+    d = os.path.join(out, "compare")
+    os.makedirs(d, exist_ok=True)
+    z, k = zoom, 256 // 32
+    for name in names:
+        if B.is_glyph(name):
+            print("  compare %-12s (drawn by glyphs.py, no author frame)" % name)
+            continue
+        n = A.nframes(name)
+        for idx in range(n):
+            o = np.asarray(H.original(name, idx), dtype=np.float64)
+            oa = o[..., 3:4] / 255.0
+            big = A.frame(name, idx, 256)
+            ba = big[..., 3:4] / 255.0
+            ours32 = (big[..., :3] * ba + 255.0 * (1 - ba)).reshape(32, k, 32, k, 3).mean(axis=(1, 3))
+            auth32 = o[..., :3] * oa + 255.0 * (1 - oa)
+            diff = np.abs(ours32 - auth32).mean(-1)
+            panels = [(Image.fromarray(np.clip(auth32, 0, 255).astype(np.uint8)), "author"),
+                      (Image.fromarray(np.clip(ours32, 0, 255).astype(np.uint8)), "ours"),
+                      (Image.fromarray(np.clip(diff * 4, 0, 255).astype(np.uint8)).convert("RGB"),
+                       "|diff|x4")]
+            pad = 2
+            sheet_bg = Image.new("RGB", (32 * z * 3 + pad * 4, 32 * z + 20), (24, 24, 26))
+            dr = ImageDraw.Draw(sheet_bg)
+            for i, (im, lab) in enumerate(panels):
+                x = pad + i * (32 * z + pad)
+                sheet_bg.paste(im.resize((32 * z, 32 * z), Image.NEAREST), (x, pad))
+                dr.text((x, pad + 32 * z + 2), lab, fill=(230, 230, 230), font=font)
+            sheet_bg.save(os.path.join(d, "%s_%d.png" % (name, idx)))
+        print("  compare %-12s %d frames" % (name, n))
+
+
+def _draw_contour(img, name, idx, size):
+    """Copy of img with the fold chord (tip -> notch) drawn on it, or, for
+    the glyph family with no chord, the same four silhouette extremes
+    _points() already reads for crops(). Not a new geometry - the points
+    this file already treats as the ones that matter."""
+    out = img.convert("RGBA").copy()
+    d = ImageDraw.Draw(out)
+    s = size / float(V.LOGICAL)
+    pts = _points(name, idx)
+    if "tip" in pts and "notch" in pts:
+        a, j = pts["tip"] * s, pts["notch"] * s
+        d.line([tuple(a), tuple(j)], fill=(255, 60, 60, 220), width=max(1, size // 128))
+        for p, col in ((a, (60, 140, 255, 255)), (j, (255, 200, 40, 255))):
+            r = max(2, size // 64)
+            d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], outline=col, width=2)
+    else:
+        for label, p in pts.items():
+            if label == "centre":
+                continue
+            x, y = p * s
+            r = max(2, size // 64)
+            d.ellipse([x - r, y - r, x + r, y + r], outline=(255, 60, 60, 220), width=2)
+    return out
+
+
+def contours(out, names, sizes, bgs, font):
+    d = os.path.join(out, "contours")
+    os.makedirs(d, exist_ok=True)
+    for size in sizes:
+        tiles = [(_draw_contour(_frame(n, 0, size), n, 0, size), n) for n in names]
+        cols = 6 if size <= 128 else 4
+        for bgn in bgs:
+            _sheet(list(tiles), cols, bgn, font).save(
+                os.path.join(d, "%d_%s.png" % (size, bgn)))
+        checker = [(_on_checker(t).convert("RGBA"), n) for t, n in tiles]
+        _sheet(checker, cols, "dark", font).save(
+            os.path.join(d, "%d_checker.png" % size))
+        print("  contour %3d px  %d cursors" % (size, len(names)))
+
+
+def _ramp(values, stops):
+    """Hand-rolled colormap: linear interpolation between (value, rgb) stops,
+    sorted by value. numpy + PIL only, no matplotlib in this budget."""
+    values = np.clip(values, stops[0][0], stops[-1][0])
+    out = np.zeros(values.shape + (3,), dtype=np.float64)
+    for (v0, c0), (v1, c1) in zip(stops[:-1], stops[1:]):
+        m = (values >= v0) & (values <= v1)
+        span = (v1 - v0) or 1.0
+        t = (values - v0) / span
+        for ch in range(3):
+            out[..., ch] = np.where(m, c0[ch] + t * (c1[ch] - c0[ch]), out[..., ch])
+    return out
+
+
+# Anchored on the gate's own reading, not autoscaled per image - a heatmap
+# that rescales to its own worst pixel would look equally red on a clean
+# cursor and a broken one. delta_e's target is 5.0 (STATUS.md); 15 is well
+# past anything currently shipped. The alpha stops are sized off no_hole_
+# alpha_err's opening value, 25.3 (tools/analyze.py, NEXT.md before #57).
+_DE_STOPS = [(0.0, (20, 30, 60)), (5.0, (255, 210, 60)), (15.0, (220, 20, 20))]
+_ALPHA_STOPS = [(-30.0, (40, 90, 220)), (0.0, (245, 245, 245)), (30.0, (220, 40, 40))]
+
+
+def _hotspot_mark(img, yx, size):
+    """Green crosshair at 32-grid position (row, col), scaled onto a size x
+    size image - the same marker on the heatmap and, if passed one, the
+    render, so both point at the same pixel."""
+    d = ImageDraw.Draw(img)
+    s = size / 32.0
+    cy, cx = (yx[0] + 0.5) * s, (yx[1] + 0.5) * s
+    r = max(3, size // 32)
+    d.line([(cx - r, cy), (cx + r, cy)], fill=(0, 255, 120), width=2)
+    d.line([(cx, cy - r), (cx, cy + r)], fill=(0, 255, 120), width=2)
+    return img
+
+
+def heatmaps(out, names, font, zoom=8):
+    """Alpha-error (signed, background-independent) and delta_e (worst of
+    the three backgrounds analyze.delta_e itself composites over, per pixel)
+    on the author's own 32x32 grid - the exact reduction the gate judges by,
+    so the picture explains the number instead of a different metric. The
+    worst delta_e pixel is marked as a hotspot on both panels."""
+    d = os.path.join(out, "heatmap")
+    os.makedirs(d, exist_ok=True)
+    z, k = zoom, 256 // 32
+    for name in names:
+        if B.is_glyph(name):
+            print("  heatmap %-12s (drawn by glyphs.py, no author frame)" % name)
+            continue
+        n = A.nframes(name)
+        for idx in range(n):
+            o = np.asarray(H.original(name, idx), dtype=np.float64)
+            oa = o[..., 3:4] / 255.0
+            big = A.frame(name, idx, 256)
+            ba = big[..., 3:4] / 255.0
+            ours32_a = ba.reshape(32, k, 32, k, 1).mean(axis=(1, 3))[..., 0] * 255.0
+            alpha_err = ours32_a - o[..., 3]
+
+            de_worst = np.zeros((32, 32))
+            for bgv in A._BACKGROUNDS.values():
+                bg = np.full(3, bgv)
+                ours32 = (big[..., :3] * ba + bg * (1 - ba)).reshape(32, k, 32, k, 3).mean(axis=(1, 3))
+                auth32 = o[..., :3] * oa + bg * (1 - oa)
+                de = A._delta_e_2000(A._srgb_to_lab(ours32.reshape(-1, 3)),
+                                      A._srgb_to_lab(auth32.reshape(-1, 3))).reshape(32, 32)
+                de_worst = np.maximum(de_worst, de)
+            hot = np.unravel_index(np.argmax(de_worst), de_worst.shape)
+
+            alpha_img = Image.fromarray(_ramp(alpha_err, _ALPHA_STOPS).astype(np.uint8)
+                                        ).resize((32 * z, 32 * z), Image.NEAREST)
+            de_img = Image.fromarray(_ramp(de_worst, _DE_STOPS).astype(np.uint8)
+                                     ).resize((32 * z, 32 * z), Image.NEAREST)
+            _hotspot_mark(alpha_img, hot, 32 * z)
+            _hotspot_mark(de_img, hot, 32 * z)
+            pad = 2
+            sheet = Image.new("RGB", (32 * z * 2 + pad * 3, 32 * z + 20), (24, 24, 26))
+            dr = ImageDraw.Draw(sheet)
+            for i, (im, lab) in enumerate(((alpha_img, "alpha err"), (de_img, "dE worst-of-3"))):
+                x = pad + i * (32 * z + pad)
+                sheet.paste(im, (x, pad))
+                dr.text((x, pad + 32 * z + 2), lab, fill=(230, 230, 230), font=font)
+            sheet.save(os.path.join(d, "%s_%d.png" % (name, idx)))
+        print("  heatmap %-12s %d frames" % (name, n))
+
+
+def product_cycles(out, names, bgs, font):
+    """The frames and phases the product actually loops through -
+    analyze.product_cycle, not the author's own indices. For Hand, Wait and
+    AppStarting under LIGHT_ANIM this is 27 reconstructed frames with real
+    phases; for Handwriting and NO it is the author's own frames, same as
+    anims(). anims() is left alone - it shows the author's keyframes, which
+    is a different and still useful question from what ships."""
+    d = os.path.join(out, "cycle")
+    os.makedirs(d, exist_ok=True)
+    for name in [n for n in names if n in B.ANIM]:
+        frames_by_row, phases = [], None
+        for size in ANIM_ROWS:
+            fr, phases = A.product_cycle(name, size)
+            frames_by_row.append([Image.fromarray(np.clip(f, 0, 255).astype(np.uint8), "RGBA")
+                                  for f in fr])
+        pad, lab, cell = 10, 16, max(ANIM_ROWS)
+        n = len(phases)
+        W = pad + n * (cell + pad)
+        Hh = pad + sum(s + lab + pad for s in ANIM_ROWS)
+        for bgn in bgs:
+            sheet = Image.new("RGB", (W, Hh), BGS[bgn])
+            dr = ImageDraw.Draw(sheet)
+            y = pad
+            for size, frames in zip(ANIM_ROWS, frames_by_row):
+                for i, im in enumerate(frames):
+                    sheet.paste(im, (pad + i * (cell + pad) + (cell - size) // 2, y), im)
+                    dr.text((pad + i * (cell + pad), y + size + 1), "%.2f" % phases[i],
+                            fill=FG[bgn], font=font)
+                dr.text((1, y), str(size), fill=FG[bgn], font=font)
+                y += size + lab + pad
+            sheet.save(os.path.join(d, "%s_%s.png" % (name, bgn)))
+        print("  cycle  %-12s %d frames (product_cycle, not author indices)" % (name, n))
+
+
+def write_index(out, names, args):
+    """audit/index.html: one page per commit, cursor by cursor, linking
+    whatever this run actually generated. README.txt stays as the
+    git-diffable text summary; this is for looking, not diffing."""
+    sections = [
+        ("ladder", "Ladders", lambda n: ["ladder/%d_%s.png" % (s, b)
+                                         for s in args.sizes for b in args.bgs]),
+        ("anim", "Author frames", lambda n: ["anim/%s_%s.png" % (n, b) for b in args.bgs]
+         if n in B.ANIM else []),
+        ("cycle", "Product cycle", lambda n: ["cycle/%s_%s.png" % (n, b) for b in args.bgs]
+         if n in B.ANIM else []),
+        ("compare", "Author vs remaster", lambda n: [] if B.is_glyph(n) else
+         ["compare/%s_%d.png" % (n, i) for i in range(A.nframes(n))]),
+        ("heatmap", "Alpha/dE heatmap", lambda n: [] if B.is_glyph(n) else
+         ["heatmap/%s_%d.png" % (n, i) for i in range(A.nframes(n))]),
+        ("contours", "Contour overlay", lambda n: ["contours/%d_%s.png" % (s, b)
+                                                    for s in args.crop_sizes for b in args.bgs]),
+        ("crops", "Crops", lambda n: ["crops/%s_%s_%d_%s.png" % (n, p, s, b)
+                                       for p in PARTS for s in args.crop_sizes for b in args.bgs]),
+    ]
+    rows = []
+    for n in names:
+        cells = []
+        for d, title, fn in sections:
+            links = [p for p in fn(n) if os.path.exists(os.path.join(out, p))]
+            if not links:
+                continue
+            thumbs = "".join(
+                '<a href="%s"><img src="%s" loading="lazy" title="%s"></a>' % (p, p, p)
+                for p in links[:4])
+            cells.append('<div class="cell"><h3>%s</h3>%s</div>' % (title, thumbs))
+        if cells:
+            rows.append('<section><h2>%s</h2><div class="row">%s</div></section>'
+                        % (n, "".join(cells)))
+    html = """<!doctype html><meta charset="utf-8"><title>visual audit - %s</title>
+<style>
+body{background:#1b1c1f;color:#e4e4e8;font:14px/1.4 sans-serif;margin:0;padding:16px}
+h1{font-size:18px} h2{font-size:16px;border-bottom:1px solid #444;padding-bottom:4px}
+h3{font-size:12px;color:#9aa;margin:8px 0 4px}
+.row{display:flex;flex-wrap:wrap;gap:16px} .cell{max-width:600px}
+img{max-height:120px;border:1px solid #333;margin:2px;background:#000}
+section{margin-bottom:24px}
+</style>
+<h1>visual audit - %s</h1>
+%s
+""" % (_head(), _head(), "".join(rows))
+    with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as fh:
+        fh.write(html)
+    print("  index  audit/index.html")
+
+
 def _head():
     try:
         r = subprocess.run(["git", "-c", "safe.directory=*", "rev-parse",
@@ -335,6 +594,14 @@ def main(argv=None):
     ap.add_argument("--ladder-only", action="store_true")
     ap.add_argument("--anim-only", action="store_true")
     ap.add_argument("--crops-only", action="store_true")
+    ap.add_argument("--compare-only", action="store_true",
+                    help="author vs remaster at 32px, box-averaged 8:1")
+    ap.add_argument("--contours-only", action="store_true",
+                    help="fold chord / extremes drawn over the render")
+    ap.add_argument("--heatmap-only", action="store_true",
+                    help="alpha-error and worst-of-3-background delta_e maps")
+    ap.add_argument("--cycles-only", action="store_true",
+                    help="analyze.product_cycle frames, not author indices")
     ap.add_argument("--coverage", action="store_true",
                     help="print the coverage tables and write no sheets")
     ap.add_argument("--parts", action="store_true",
@@ -354,7 +621,9 @@ def main(argv=None):
     if args.parts:
         parts(names, args.bands)
         return
-    only = args.ladder_only or args.anim_only or args.crops_only
+    only = (args.ladder_only or args.anim_only or args.crops_only or
+            args.compare_only or args.contours_only or args.heatmap_only or
+            args.cycles_only)
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
     font = B._font(13)
@@ -366,7 +635,16 @@ def main(argv=None):
         anims(out, names, args.bgs, font)
     if args.crops_only or not only:
         crops(out, names, args.bgs, args.crop_sizes, font)
+    if args.compare_only or not only:
+        author_compare(out, names, args.bgs, font)
+    if args.contours_only or not only:
+        contours(out, names, args.crop_sizes, args.bgs, font)
+    if args.heatmap_only or not only:
+        heatmaps(out, names, font)
+    if args.cycles_only or not only:
+        product_cycles(out, names, args.bgs, font)
 
+    write_index(out, names, args)
     with open(os.path.join(out, "README.txt"), "w", encoding="utf-8") as fh:
         fh.write("git head : %s\n" % _head())
         fh.write("cursors  : %s\n" % ", ".join(names))
