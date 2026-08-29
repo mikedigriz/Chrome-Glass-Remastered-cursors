@@ -2521,7 +2521,7 @@ def _flat(e):
         "legacy_jitter_rows": ij.get("rows") if ij else None,
         "legacy_jitter_coverage": ij.get("pair_coverage") if ij else None,
         "morph_iou": mo["iou_min"] if mo else None,
-        "morph_peak_abs": mo["peak_abs"] if mo else None,
+        "morph_peak_abs": mo.get("peak_abs") if mo else None,
         "morph_cadence_err": mo.get("cadence_err") if mo else None,
         "temporal_fold": ts.get("fold"),
         "temporal_body": ts.get("body"),
