@@ -26,6 +26,7 @@ from PIL import Image, ImageDraw
 from . import hybrid as H
 from . import glyphs as G
 from . import curlib
+from . import xcurlib
 from .paths import ASSETS, DATA, ROOT, TOOLS
 
 THEME = "Chrome Glass Remastered"
@@ -903,12 +904,63 @@ def check_metrics():
     return warns
 
 
-def check_packages(win):
-    """Round-trip the written .cur/.ani files and verify sizes and timing."""
+def _rgba_equal(a_img, b_img, mask_rgb_by_alpha=False):
+    """Pixel-exact, not perceptual - this is a codec check, not a quality one.
+    .cur's 32bpp DIB only carries meaningful RGB where alpha is nonzero
+    (curlib.py's AND mask exists for legacy readers, not for us), and
+    _cape_strip's alpha_composite onto a transparent canvas zeroes RGB
+    wherever the result is fully transparent even though the canonical
+    render can carry leftover RGB there - so both .cur and .cape callers
+    pass mask_rgb_by_alpha=True. _pack_ximage copies RGBA straight through
+    with no compositing, so Xcursor is compared in full."""
+    a = np.asarray(a_img.convert("RGBA"))
+    b = np.asarray(b_img.convert("RGBA"))
+    if a.shape != b.shape or not np.array_equal(a[..., 3], b[..., 3]):
+        return False
+    if mask_rgb_by_alpha:
+        vis = a[..., 3] > 0
+        return np.array_equal(a[..., :3][vis], b[..., :3][vis])
+    return np.array_equal(a[..., :3], b[..., :3])
+
+
+def _read_cape(path):
+    """.cape -> {ident: {"HotSpotX", "HotSpotY", "FrameCount",
+    "frames_by_scale": {scale: [PIL.Image, ...]}}}. Representations are PNG
+    strips (_cape_strip's own layout); this only re-cuts them, it does not
+    invent a binary format the way xcurlib has to for Xcursor."""
+    import plistlib
+    with open(path, "rb") as fh:
+        cape = plistlib.load(fh)
+    out = {}
+    for ident, rec in cape["Cursors"].items():
+        nf = rec["FrameCount"]
+        frames_by_scale = {}
+        for sc, blob in zip(MAC_SCALES, rec["Representations"]):
+            strip = Image.open(io.BytesIO(blob)).convert("RGBA")
+            size = 32 * sc
+            frames_by_scale[sc] = [strip.crop((0, i * size, size, (i + 1) * size))
+                                   for i in range(nf)]
+        out[ident] = {"FrameCount": nf, "HotSpotX": rec["HotSpotX"],
+                     "HotSpotY": rec["HotSpotY"], "frames_by_scale": frames_by_scale}
+    return out
+
+
+def check_packages(win, lin, aliases, cape):
+    """Round-trip every package this build wrote: decode what actually landed
+    on disk and compare it, pixel for pixel, to the canonical render still in
+    cache from _warm_frames() - no re-rendering, so this costs seconds. A
+    check on the codecs (curlib, xcurlib, plistlib), not on rendered quality -
+    that question belongs to tools/analyze.py and tools/visual_audit.py."""
     for name in STATIC:
         frames = curlib.read_cur(open(os.path.join(win, name + ".cur"), "rb").read())
         sizes = sorted(f["img"].size[0] for f in frames)
         assert sizes == sorted(SIZES), f"{name}.cur sizes {sizes}"
+        for f, s in zip(frames, SIZES):
+            hx, hy = _scale_hot(name, s)
+            assert (f["hx"], f["hy"]) == (hx, hy), \
+                f"{name}.cur[{s}] hotspot {(f['hx'], f['hy'])} != {(hx, hy)}"
+            assert _rgba_equal(f["img"], static_image(name, s), mask_rgb_by_alpha=True), \
+                f"{name}.cur[{s}] pixels != canonical render"
     for name in ANIM:
         ani = curlib.read_ani(open(os.path.join(win, name + ".ani"), "rb").read())
         nf = struct.unpack_from("<I", ani["anih"], 4)[0]
@@ -928,9 +980,74 @@ def check_packages(win):
         else:
             assert nf == len(orig_rates) and ani["rates"] == orig_rates, \
                 f"{name}.ani must keep the author's rate chunk"
+        per_size = {s: H.anim_frames(name, s)[0] for s in ANI_SIZES_WIN}
+        for i in range(nf):
+            by_size = {f["img"].size[0]: f for f in curlib.read_cur(ani["frames"][i])}
+            for s in ANI_SIZES_WIN:
+                f = by_size[s]
+                hx, hy = _scale_hot(name, s)
+                assert (f["hx"], f["hy"]) == (hx, hy), \
+                    f"{name}.ani[{i}][{s}] hotspot {(f['hx'], f['hy'])} != {(hx, hy)}"
+                assert _rgba_equal(f["img"], per_size[s][i], mask_rgb_by_alpha=True), \
+                    f"{name}.ani[{i}][{s}] pixels != canonical render"
     print("  .cur: %d cursors x %d sizes (incl. 256px)" % (len(STATIC), len(SIZES)))
     print("  .ani: 60 fps (27 frames rate=1: %s; author's timing kept: %s)" % (
         ", ".join(sorted(H.INTERP)), ", ".join(sorted(set(ANIM) - H.INTERP))))
+
+    for role, names in XROLES.items():
+        real_path = os.path.join(lin, "cursors", names[0])
+        data = open(real_path, "rb").read()
+        chunks = xcurlib.read_xcursor(data)
+        if role in ANIM:
+            idx = 0
+            for size in ANI_SIZES:
+                frames, rates = H.anim_frames(role, size, interp=False)
+                for img, rate in zip(frames, rates):
+                    c = chunks[idx]
+                    hx, hy = _scale_hot(role, size)
+                    assert c["size"] == size and (c["hx"], c["hy"]) == (hx, hy), \
+                        f"{role} xcursor[{idx}] size/hotspot mismatch"
+                    assert c["delay"] == _jiffies_ms(rate), \
+                        f"{role} xcursor[{idx}] delay {c['delay']} != {_jiffies_ms(rate)}"
+                    assert _rgba_equal(c["img"], img), f"{role} xcursor[{idx}] pixels"
+                    idx += 1
+            assert idx == len(chunks), f"{role} xcursor chunk count {len(chunks)} != {idx}"
+        else:
+            assert len(chunks) == len(LINUX_SIZES), f"{role} xcursor chunk count"
+            for c, size in zip(chunks, LINUX_SIZES):
+                hx, hy = _scale_hot(role, size)
+                assert c["size"] == size and (c["hx"], c["hy"]) == (hx, hy), \
+                    f"{role} xcursor[{size}] hotspot mismatch"
+                assert c["delay"] == 0, f"{role} xcursor[{size}] delay {c['delay']} != 0"
+                assert _rgba_equal(c["img"], static_image(role, size)), \
+                    f"{role} xcursor[{size}] pixels != canonical render"
+        for alias in names[1:]:
+            assert open(os.path.join(lin, "cursors", alias), "rb").read() == data, \
+                f"{role} alias {alias} != {names[0]}"
+        assert aliases[names[0]] == names[1:], f"{role} alias list drifted"
+    print("  xcursor: %d roles, aliases byte-identical to their real file" % len(XROLES))
+
+    cape_data = _read_cape(cape)
+    for ident, name, animated in MAC_CURSORS:
+        rec = cape_data[ident]
+        hx, hy = hotspot(name)
+        assert (rec["HotSpotX"], rec["HotSpotY"]) == (float(hx), float(hy)), \
+            f"{name} cape hotspot mismatch"
+        for sc in MAC_SCALES:
+            size = 32 * sc
+            got = rec["frames_by_scale"][sc]
+            if animated:
+                want, _ = H.anim_frames(name, size)
+            elif name in ANIM:
+                want = [H.frame_image(name, len(H.BY_NAME[name]["frames"]) - 1, size)]
+            else:
+                want = [static_image(name, size)]
+            assert len(got) == len(want) == rec["FrameCount"], \
+                f"{name} cape[{sc}] frame count {len(got)} != {len(want)}"
+            for g, w in zip(got, want):
+                assert _rgba_equal(g, w, mask_rgb_by_alpha=True), \
+                    f"{name} cape[{sc}] pixels != canonical render"
+    print("  cape: %d cursors x %d scales" % (len(MAC_CURSORS), len(MAC_SCALES)))
 
 
 def _rel(p):
@@ -1007,7 +1124,7 @@ def main(argv=None):
           "  Animations:", _rel(os.path.join(out, "assets")) + "/*.webp")
     print("Checks:")
     with _phase("check_packages"):
-        check_packages(win)
+        check_packages(win, lin, aliases, cape)
     with _phase("check_metrics"):
         warns = check_metrics()
     print("  alpha/sat: %s" % ("within tolerance" if not warns else f"{warns} warning(s)"))

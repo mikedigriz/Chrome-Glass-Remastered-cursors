@@ -36,6 +36,9 @@ from cgr import hybrid as H  # noqa: E402
 from cgr import lightanim as LA  # noqa: E402
 from cgr import vectorlib as V  # noqa: E402
 from cgr import product as P  # noqa: E402
+from cgr import build as B  # noqa: E402
+from cgr import curlib  # noqa: E402
+from cgr import xcurlib  # noqa: E402
 
 SIZE = A.JITTER_SIZE
 FAILED = []
@@ -1029,6 +1032,53 @@ def test_product_manifest():
           str(mac_animated))
 
 
+def test_package_roundtrip_catches_corruption():
+    """check_packages compares decoded package bytes against the canonical
+    render via _rgba_equal/curlib.read_cur/xcurlib.read_xcursor - plant a
+    defect in already-encoded bytes (not in the render) and confirm the
+    comparison catches it, on both codecs that either got new comparison
+    logic (.cur) or a brand new parser (Xcursor). One small cursor, one
+    frame - the corruption is in the bytes, not the art, so nothing here
+    needs a sweep."""
+    name, size = "Arrow", 32
+    img = B.static_image(name, size)
+    hx, hy = B._scale_hot(name, size)
+
+    clean = curlib.write_cur([{"img": img, "hx": hx, "hy": hy}])
+    frame = curlib.read_cur(clean)[0]
+    check("cur clean round-trip", B._rgba_equal(frame["img"], img, mask_rgb_by_alpha=True),
+          "identical bytes must compare equal")
+    # read_cur's AND mask forces alpha=0 wherever encode saw alpha==0, and
+    # forces alpha=255 wherever the decoded XOR alpha itself is 0 - both are
+    # legitimate compatibility paths, not bugs, but they mean a corrupted
+    # byte on a fully-transparent or fully-opaque pixel can silently heal
+    # itself back to the original value. A pixel with 0 < alpha < 255 hits
+    # neither path, and XOR 0xFF (bitwise NOT) never maps such a value to
+    # itself, so this always lands as a real, uncorrected difference.
+    arr = np.asarray(img.convert("RGBA"))
+    edge = np.argwhere((arr[..., 3] > 0) & (arr[..., 3] < 255))
+    y, x = (int(v) for v in edge[0])
+    row_xor = ((size * 32 + 31) // 32) * 4
+    file_row = size - 1 - y                      # _encode_dib writes bottom-up
+    off = 6 + 16 + 40 + file_row * row_xor + x * 4 + 3   # ICONDIR+entry+BITMAPINFOHEADER, +3 = BGRA's A byte
+    bad = bytearray(clean)
+    bad[off] ^= 0xFF
+    bad_frame = curlib.read_cur(bytes(bad))[0]
+    check("cur corruption caught", not B._rgba_equal(bad_frame["img"], img, mask_rgb_by_alpha=True),
+          "a flipped alpha byte must not compare equal to the clean render")
+
+    chunk = B._pack_ximage(size, img, hx, hy, 0)
+    data = B._xcursor([chunk])
+    c = xcurlib.read_xcursor(data)[0]
+    check("xcursor clean round-trip",
+          B._rgba_equal(c["img"], img) and (c["hx"], c["hy"]) == (hx, hy),
+          "identical bytes must compare equal")
+    bad_chunk = B._pack_ximage(size, img, hx + 1, hy, 0)   # simulates a packing bug
+    bad_c = xcurlib.read_xcursor(B._xcursor([bad_chunk]))[0]
+    check("xcursor hotspot corruption caught", (bad_c["hx"], bad_c["hy"]) != (hx, hy),
+          "a wrong packed hotspot must not compare equal to the canonical one")
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
@@ -1040,6 +1090,7 @@ def main():
               test_canonical_phase, test_restep_support,
               test_morph_steps_visible, test_no_ring_support,
               test_hole_glass, test_product_manifest,
+              test_package_roundtrip_catches_corruption,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_material_basis, test_material_dc):
         t()
