@@ -2188,6 +2188,15 @@ def _bevel_shading(name, idx, size):
 # `_TEMPER_PER_CURSOR` on "relight" rather than the whole stage at full
 # strength - see NEXT.md 23.9.
 _WEDGE_TIPS = {"Arrow", "Arrow_Down", "Hand", "UpArrow", "Wait", "AppStarting"}
+# Who gets `_fold_restep`. Deliberately not `_WEDGE_TIPS` itself: that set also
+# gates `_notch_declutter`, `_temper` and `_match_author_level`, and widening it
+# would turn on four stages where only one was measured. Help and Handwriting
+# carry the same pointer in their silhouette as Arrow does - their chords land
+# within 0.25 logical units of his - so the fold the stage rebuilds is the same
+# fold, and it was left out by scope rather than by a finding (NEXT.md 51).
+# NO carries it too and is deliberately absent: the stage reads the same on him
+# but costs `fold_step` 0.439 -> 0.387 against a 0.45 ratchet (NEXT.md 61).
+_FOLD_RESTEP_ON = _WEDGE_TIPS | {"Help", "Handwriting"}
 
 _TIP_RELIGHT_DIFF = 34.0     # luma swing between the two facets the relight paints
 _TIP_RELIGHT_RIDGE_W = 0.35  # logical units the transition spans, away from the point
@@ -4272,7 +4281,7 @@ def frame_image(name, idx, size):
     rgb = _fold_transfer(rgb, name, idx, size)
     rgb = _facet_split(rgb, name, idx, size)
     rgb = _tip_level(rgb, name, idx, size)
-    if name in _WEDGE_TIPS:
+    if name in _FOLD_RESTEP_ON:
         rgb = _fold_restep(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.

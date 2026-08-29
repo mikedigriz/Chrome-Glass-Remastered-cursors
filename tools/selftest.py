@@ -856,7 +856,8 @@ def test_restep_support():
     0.05-unit grid leaves that much dust."""
     eps, bad = 0.5, []
     reach = H._RESTEP_SUPPORT + H._RESTEP_FADE
-    for name, idx, size in (("Arrow", 0, 512), ("Hand", 0, 256), ("Wait", 0, 512)):
+    for name, idx, size in (("Arrow", 0, 512), ("Hand", 0, 256), ("Wait", 0, 512),
+                            ("Help", 0, 512), ("Handwriting", 0, 256)):
         rgb = A.frame(name, idx, size)[..., :3]
         out = np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1)
         hit = out > eps
