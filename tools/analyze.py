@@ -1502,6 +1502,64 @@ def _morph_visible_steps(name, get):
 
 _BACKGROUNDS = {"white": 255.0, "grey": 128.0, "black": 0.0}
 
+_HOLE_FRAMES = (7, 8, 9)   # the frames of NO whose sign has a hole with glass in
+_HOLE_GREY = 60.0          # channel spread under which one of his pixels is glass
+_HOLE_INSET = 0.2          # logical units clear of the ring's inner edge
+
+
+@functools.lru_cache(maxsize=None)
+def _hole_cells(idx):
+    """His glass seen through NO's ring, as a fixed set of his own pixels.
+
+    Chosen off the author and never re-chosen from a candidate: a zone that
+    reselects itself after the render moves cannot say whether the render got
+    better. Grey because the sign is the one saturated thing there, and inset
+    because the ring's own inner edge is not this zone's business."""
+    fit = H._ring_fit("NO", idx)
+    if fit is None:
+        return None
+    cx, cy, _R, r = fit
+    o = np.asarray(H.original("NO", idx), dtype=np.float64)
+    n = o.shape[0]
+    ys, xs = np.mgrid[0:n, 0:n]
+    d = np.hypot((xs + 0.5) * H.V.LOGICAL / n - cx,
+                 (ys + 0.5) * H.V.LOGICAL / n - cy)
+    grey = (o[..., :3].max(-1) - o[..., :3].min(-1)) < _HOLE_GREY
+    m = (d < r - _HOLE_INSET) & grey & (o[..., 3] > 20)
+    return (m, o) if m.sum() >= 4 else None
+
+
+def hole_glass(name):
+    """What the pointer behind NO's sign costs, alpha and colour, worst case.
+
+    Neither reading has a target. delta_e in this file records NO's frame 5,
+    where the sign has no hole yet, so nothing in the gate could see this zone
+    move at all - which is the whole reason it exists. Both are ratchets."""
+    if name != "NO":
+        return None
+    k = _MORPH_SIZE
+    worst_a, worst_e = 0.0, 0.0
+    for idx in _HOLE_FRAMES:
+        got = _hole_cells(idx)
+        if got is None:
+            continue
+        m, o = got
+        f = np.asarray(frame(name, idx, JITTER_SIZE), dtype=np.float64)
+        s = JITTER_SIZE // k
+        al = f[..., 3:4] / 255.0
+        pm = np.concatenate([f[..., :3] * al, al], -1)             .reshape(k, s, k, s, 4).mean(axis=(1, 3))
+        a32 = pm[..., 3] * 255.0
+        rgb32 = pm[..., :3] / np.maximum(pm[..., 3:4], 1e-6)
+        worst_a = max(worst_a, float(np.abs(a32 - o[..., 3])[m].mean()))
+        for bg in _BACKGROUNDS.values():
+            ours = rgb32[m] * (a32[m][:, None] / 255.0)                 + bg * (1.0 - a32[m][:, None] / 255.0)
+            his = o[..., :3][m] * (o[..., 3][m][:, None] / 255.0)                 + bg * (1.0 - o[..., 3][m][:, None] / 255.0)
+            worst_e = max(worst_e, float(_delta_e_2000(
+                _srgb_to_lab(np.clip(ours, 0, 255)), _srgb_to_lab(his)).mean()))
+    if worst_a == 0.0 and worst_e == 0.0:
+        return None
+    return {"alpha_err": worst_a, "delta_e": worst_e}
+
 _TIP_SIZE = 256       # where the points are read
 _TIP_REACH = 1.5      # logical units of the disc the extremum is taken over
 _TIP_RING = 0.25      # width of one ring of the profile
@@ -2177,6 +2235,7 @@ def _collect_one(job):
             e["inner_jitter"] = inner_jitter(name)
             e["fold_jitter"] = fold_jitter(name)
         else:
+            e["hole_glass"] = hole_glass(name)
             e["morph"] = morph_health(name)
             e["morph_orig"] = morph_health(name, get=orig_frame)
             # Step by step against his own, which peak/mean cannot do: it is a
@@ -2462,6 +2521,19 @@ def gate(rep, base=None):
             else:
                 unmeasured.append(f"{name:12s} {'fold_jitter':18s} "
                                   + (fj["why"] if fj else "the cursor has no chord to anchor on"))
+        # No target on either, and none is wanted: delta_e records NO's frame 5,
+        # where the sign has no hole, so this zone is invisible to every other
+        # reading in the file. Ratchets, so a candidate aimed here has to show
+        # its work and one aimed elsewhere cannot quietly spend it.
+        hg = e.get("hole_glass")
+        if hg:
+            for key, got in (("no_hole_alpha_err", hg["alpha_err"]),
+                             ("no_hole_delta_e", hg["delta_e"])):
+                ref = was.get(name, {}).get(key)
+                if ref is not None and got > ref * (1.0 + _RATCHET_SLACK):
+                    bad.append(f"{name:12s} {key:18s} {got:8.3f} > "
+                               f"{ref * (1.0 + _RATCHET_SLACK):.3f}"
+                               f"  (was {ref:.3f})")
         mo, mo0 = e.get("morph"), e.get("morph_orig")
         if mo and mo0:
             if mo["iou_min"] < mo0["iou_min"] * T["morph_iou"]:
@@ -2542,6 +2614,8 @@ def _flat(e):
         "legacy_inner_jitter": ij.get("p95") if ij and ij.get("why") is None else None,
         "legacy_jitter_rows": ij.get("rows") if ij else None,
         "legacy_jitter_coverage": ij.get("pair_coverage") if ij else None,
+        "no_hole_alpha_err": (e.get("hole_glass") or {}).get("alpha_err"),
+        "no_hole_delta_e": (e.get("hole_glass") or {}).get("delta_e"),
         "morph_iou": mo["iou_min"] if mo else None,
         "morph_peak_abs": mo.get("peak_abs") if mo else None,
         "morph_cadence_err": mo.get("cadence_err") if mo else None,

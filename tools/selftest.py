@@ -928,6 +928,43 @@ def test_morph_steps_visible():
           "largest step %.3g" % float(np.abs(sa).max()))
 
 
+def test_hole_glass():
+    """The glass behind NO's sign is watched, and by its own reading.
+
+    It has to be: delta_e records that cursor's frame 5, where the sign has no
+    hole at all, so an improvement or a regression on the pointer seen through
+    the ring is invisible to every other number in the file. Both halves are
+    planted separately - opacity and colour - because they have different
+    owners and a reading that only moved on one of them would hide the other."""
+    base = A.hole_glass("NO")
+    check("hole glass reads at all", base is not None,
+          "alpha %.1f, delta_e %.3f" % (base["alpha_err"], base["delta_e"])
+          if base else "nothing measured")
+    if base is None:
+        return
+    idx = 9
+    got = A._hole_cells(idx)
+    m = got[0]
+    big = np.zeros((A.JITTER_SIZE, A.JITTER_SIZE), dtype=bool)
+    k = A.JITTER_SIZE // A._MORPH_SIZE
+    big[np.repeat(np.repeat(m, k, 0), k, 1)] = True
+
+    for label, fn, key in (
+            ("hole glass sees opacity",
+             lambda a: (a.__setitem__((big, 3), np.clip(a[..., 3][big] + 40, 0, 255)), a)[1],
+             "alpha_err"),
+            ("hole glass sees colour",
+             lambda a: (a.__setitem__((big, 0), np.clip(a[..., 0][big] + 40, 0, 255)), a)[1],
+             "delta_e")):
+        restore = damaged("NO", idx, A.JITTER_SIZE, fn)
+        try:
+            hurt = A.hole_glass("NO")
+            check(label, hurt[key] > base[key] + 0.2,
+                  f"{base[key]:.3f} -> {hurt[key]:.3f}")
+        finally:
+            restore()
+
+
 def test_no_ring_support():
     """_no_ring owns the prohibition sign and nothing else on the frame.
 
@@ -977,6 +1014,7 @@ def main():
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_restep_support,
               test_morph_steps_visible, test_no_ring_support,
+              test_hole_glass,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_material_basis, test_material_dc):
         t()
