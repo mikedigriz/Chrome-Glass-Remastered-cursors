@@ -5005,6 +5005,7 @@
   },
   "tip_sheen": {},
   "tip_sheen_orig": {},
+  "hole_glass": null,
   "morph": {
    "iou_min": 0.6301369863013698,
    "iou_mean": 0.7335930126799677,
@@ -5428,6 +5429,10 @@
   "temporal": {},
   "tip_sheen": {},
   "tip_sheen_orig": {},
+  "hole_glass": {
+   "alpha_err": 25.30437499999997,
+   "delta_e": 8.854519026799895
+  },
   "morph": {
    "iou_min": 0.35883905013192613,
    "iou_mean": 0.735401044404092,
