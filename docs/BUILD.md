@@ -46,7 +46,7 @@ A couple of details are hand-drawn in `cursors.py` instead of auto-traced - like
 python tools/analyze.py --check data/metrics-baseline.json --jobs 8
 ```
 
-`data/metrics-baseline.json` is where the set stands today and it is committed. A value that misses its target but is no worse than that file prints as debt and does not fail; a value that moves further from a target fails on the spot. `--fast` is the short ladder for iterating, `--full` adds 512 and is what acceptance runs on, and `--ratchet FILE` rewrites the baseline once an improvement is real.
+`data/metrics-baseline.json` is where the set stands today and it is committed. A value that misses its target but is no worse than that file prints as debt and does not fail; a value that moves further from a target fails on the spot. `--fast` is the short three-rung ladder for iterating; the default ladder already includes 512 and is what acceptance runs on, `--full` is kept for existing scripts but is currently a no-op, and `--ratchet FILE` rewrites the baseline once an improvement is real.
 
 `tools/selftest.py` plants a defect of each kind and asserts the metric that owns it moves. Run it before trusting a clean gate: a metric that cannot fail reports a clean run on a broken cursor.
 
