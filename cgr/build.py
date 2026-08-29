@@ -942,6 +942,23 @@ def _rel(p):
         return p
 
 
+class _phase:
+    """Times one build phase into _PHASE_TIMES. No-op cost when nobody reads
+    it - BUILD_PERF_JSON is what turns the dict into a file, see main()."""
+    _times = {}
+
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, *exc):
+        _phase._times[self.name] = time.perf_counter() - self.t0
+        return False
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build the cursor theme.")
     ap.add_argument("--out-dir", default=ROOT, metavar="DIR",
@@ -956,19 +973,30 @@ def main(argv=None):
     dist = os.path.join(out, "dist")
     if os.path.exists(dist): shutil.rmtree(dist)
     if os.environ.get("BUILD_SERIAL") != "1":           # escape hatch: BUILD_SERIAL=1
-        _warm_frames()                                   # renders single-core instead
-    win = build_windows(dist)
-    check_inf(win)
-    orig_theme = build_original(dist)
-    lin, aliases = build_linux(dist)
+        with _phase("warm_frames"):
+            _warm_frames()                               # renders single-core instead
+    with _phase("windows"):
+        win = build_windows(dist)
+    with _phase("check_inf"):
+        check_inf(win)
+    with _phase("original"):
+        orig_theme = build_original(dist)
+    with _phase("linux"):
+        lin, aliases = build_linux(dist)
     packages = os.path.join(out, "packages")
     if os.path.exists(packages): shutil.rmtree(packages)
-    deb = build_deb(lin, aliases, packages)
-    zpath, tpath = build_artifacts(win, lin, aliases, packages)
-    cape = build_mac(packages)
-    build_preview(out)
-    assets = build_animations(out)
-    build_comparison(assets)
+    with _phase("deb"):
+        deb = build_deb(lin, aliases, packages)
+    with _phase("artifacts"):
+        zpath, tpath = build_artifacts(win, lin, aliases, packages)
+    with _phase("mac"):
+        cape = build_mac(packages)
+    with _phase("preview"):
+        build_preview(out)
+    with _phase("animations"):
+        assets = build_animations(out)
+    with _phase("comparison"):
+        build_comparison(assets)
     print("macOS   :", _rel(cape))
     print("Windows :", _rel(win), "-", len(os.listdir(win)), "files")
     print("Original:", _rel(orig_theme), "-", len(os.listdir(orig_theme)), "files (2006, 32px)")
@@ -978,13 +1006,20 @@ def main(argv=None):
     print("Preview :", _rel(os.path.join(out, "assets", "preview.png")),
           "  Animations:", _rel(os.path.join(out, "assets")) + "/*.webp")
     print("Checks:")
-    check_packages(win)
-    warns = check_metrics()
+    with _phase("check_packages"):
+        check_packages(win)
+    with _phase("check_metrics"):
+        warns = check_metrics()
     print("  alpha/sat: %s" % ("within tolerance" if not warns else f"{warns} warning(s)"))
     if warns and os.environ.get("ALLOW_METRIC_WARN") != "1":
         raise SystemExit(f"check_metrics: {warns} warning(s) out of tolerance "
                           "(set ALLOW_METRIC_WARN=1 to ship anyway)")
-    check_quality()
+    with _phase("check_quality"):
+        check_quality()
+    perf_path = os.environ.get("BUILD_PERF_JSON")
+    if perf_path:
+        with open(perf_path, "w") as fh:
+            json.dump(_phase._times, fh, indent=1)
 
 
 _BASELINE = os.path.join(DATA, "metrics-baseline.json")
