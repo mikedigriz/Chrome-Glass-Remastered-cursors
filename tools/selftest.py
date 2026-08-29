@@ -882,6 +882,52 @@ def test_restep_support():
           % (2 * reach))
 
 
+def test_morph_steps_visible():
+    """The morph cadence reads what shows and nothing else.
+
+    Three properties, and each one is a mistake the masked reading could make.
+    RGB under zero alpha must not count, because nobody sees it. Alpha moving
+    on its own must count, because everybody does. And a sequence compared
+    against itself must give exactly zero, or the ratchet has a floor of noise
+    under it."""
+    n, size = A.nframes("NO"), A._MORPH_SIZE
+    rng = np.random.default_rng(7)
+    base = []
+    for i in range(n):
+        f = rng.integers(0, 256, (size, size, 4)).astype(np.float64)
+        f[..., 3] = 0.0
+        f[8:8 + i + 2, 8:8 + i + 2, 3] = 200.0     # a square that grows
+        base.append(f)
+    ghost = []
+    for f in base:
+        g = f.copy()
+        g[..., :3] = np.where(g[..., 3:4] > 0, g[..., :3],
+                              rng.integers(0, 256, g[..., :3].shape))
+        ghost.append(g)
+    flat = []
+    for f in base:                                  # one colour, alpha moves
+        g = f.copy()
+        g[..., :3] = 40.0
+        flat.append(g)
+    still = [base[0].copy() for _ in range(n)]
+
+    def steps(fr):
+        return A._morph_visible_steps("NO", lambda _n, i, _s: fr[i])
+
+    a, b = steps(base), steps(ghost)
+    check("morph steps ignore hidden RGB", float(np.abs(a - b).max()) < 1e-12,
+          "largest difference %.3g over %d steps" % (float(np.abs(a - b).max()), len(a)))
+    fa = steps(flat)
+    # The bar is only "clearly not zero": the square adds a couple of dozen
+    # cells of 1024 per step, so the honest size of the smallest step is
+    # fractions of a level. What is being tested is that it is not zero.
+    check("morph steps see alpha alone", float(fa.min()) > 0.1,
+          "smallest step %.3f with the colour held flat" % float(fa.min()))
+    sa = steps(still)
+    check("morph steps are zero on a still cycle", float(np.abs(sa).max()) == 0.0,
+          "largest step %.3g" % float(np.abs(sa).max()))
+
+
 def test_no_ring_support():
     """_no_ring owns the prohibition sign and nothing else on the frame.
 

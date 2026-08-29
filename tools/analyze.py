@@ -1473,9 +1473,31 @@ def morph_health(name, get=frame):
         "iou_mean": float(np.mean(iou)),
         "area_ratio": float(max(area) / max(1, min(area))),
         "peak_over_mean": float(d.max() / max(d.mean(), 1e-9)),
-        "peak_abs": float(d.max()),
-        "steps": [float(v) for v in d],
     }
+
+
+def _morph_visible_steps(name, get):
+    """Frame-to-frame change as anybody actually sees it, on a fixed grid.
+
+    No threshold and no mask. Every pixel of the frame is composited onto three
+    backgrounds and the steps are the mean absolute difference over pixels,
+    channels and backgrounds. That removes the whole class of error the masked
+    reading had: `_deltas` selects pixels above a fraction of the pair's own
+    peak alpha, and the author's peak is 249..255 where ours is 222..248, so the
+    two silhouettes were compared through different masks of different sizes -
+    on NO's third step his held one pixel and ours thirty-six, and a mean over
+    one pixel is not a cadence. Here the denominator is the number of pixels,
+    which is the same for him, for us and for every step.
+
+    Change in RGB under zero alpha drops out, because it is invisible; growth of
+    geometry and of alpha is counted, because it is not."""
+    n = nframes(name)
+    fr = [np.asarray(get(name, i, _MORPH_SIZE), dtype=np.float64) for i in range(n)]
+    comp = [[f[..., :3] * (f[..., 3:4] / 255.0) + bg * (1.0 - f[..., 3:4] / 255.0)
+             for bg in _BACKGROUNDS.values()] for f in fr]
+    return np.array([float(np.mean([np.abs(a - b).mean()
+                                    for a, b in zip(comp[i], comp[i + 1])]))
+                     for i in range(n - 1)])
 
 
 _BACKGROUNDS = {"white": 255.0, "grey": 128.0, "black": 0.0}
@@ -2160,10 +2182,10 @@ def _collect_one(job):
             # Step by step against his own, which peak/mean cannot do: it is a
             # ratio, and a render that stops over-moving in one part of the
             # cycle shrinks the denominator and reads worse for it.
-            mine, his = e["morph"].pop("steps"), e["morph_orig"].pop("steps")
-            e["morph"]["cadence_err"] = (
-                float(np.abs(np.array(mine) - np.array(his)).mean())
-                if len(mine) == len(his) else None)
+            mine = _morph_visible_steps(name, frame)
+            his = _morph_visible_steps(name, orig_frame)
+            e["morph"]["peak_abs"] = float(mine.max())
+            e["morph"]["cadence_err"] = float(np.abs(mine - his).mean())
     return name, e
 
 
