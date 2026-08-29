@@ -137,7 +137,18 @@ THRESHOLDS = {
     # tip_convergence has no threshold - see gate() for why it is diagnostic
     "morph_iou": 1.0,           # min IoU between morph frames, as a share of the
                                 # author's own (1.0 = must be at least as coherent)
-    "morph_peak": 1.0,          # peak/mean of a morph's frame deltas, same basis
+    "morph_peak": 1.0,          # peak/mean of a morph's frame deltas, same basis.
+                                # Diagnostic only since 2026-08-22: not monotone
+                                # in quality, because it is a ratio and its
+                                # denominator falls when a render stops moving
+                                # where the author does not.
+    # morph_peak_abs and morph_cadence_err have no threshold here on purpose:
+    # both are pure ratchets against the baseline, like the tip readings. The
+    # first says the largest single step must not grow, the second that the
+    # cycle must not move further from his. Neither carries an absolute target,
+    # because there is no honest one to write: the remaster's steps run 2-3x his
+    # on every morph (NO 5->6 reads 52.09 against his 14.30), and any constant
+    # picked today would be picked to fit that, which is what a ratchet is for.
     "tip_extreme_contrast": 1.0,  # the most visible pixel at a point, as a share
                                 # of the author's own. tip_profile is reported
                                 # beside it and is not gated - see tip_profile.
@@ -1462,6 +1473,8 @@ def morph_health(name, get=frame):
         "iou_mean": float(np.mean(iou)),
         "area_ratio": float(max(area) / max(1, min(area))),
         "peak_over_mean": float(d.max() / max(d.mean(), 1e-9)),
+        "peak_abs": float(d.max()),
+        "steps": [float(v) for v in d],
     }
 
 
@@ -2144,6 +2157,13 @@ def _collect_one(job):
         else:
             e["morph"] = morph_health(name)
             e["morph_orig"] = morph_health(name, get=orig_frame)
+            # Step by step against his own, which peak/mean cannot do: it is a
+            # ratio, and a render that stops over-moving in one part of the
+            # cycle shrinks the denominator and reads worse for it.
+            mine, his = e["morph"].pop("steps"), e["morph_orig"].pop("steps")
+            e["morph"]["cadence_err"] = (
+                float(np.abs(np.array(mine) - np.array(his)).mean())
+                if len(mine) == len(his) else None)
     return name, e
 
 
@@ -2425,9 +2445,21 @@ def gate(rep, base=None):
             if mo["iou_min"] < mo0["iou_min"] * T["morph_iou"]:
                 fail(name, "morph_iou_min", mo["iou_min"], "<",
                      round(mo0["iou_min"] * T["morph_iou"], 3), "morph_iou")
-            if mo["peak_over_mean"] > mo0["peak_over_mean"] * T["morph_peak"]:
-                fail(name, "morph_peak", mo["peak_over_mean"], ">",
-                     round(mo0["peak_over_mean"] * T["morph_peak"], 2))
+            # peak/mean is diagnostic, not a veto - see docs and NEXT.md 54.
+            # It is not monotone in quality: removing genuine over-motion from
+            # part of a cycle lowers the mean, and an untouched old outlier then
+            # reads as a regression. What decides is the distance from his own
+            # cadence, step by step, plus the largest step in absolute terms so
+            # that a real new spike cannot hide behind a quieter average.
+            for key, got in (("morph_peak_abs", mo["peak_abs"]),
+                             ("morph_cadence_err", mo.get("cadence_err"))):
+                ref = was.get(name, {}).get(key)
+                if got is None or ref is None:
+                    continue
+                if got > ref * (1.0 + _RATCHET_SLACK):
+                    bad.append(f"{name:12s} {key:18s} {got:8.3f} > "
+                               f"{ref * (1.0 + _RATCHET_SLACK):.3f}"
+                               f"  (was {ref:.3f})")
     return bad, debt, unmeasured, attention
 
 
@@ -2489,6 +2521,8 @@ def _flat(e):
         "legacy_jitter_rows": ij.get("rows") if ij else None,
         "legacy_jitter_coverage": ij.get("pair_coverage") if ij else None,
         "morph_iou": mo["iou_min"] if mo else None,
+        "morph_peak_abs": mo["peak_abs"] if mo else None,
+        "morph_cadence_err": mo.get("cadence_err") if mo else None,
         "temporal_fold": ts.get("fold"),
         "temporal_body": ts.get("body"),
         "tip_sheen": (e.get("tip_sheen") or {}).get("amp"),
