@@ -51,7 +51,7 @@
 |---|---|
 | Debian / Ubuntu / Mint | `sudo apt install ./chrome-glass-remastered-cursors_*_all.deb` |
 | Arch / Manjaro | скачайте `PKGBUILD` из релиза и выполните `makepkg -si` в его каталоге |
-| Любой, без root | `mkdir -p ~/.local/share/icons && tar -xzf ChromeGlassRemastered-linux.tar.gz -C ~/.local/share/icons/` |
+| Любой, без root | `mkdir -p "$HOME/.icons" && tar -xzf ChromeGlassRemastered-linux.tar.gz -C "$HOME/.icons"` |
 
 Дальше выберите **Chrome Glass Remastered** в GNOME Tweaks или в **Параметры системы → Внешний вид → Курсоры** на KDE Plasma. Из терминала:
 
@@ -60,7 +60,7 @@ gsettings set org.gnome.desktop.interface cursor-theme "Chrome Glass Remastered"
 plasma-apply-cursortheme "Chrome Glass Remastered"                                # KDE Plasma
 ```
 
-Как убрать: `sudo apt remove chrome-glass-remastered-cursors`, `sudo pacman -R chrome-glass-remastered-cursors` или `rm -rf ~/.local/share/icons/"Chrome Glass Remastered"` для ручной установки.
+Как убрать: `sudo apt remove chrome-glass-remastered-cursors`, `sudo pacman -R chrome-glass-remastered-cursors` или `rm -rf ~/.icons/"Chrome Glass Remastered"` для ручной установки.
 
 </details>
 
