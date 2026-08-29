@@ -2091,10 +2091,21 @@ def _no_ring(rgb, alpha, name, idx, size):
     want = 255.0 * cov
     want = np.where(d < mid, np.maximum(want, alpha), want)
     alpha = auth * want + (1.0 - auth) * alpha
-    # the colour is the whole sign's, bar included: it is the same red on his
-    # art (Lab 46.5..47.4 / 83.6..86.9 / 37.4..38.6 measured on the bar alone),
-    # and recolouring only the ring would put a seam where the two cross
-    paint = (np.clip((R + _RING_MARGIN - d) / _RING_FADE, 0.0, 1.0) * keep)[..., None]
+    # The colour is the whole sign's, bar included: on his art the two are one
+    # red, measured rather than assumed - the bar's own opaque pixels and the
+    # ring's differ by 0.23, 0.27, 0.08 and 0.01 of delta_e across the four
+    # frames. Recolouring only the ring would put a seam where they cross.
+    #
+    # But only where the sign has material. Inside the hole most of what shows
+    # is the pointer's glass, and painting it red cost 0.7 of delta_e there
+    # while the disc-wide paint was in. Colourfulness decides, on the same
+    # calibration as the pointer mask: the sign is the one saturated thing on
+    # the frame, so a pixel counts as its own to the extent that its channels
+    # spread, and the analytic ring counts whatever its coverage says.
+    spread = rgb.max(-1) - rgb.min(-1)
+    sign = np.maximum(cov, np.clip(spread / _RING_GREY, 0.0, 1.0))
+    paint = (np.clip((R + _RING_MARGIN - d) / _RING_FADE, 0.0, 1.0)
+             * keep * sign)[..., None]
     return paint * np.array(_RING_RGB) + (1.0 - paint) * rgb, alpha
 
 
