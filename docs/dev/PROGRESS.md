@@ -8,6 +8,8 @@ Targets: drift 0.10 logical units, gap and wander 0, delta_e 5, temporal 1.0. Th
 
 The table lapsed between 2026-08-15 and 2026-08-20 - the work of those days is committed and written up, but no rows were added for it. What it covers is NEXT.md 35 to 38: the coverage double count at the rim, the fold tracker, UpArrow's apex, the glass level anchored at the author's own resolution, and `_tip_glass` measured and left alone. The `debt` column therefore steps rather than slides across that gap.
 
+It lapsed again between 2026-08-20 and 2026-08-30, for a different reason: the fold contract itself was rebuilt in that gap (NEXT.md 49). `fold_gap`/`fold_wander`/`fold_jag` stopped deciding pass/fail and became `legacy_fold_*`, replaced by `fold_unres`/`fold_s_thin`/`fold_s_conv`/`fold_curv`/`fold_step`/`fold_notch`/`fold_jitter` - a different measurement, not a number that fits these columns, so no row was forced into the old shape. `_fold_restep` shipped (51), NO's prohibition ring was redrawn (52-56), the fold debt was traced down to three separate roots plus one real regression on NO (61-63, closed 65-68), and `NO[5] delta_e` was localized with one rejected fix candidate (69-70). The 12 positions the debt now stands at, and what would reopen each one, are tracked in STATUS.md's debt table instead of here.
+
 | when | what changed | reg | debt | tip_contrast | tip_convergence | temporal_fold | inner_jitter | fold_gap | fold_wander | fold_jag | delta_e | scale_drift |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-08-07 | харнесс на месте, базовый замер | 0 | 84 | 0.073 | 4.800 | 1.241 | 0.321 | 2.375 | 3.606 | 206.267 | 8.970 | 0.597 |
