@@ -27,10 +27,11 @@ Reported per station:
     d, w           notch depth below the fitted step, and its width
     rms            what the model failed to explain
 
-`s` gets a resolution verdict rather than a bare number: under one hardware
-pixel of transition there is nothing to measure, and the lowest rung of the
-search grid is a floor, not a reading. The author holds s = 0.60 LU at 128, 256
-and 512 alike.
+`s` gets two verdicts rather than a bare number. Under one hardware pixel of
+transition there is nothing to resolve (`unres`). A flat profile-likelihood
+curve also contains no defensible width even at high resolution (`unid`); such
+stations stay in the coverage and shape diagnostics but do not vote in the
+reported width. The author holds s = 0.60 LU at 128, 256 and 512 alike.
 
 `bend` is a confidence figure, not a defect: small means the straight facet is a
 fair description and the slope can be trusted, large means it is not. On the
@@ -100,15 +101,25 @@ inner_tip = F.inner_tip
 
 def _summary(tr, count):
     a = {k: np.array([m[k] for m in tr]) for k in
-         ("c", "s", "b_lo", "b_hi", "step", "d", "rms",
+         ("c", "b_lo", "b_hi", "step", "d", "rms",
           "k_lo", "k_hi", "bend_lo", "bend_hi")}
-    unresolved = sum(1 for m in tr if not m["s_resolved"])
+    identified = [m for m in tr if m["s_identified"]]
+    widths = np.array([m["s"] for m in identified])
+    unidentified = sum(1 for m in tr if not m["s_identified"])
+    unresolved = sum(1 for m in identified if not m["s_resolved"])
     return dict(stations="%d/%d" % (len(tr), count), unresolved=unresolved,
+                unidentified=unidentified,
                 **{k: float(np.median(v)) for k, v in a.items()},
                 c_p10=float(np.percentile(a["c"], 10)),
                 c_p90=float(np.percentile(a["c"], 90)),
-                s_p10=float(np.percentile(a["s"], 10)),
-                s_p90=float(np.percentile(a["s"], 90)))
+                s=float(np.median(widths)) if len(widths) else None,
+                s_p10=float(np.percentile(widths, 10)) if len(widths) else None,
+                s_p90=float(np.percentile(widths, 90)) if len(widths) else None)
+
+
+def _num(value, width=8, precision=2):
+    return (f"{value:{width}.{precision}f}" if value is not None
+            else f"{'-':>{width}}")
 
 
 _ASIDE = {"Hand": "author frame 0 is Arrow's - not an independent reference",
@@ -118,8 +129,8 @@ _ASIDE = {"Hand": "author frame 0 is Arrow's - not an independent reference",
 def _report(name, size, count):
     print("\n=== %s @ %d ===%s"
           % (name, size, "  [%s]" % _ASIDE[name] if name in _ASIDE else ""))
-    print("%-8s%9s%8s%8s%8s%8s%8s%8s%8s%8s%7s%7s" %
-          ("who", "stations", "c", "s", "unres", "b_lo", "b_hi",
+    print("%-8s%9s%8s%8s%8s%8s%8s%8s%8s%8s%8s%7s%7s" %
+          ("who", "stations", "c", "s", "unid", "unres", "b_lo", "b_hi",
            "k_lo", "k_hi", "bend", "notch", "rms"))
     for who, get in (("author", A.orig_frame), ("ours", A.frame)):
         tr = F.track(name, 0, size, get, count=count)
@@ -128,10 +139,11 @@ def _report(name, size, count):
                   % (who, "0/%d" % count))
             continue
         r = _summary(tr, count)
-        print("%-8s%9s%+8.2f%8.2f%8d%8.1f%8.1f%+8.1f%+8.1f%8.1f%7.1f%7.1f" %
-              (who, r["stations"], r["c"], r["s"], r["unresolved"],
-               r["b_lo"], r["b_hi"], r["k_lo"], r["k_hi"],
-               max(r["bend_lo"], r["bend_hi"]), r["d"], r["rms"]))
+        print(f"{who:<8}{r['stations']:>9}{r['c']:+8.2f}{_num(r['s'])}"
+              f"{r['unidentified']:8d}{r['unresolved']:8d}"
+              f"{r['b_lo']:8.1f}{r['b_hi']:8.1f}{r['k_lo']:+8.1f}"
+              f"{r['k_hi']:+8.1f}{max(r['bend_lo'], r['bend_hi']):8.1f}"
+              f"{r['d']:7.1f}{r['rms']:7.1f}")
 
 
 def _inner_report(name, size, count):
@@ -154,8 +166,8 @@ def _inner_report(name, size, count):
 def _converge(name, sizes, count):
     """The same station at several rungs: is s a width or the pixel pitch?"""
     print("\n=== %s, s against resolution ===" % name)
-    print("%-8s%6s%5s%8s%8s%8s%8s%8s" %
-          ("who", "size", "n", "s med", "s p10", "s p90", "unres", "px LU"))
+    print("%-8s%6s%5s%8s%8s%8s%8s%8s%8s" %
+          ("who", "size", "n", "s med", "s p10", "s p90", "unid", "unres", "px LU"))
     for who, get in (("author", A.orig_frame), ("ours", A.frame)):
         for size in sizes:
             tr = F.track(name, 0, size, get, count=count)
@@ -163,9 +175,12 @@ def _converge(name, sizes, count):
                 print("%-8s%6d    0 stations - fault in the measurer" % (who, size))
                 continue
             r = _summary(tr, count)
-            print("%-8s%6d%5d%8.3f%8.3f%8.3f%8d%8.3f" %
-                  (who, size, len(tr), r["s"], r["s_p10"], r["s_p90"],
-                   r["unresolved"], V.LOGICAL / float(size)))
+            print(f"{who:<8}{size:6d}{len(tr):5d}"
+                  f"{_num(r['s'], precision=3)}"
+                  f"{_num(r['s_p10'], precision=3)}"
+                  f"{_num(r['s_p90'], precision=3)}"
+                  f"{r['unidentified']:8d}{r['unresolved']:8d}"
+                  f"{V.LOGICAL / float(size):8.3f}")
 
 
 def _sheet(name, size, count, out, rows=8):

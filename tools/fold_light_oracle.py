@@ -2,9 +2,10 @@
 chord coordinates instead of a per-pixel RGB field.
 
 Spec: docs/dev/NEXT.md, "AppStarting/Wait: воспроизводимый план одного
-oracle-файла" (2026-08-30, on 432a262). Diagnostic only - does not import
-into cgr/hybrid.py or cgr/lightanim.py, does not touch data/metrics-baseline.json,
-does not write outside .metrics/fold-light-oracle/.
+oracle-файла" (2026-08-30, on 432a262). The accepted geometry/coefficient
+model now lives in cgr.lightanim; this file exercises that production model
+against the old per-pixel path and remains the numerical/visual oracle. It does
+not touch data/metrics-baseline.json and writes only to its requested out dir.
 
 Idea: canonical_frame already carries the accepted fold geometry (c(t),
 s=_RESTEP_WIDTH). Fix that geometry once, from the canonical frame alone.
@@ -41,193 +42,12 @@ import foldfit as F
 
 CURSORS_DEFAULT = ["AppStarting", "Wait", "Hand"]
 SIZES_DEFAULT = [128, 256, 512]
-VISUAL_SIZES_DEFAULT = [32, 128, 512]
 
-# Reused verbatim from cgr.hybrid._fold_restep - not reintroduced as new
-# constants, per the spec's own ban on inventing new tuning knobs.
-_REACH = H._RESTEP_REACH
-_PITCH = H._RESTEP_PITCH
-_STATIONS = H._RESTEP_STATIONS
-_FIT = H._RESTEP_FIT
-_WIDTH = H._RESTEP_WIDTH
-_SUPPORT = H._RESTEP_SUPPORT
-_FADE = H._RESTEP_FADE
+# Only the point-sampling diagnostic below needs these values. Geometry,
+# coefficients, reconstruction and pixel remapping come from cgr.lightanim so
+# the oracle cannot drift away from the production model it is judging.
 _PROTECT = H._RESTEP_PROTECT
 _PROTECT_FADE = H._RESTEP_PROTECT_FADE
-
-
-# --------------------------------------------------------------------------
-# Step B: one fixed fold geometry per (name, size), from the canonical frame.
-# --------------------------------------------------------------------------
-
-def build_geometry(name, size, idx):
-    """Replicates _fold_restep's own station/centre search, once, on the
-    already-accepted canonical frame. Nothing here is re-run per source
-    master or per output phase - c(t) is computed exactly once."""
-    ch = H._fold_chord(name, idx)
-    if ch is None:
-        return None, "no_fold_chord"
-    (tx, ty), (mx, my) = ch
-    L = size / V.LOGICAL
-    dx, dy = mx - tx, my - ty
-    seg = float(np.hypot(dx, dy))
-    if seg < 1e-6:
-        return None, "degenerate_chord"
-    ux, uy = dx / seg, dy / seg
-    vx, vy = -uy, ux
-
-    base = np.asarray(LA.canonical_frame(name, size, idx), dtype=np.float64)
-    lum_c = np.ascontiguousarray(base[..., :3].mean(-1))
-    dist = H._edge_distance_at(name, idx, size)
-    alpha = np.ascontiguousarray(H._up_alpha(name, idx, size).astype(np.float64))
-
-    ns = np.arange(-_REACH, _REACH + _PITCH, _PITCH)
-    ts = np.linspace(0.0, 1.0, _STATIONS)
-    smooth = max(3, int(round(0.15 / _PITCH)) | 1)
-
-    centers = np.full(len(ts), np.nan)
-    reasons = ["no_station"] * len(ts)
-    station = [None] * len(ts)  # (sx, sy, run, nn, left, right) for good stations
-
-    for k, t in enumerate(ts):
-        px, py = tx + dx * t, ty + dy * t
-        sx, sy = (px + ns * vx) * L - 0.5, (py + ns * vy) * L - 0.5
-        y = H._sample1(lum_c, sx, sy)
-        d = H._sample1(dist, sx, sy)
-        a = H._sample1(alpha, sx, sy)
-        ok = (d >= _PROTECT) & (a >= 24.0) & np.isfinite(y)
-        if ok.sum() < 40:
-            reasons[k] = "guard<1: fewer than 40 admissible samples"
-            continue
-        idxs = np.nonzero(ok)[0]
-        run = max(np.split(idxs, np.nonzero(np.diff(idxs) > 1)[0] + 1), key=len)
-        if len(run) < 40:
-            reasons[k] = "guard<1: longest run under 40 samples"
-            continue
-        nn, yy = ns[run], y[run]
-        sm = np.convolve(np.pad(yy, smooth // 2, mode="edge"),
-                          np.ones(smooth) / smooth, "valid")
-        g = np.gradient(sm, nn)
-        room = _FIT[1] + 0.1
-        inner = (nn >= nn.min() + room) & (nn <= nn.max() - room)
-        if inner.sum() < 3:
-            reasons[k] = "guard<1: no room for an inner search window"
-            continue
-        ce = float(nn[int(np.argmax(np.where(inner, np.abs(g), 0.0)))])
-        lo, hi = _FIT
-        left = (nn <= ce - lo) & (nn >= ce - hi)
-        right = (nn >= ce + lo) & (nn <= ce + hi)
-        if left.sum() < 6 or right.sum() < 6:
-            reasons[k] = "guard<1: fit window too thin either side"
-            continue
-        centers[k] = ce
-        station[k] = (sx[run], sy[run], nn, left, right)
-        reasons[k] = "ok"
-
-    good = np.nonzero(np.isfinite(centers))[0]
-    if len(good) < 5:
-        return None, "fewer than 5 stations resolved on canonical"
-
-    c = _smooth_stations(centers[good], good, len(ts))
-
-    return dict(name=name, size=size, idx=idx, tip=(tx, ty), notch=(mx, my),
-                ux=ux, uy=uy, vx=vx, vy=vy, seg=seg, L=L,
-                ts=ts, ns=ns, c=c, good=good, reasons=reasons, station=station,
-                dist=dist, alpha=alpha), None
-
-
-def _smooth_stations(v_at_good, good, n_stations):
-    """np.interp fill + median-5 + box-5 - exactly _fold_restep's own
-    per-column smoothing, applied here to one column at a time."""
-    v = np.interp(np.arange(n_stations), good, v_at_good)
-    med = np.array([np.median(v[max(0, i - 2):i + 3]) for i in range(len(v))])
-    pad = np.pad(med, 2, mode="edge")
-    return np.convolve(pad, np.ones(5) / 5.0, "valid")
-
-
-# --------------------------------------------------------------------------
-# Step C: per-channel facet coefficients from the nine authored masters.
-# --------------------------------------------------------------------------
-
-def extract_coefficients(geom):
-    """(n_src, stations, 3, 4) array of (aL, kL, aR, kR), filled and smoothed
-    exactly as _fold_restep smooths its own five columns - per (source frame,
-    channel) column, using the SAME good-station set every time, because the
-    admissible sample window is geometry (alpha, edge distance), which every
-    master shares with canonical on these frozen-silhouette cursors."""
-    name, size = geom["name"], geom["size"]
-    n_src = len(H.BY_NAME[name]["frames"])
-    ts, good, station = geom["ts"], geom["good"], geom["station"]
-    coef = np.full((n_src, len(ts), 3, 4), np.nan)
-    for i in range(n_src):
-        master = H._master_rgb(name, i, size)
-        lin = V.srgb_to_linear(np.clip(master, 0, 255).astype(np.uint8)).astype(np.float64)
-        for k in good:
-            sx, sy, nn, left, right = station[k]
-            ce = geom["c"][k]
-            for ch in range(3):
-                yy = H._sample1(np.ascontiguousarray(lin[..., ch]), sx, sy)
-                al, kl = H._restep_line(nn[left] - ce, yy[left])
-                ar, kr = H._restep_line(nn[right] - ce, yy[right])
-                coef[i, k, ch] = (al, kl, ar, kr)
-        for ch in range(3):
-            for p in range(4):
-                coef[i, :, ch, p] = _smooth_stations(coef[i, good, ch, p], good, len(ts))
-    return coef
-
-
-# --------------------------------------------------------------------------
-# Step D: interpolate coefficients over phase, reconstruct the local field.
-# --------------------------------------------------------------------------
-
-def reconstruct_local(coef_row, ns_grid, c):
-    """coef_row: (stations, 3, 4). Returns (stations, len(ns_grid), 3), the
-    two-facet tanh model at every sampled (t, n), fixed centre and width."""
-    x = ns_grid[None, :] - c[:, None]                      # (stations, n)
-    phi = 0.5 * (1.0 + np.tanh(x / _WIDTH))
-    aL, kL, aR, kR = (coef_row[..., i] for i in range(4))    # each (stations, 3)
-    left = aL[:, None, :] + kL[:, None, :] * x[:, :, None]
-    right = aR[:, None, :] + kR[:, None, :] * x[:, :, None]
-    return (1.0 - phi)[:, :, None] * left + phi[:, :, None] * right
-
-
-def build_pixel_grid(geom, size):
-    """Everything the bilinear remap needs that does not depend on phase or
-    channel: station/normal indices, blend weights, the support+guard weight
-    that later blends candidate against ship."""
-    tx, ty = geom["tip"]
-    ux, uy, vx, vy, seg, L = geom["ux"], geom["uy"], geom["vx"], geom["vy"], geom["seg"], geom["L"]
-    ts, ns, c = geom["ts"], geom["ns"], geom["c"]
-    ys, xs = np.mgrid[0:size, 0:size]
-    relx, rely = (xs + 0.5) / L - tx, (ys + 0.5) / L - ty
-    tt = (relx * ux + rely * uy) / seg
-    nnp = relx * vx + rely * vy
-    fk = np.clip(tt, 0.0, 1.0) * (len(ts) - 1)
-    fj = (nnp + _REACH) / _PITCH
-    k0 = np.clip(np.floor(fk).astype(int), 0, len(ts) - 2)
-    j0 = np.clip(np.floor(fj).astype(int), 0, len(ns) - 2)
-    a1 = fk - k0
-    b1 = np.clip(fj - j0, 0.0, 1.0)
-    c_pixel = (1.0 - a1) * c[k0] + a1 * c[k0 + 1]
-    inside = ((tt >= 0.0) & (tt <= 1.0) & (np.abs(nnp) <= _REACH)
-              & (H._mask(geom["name"], geom["idx"], size) > 0))
-    guard = np.clip((geom["dist"] - _PROTECT) / _PROTECT_FADE, 0.0, 1.0)
-    support = np.clip((_SUPPORT + _FADE - np.abs(nnp - c_pixel)) / _FADE, 0.0, 1.0)
-    weight = np.where(inside, support * guard, 0.0)
-    return dict(k0=k0, j0=j0, a1=a1, b1=b1, inside=inside, guard=guard,
-                weight=weight, tt=tt, nnp=nnp, c_pixel=c_pixel)
-
-
-def remap_field(grid, field):
-    """field: (stations, n_count, 3). Bilinear gather onto the pixel grid,
-    zero outside the fold's reach/mask - the same gather _fold_restep's tail
-    does, generalised to a channel axis."""
-    k0, j0, a1, b1 = grid["k0"], grid["j0"], grid["a1"], grid["b1"]
-    out = ((1 - a1)[..., None] * (1 - b1)[..., None] * field[k0, j0]
-           + a1[..., None] * (1 - b1)[..., None] * field[k0 + 1, j0]
-           + (1 - a1)[..., None] * b1[..., None] * field[k0, j0 + 1]
-           + a1[..., None] * b1[..., None] * field[k0 + 1, j0 + 1])
-    return np.where(grid["inside"][..., None], out, 0.0)
 
 
 # --------------------------------------------------------------------------
@@ -237,15 +57,16 @@ def remap_field(grid, field):
 
 def build_frames(name, size, verbose=False):
     idx = LA.canonical_index(name)
-    geom, err = build_geometry(name, size, idx)
-    if geom is None:
+    facet, err = LA._facet_model(name, size, idx)
+    if facet is None:
         return None, err, None
+    geom, coef, grid = facet
 
-    _idx2, base, lin, alpha, raw, n_src, vis, seen, anchor = LA._setup(name, size, LA.HARMONICS, idx)
+    _idx2, _base, lin, alpha, raw, n_src, vis, _seen, anchor = LA._setup(
+        name, size, LA.HARMONICS, idx)
     phases = LA.paced_phases(name, size)
     out_n = len(phases)
 
-    coef = extract_coefficients(geom)
     anchor_phase = idx / n_src
     coef_anchor = LA.periodic_at(coef, [anchor_phase], LA.HARMONICS)[0]  # (stations,3,4)
     coef_phase = LA.periodic_at(coef, phases, LA.HARMONICS)              # (out_n,stations,3,4)
@@ -258,7 +79,6 @@ def build_frames(name, size, verbose=False):
     if identity_gap > 1e-10:
         return None, f"identity check failed: {identity_gap:.3e}", None
 
-    grid = build_pixel_grid(geom, size)
     field_light = LA.periodic_at(raw, phases, LA.HARMONICS) - anchor  # production's own field
 
     ship_frames, candidate_frames, diag = [], [], []
@@ -267,14 +87,7 @@ def build_frames(name, size, verbose=False):
         ship_lin = LA._lit(lin, r)
 
         delta_coef = coef_phase[t] - coef_anchor                      # (stations,3,4)
-        local = reconstruct_local(delta_coef, geom["ns"], geom["c"])  # (stations,n,3)
-        fold_delta = remap_field(grid, local)                          # (size,size,3)
-
-        gscale = LA._gamut_scale(np.clip(lin, 0.0, 1.0), fold_delta)
-        fold_lin = lin + fold_delta * gscale[..., None]
-
-        w = grid["weight"][..., None]
-        candidate_lin = ship_lin * (1.0 - w) + fold_lin * w
+        candidate_lin = LA._facet_apply(lin, ship_lin, delta_coef, geom, grid)
 
         ship_srgb = V.linear_to_srgb(np.clip(ship_lin, 0.0, 1.0)).astype(np.float64)
         cand_srgb = V.linear_to_srgb(np.clip(candidate_lin, 0.0, 1.0)).astype(np.float64)
@@ -283,6 +96,8 @@ def build_frames(name, size, verbose=False):
         candidate_frames.append(np.asarray(H._compose(cand_srgb, alpha), dtype=np.float64))
 
         if verbose:
+            local = LA._facet_reconstruct_local(delta_coef, geom["ns"], geom["c"])
+            fold_delta = LA._facet_remap_field(grid, local)
             diag.append(dict(t=t, phase=float(phases[t]),
                               weight_max=float(grid["weight"].max()),
                               delta_max=float(np.abs(fold_delta).max())))
@@ -315,7 +130,8 @@ def oracle_step_multiscale(name, sizes, get_frames):
     shipped ones. geom follows _cycle_geom's own contract: a fixed authored
     index for a frozen silhouette, or None to use the frame's own index."""
     sizes = [s for s in sizes if s in A._STEP_SIZES]
-    out = {"resolved": [], "cover": 1.0, "unres": 0.0, "curv": 0.0,
+    out = {"resolved": [], "cover": 1.0, "unident": 0.0, "unres": 0.0,
+           "curv": 0.0,
            "curv_orig": 0.0, "jumps": 0, "rms": 0.0, "s_conv": 1.0,
            "s_ratio_lo": None, "s_ratio_hi": None, "step": None,
            "notch": None, "tip": None, "s_at": {}}
@@ -332,14 +148,19 @@ def oracle_step_multiscale(name, sizes, get_frames):
             if p is None:
                 continue
             rows[t] = p
-            seen.setdefault(t, {})[size] = p["s"]
             out["cover"] = min(out["cover"], p["cover"])
-            out["unres"] = max(out["unres"], p["unres"])
+            out["unident"] = max(out["unident"], p["unident"])
+            if p["unres"] is not None:
+                out["unres"] = max(out["unres"], p["unres"])
             out["curv"] = max(out["curv"], p["curv"])
             out["jumps"] = max(out["jumps"], p["jumps"])
             out["rms"] = max(out["rms"], p["rms"])
             ph = phases[t]
-            for key, r in (("s_ratio", A._ratio(p["s"], A.author_at(name, size, "s", ph), 1e-3)),
+            if p["s"] is not None:
+                seen.setdefault(t, {})[size] = p["s"]
+            for key, r in (("s_ratio", (A._ratio(
+                                p["s"], A.author_at(name, size, "s", ph), 1e-3)
+                                if p["s"] is not None else None)),
                            ("step", A._ratio(p["step"], A.author_at(name, size, "step", ph), 1.0)),
                            ("notch", A._ratio(p["notch"], A.author_at(name, size, "notch", ph), 1.0))):
                 if r is None:
@@ -352,7 +173,9 @@ def oracle_step_multiscale(name, sizes, get_frames):
                     out[key] = r if out[key] is None else min(out[key], r)
         if rows:
             out["resolved"].append(size)
-            out["s_at"][str(size)] = float(np.median([p["s"] for p in rows.values()]))
+            widths = [p["s"] for p in rows.values() if p["s"] is not None]
+            if widths:
+                out["s_at"][str(size)] = float(np.median(widths))
         if size in A._TIP_SIZES:
             for t, f in enumerate(frames):
                 idx = t if geom is None else geom
@@ -367,34 +190,57 @@ def oracle_step_multiscale(name, sizes, get_frames):
     return out
 
 
-def gate_step(name, st):
+def gate_step(name, st, baseline=None):
     """The exact fold checks tools/analyze.py's gate() runs on a resolved
     multiscale step reading (analyze.py:2381-2410), reused rather than
     re-derived so this oracle's go/no-go is the real gate, not a guess at
-    it. Returns a list of failure strings, empty if this cursor would pass."""
+    it. With ``baseline`` supplied, a missed absolute target is debt when it is
+    no worse than ship and a failure only when it regresses, matching
+    analyze.gate. Returns ``(failures, debt)``."""
     T = A.THRESHOLDS
-    bad = []
+    bad, debt = [], []
     if not st["resolved"]:
-        return ["fold_unresolved: no size in the ladder resolved a fold reading"]
-    if st["cover"] < T["fold_cover"]:
-        bad.append(f"fold_cover {st['cover']:.3f} < {T['fold_cover']}")
-    if st["unres"] > T["fold_unres"]:
-        bad.append(f"fold_unres {st['unres']:.3f} > {T['fold_unres']}")
+        return ["fold_unresolved: no size in the ladder resolved a fold reading"], []
+
+    def check(metric, got, op, want, previous=None):
+        misses = got > want if op == ">" else got < want
+        if not misses:
+            return
+        line = f"{metric} {got:.3f} {op} {want}"
+        if baseline is None or previous is None:
+            bad.append(line)
+            return
+        tol = abs(previous) * 1e-3 + 1e-6
+        worse = got > previous + tol if op == ">" else got < previous - tol
+        (bad if worse else debt).append(line)
+
+    check("fold_cover", st["cover"], "<", T["fold_cover"],
+          None if baseline is None else baseline["cover"])
+    if (baseline is not None
+            and st["unident"] > baseline["unident"] * (1.0 + A._RATCHET_SLACK) + 1e-6):
+        bad.append(f"fold_unident {st['unident']:.3f} > "
+                   f"ship {baseline['unident']:.3f}")
+    check("fold_unres", st["unres"], ">", T["fold_unres"],
+          None if baseline is None else baseline["unres"])
     lo, hi = st["s_ratio_lo"], st["s_ratio_hi"]
-    if lo is not None and lo < T["fold_s_min"]:
-        bad.append(f"fold_s_thin {lo:.3f} < {T['fold_s_min']}")
-    if hi is not None and hi > T["fold_s_max"]:
-        bad.append(f"fold_s_wide {hi:.3f} > {T['fold_s_max']}")
-    if st["s_conv"] > T["fold_s_conv"]:
-        bad.append(f"fold_s_conv {st['s_conv']:.3f} > {T['fold_s_conv']}")
+    if lo is not None:
+        check("fold_s_thin", lo, "<", T["fold_s_min"],
+              None if baseline is None else baseline["s_ratio_lo"])
+    if hi is not None:
+        check("fold_s_wide", hi, ">", T["fold_s_max"],
+              None if baseline is None else baseline["s_ratio_hi"])
+    check("fold_s_conv", st["s_conv"], ">", T["fold_s_conv"],
+          None if baseline is None else baseline["s_conv"])
     want = max(T["fold_curv"], 2.0 * st["curv_orig"])
-    if st["curv"] > want:
-        bad.append(f"fold_curv {st['curv']:.3f} > {want:.3f}")
-    if st["step"] is not None and st["step"] < T["fold_step"]:
-        bad.append(f"fold_step {st['step']:.3f} < {T['fold_step']}")
-    if st["notch"] is not None and st["notch"] < T["fold_notch"]:
-        bad.append(f"fold_notch {st['notch']:.3f} < {T['fold_notch']}")
-    return bad
+    check("fold_curv", st["curv"], ">", want,
+          None if baseline is None else baseline["curv"])
+    if st["step"] is not None:
+        check("fold_step", st["step"], "<", T["fold_step"],
+              None if baseline is None else baseline["step"])
+    if st["notch"] is not None:
+        check("fold_notch", st["notch"], "<", T["fold_notch"],
+              None if baseline is None else baseline["notch"])
+    return bad, debt
 
 
 # --------------------------------------------------------------------------
@@ -447,7 +293,7 @@ _FAIL_KIND = lambda msg: msg.split(" ", 1)[0]
 
 def _sample_geom_scalar(geom, t, n):
     """dist/alpha/guard/weight at one continuous (t, n) point on the chord -
-    the same fields build_pixel_grid samples on the whole pixel grid, read
+    the same fields LA._facet_pixel_grid samples on the whole pixel grid, read
     here at a single point for the stations.csv diagnostic row."""
     tx, ty = geom["tip"]
     mx, my = geom["notch"]
@@ -465,7 +311,7 @@ def _sample_geom_scalar(geom, t, n):
 def _coef_at(built, t_out, t_local):
     """Candidate's reconstructed (aL, kL, aR, kR) at output phase t_out and
     chord fraction t_local, averaged over channel for a readable CSV cell -
-    interpolated from this file's own 96-station grid onto foldfit's."""
+    interpolated from production's 96-station grid onto foldfit's."""
     ts = built["geom"]["ts"]
     row = built["coef_phase"][t_out]  # (stations, 3, 4)
     out = [float(np.interp(t_local, ts, row[:, :, p].mean(axis=1))) for p in range(4)]
@@ -502,9 +348,10 @@ def run(cursors, sizes, out_dir, metrics_only, verbose_stations, visual):
             agg_ship = oracle_step_multiscale(name, sizes, get_frames_factory(name, "ship"))
             entry["candidate"] = dict(agg_cand)
             entry["ship"] = dict(agg_ship)
-            bad_cand = gate_step(name, agg_cand)
-            bad_ship = gate_step(name, agg_ship)
+            bad_cand, debt_cand = gate_step(name, agg_cand, agg_ship)
+            bad_ship, _debt_ship = gate_step(name, agg_ship)
             entry["gate_candidate"] = bad_cand
+            entry["debt_candidate"] = debt_cand
             entry["gate_ship"] = bad_ship
             new_kinds = ({_FAIL_KIND(m) for m in bad_cand}
                          - {_FAIL_KIND(m) for m in bad_ship})
@@ -539,6 +386,14 @@ def run(cursors, sizes, out_dir, metrics_only, verbose_stations, visual):
                                 "t": float(t_local),
                                 "ship_s": None if m_ship is None else m_ship["s"],
                                 "candidate_s": None if m_cand is None else m_cand["s"],
+                                "ship_identified": (None if m_ship is None else
+                                                    m_ship["s_identified"]),
+                                "candidate_identified": (None if m_cand is None else
+                                                         m_cand["s_identified"]),
+                                "candidate_s_lo": (None if m_cand is None else
+                                                   m_cand["s_lo"]),
+                                "candidate_s_hi": (None if m_cand is None else
+                                                   m_cand["s_hi"]),
                                 "resolved": None if m_cand is None else m_cand["s_resolved"],
                                 "center": c_local, "guard": guard, "alpha": a,
                                 "edge_distance": d,
@@ -580,7 +435,8 @@ def run(cursors, sizes, out_dir, metrics_only, verbose_stations, visual):
 
     if station_rows:
         fields = ["cursor", "size", "phase_idx", "t", "ship_s", "candidate_s",
-                  "resolved", "center", "guard", "alpha", "edge_distance",
+                  "ship_identified", "candidate_identified", "candidate_s_lo",
+                  "candidate_s_hi", "resolved", "center", "guard", "alpha", "edge_distance",
                   "aL", "kL", "aR", "kR", "weight", "reason_if_missing"]
         with open(os.path.join(out_dir, "stations.csv"), "w", newline="") as fh:
             w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
@@ -589,8 +445,6 @@ def run(cursors, sizes, out_dir, metrics_only, verbose_stations, visual):
 
     if visual and not data_error:
         for name in cursors:
-            vsize = max(s for s in sizes if s in built_cache and (name, s) in built_cache) \
-                if any((name, s) in built_cache for s in sizes) else None
             for size in sizes:
                 key = (name, size)
                 if key not in built_cache or built_cache[key][0] is None:
@@ -605,9 +459,11 @@ def run(cursors, sizes, out_dir, metrics_only, verbose_stations, visual):
             print(f"  {name}: ERROR {entry['error']}")
             continue
         a = entry["candidate"]
-        print(f"  {name}: unres={a.get('unres'):.3f} s_lo={a.get('s_ratio_lo')} "
+        print(f"  {name}: unident={a.get('unident'):.3f} "
+              f"unres={a.get('unres'):.3f} s_lo={a.get('s_ratio_lo')} "
               f"s_conv={a.get('s_conv'):.3f} curv={a.get('curv'):.3f} "
-              f"resolved={a.get('resolved')} gate_fail={entry['gate_candidate']}")
+              f"resolved={a.get('resolved')} gate_fail={entry['gate_candidate']} "
+              f"debt={entry['debt_candidate']}")
     return summary["exit"]
 
 

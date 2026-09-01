@@ -21,7 +21,9 @@ light. Alpha never moves: the author's own alpha is bit-identical across all
 nine frames of all three cursors, so freezing it is his behaviour, not an
 approximation of it.
 
-Nothing here is wired into build.py. Import it and call anim_frames_lighting.
+AppStarting and Wait additionally reconstruct the two fold facets in fixed
+local chord coordinates. Only their light coefficients move; the fold centre,
+width, alpha and every pixel outside its guarded support stay canonical.
 """
 
 import functools
@@ -32,6 +34,7 @@ from . import hybrid as H
 from . import vectorlib as V
 
 LIGHT_ANIM = ("AppStarting", "Hand", "Wait")
+FACET_LIGHT = frozenset(("AppStarting", "Wait"))
 
 HARMONICS = 4        # k in a_0 + sum_k (a_k cos kt + b_k sin kt). Nine samples
                      # carry exactly four harmonics, so k=4 is the complete
@@ -107,6 +110,19 @@ _GAIN_CAP = 2.50     # |log gain| ceiling. The author's own sweep runs to
                      # 2.4 on AppStarting (a dark facet lit to near white is
                      # a factor of eleven), so this clips nothing he drew and
                      # only guards against a division by the log floor
+
+# The facet-light model deliberately reuses the geometry and support constants
+# of hybrid._fold_restep. They are one contract: the static stage installs the
+# fold and this stage may animate its light, never its shape.
+_FACET_REACH = H._RESTEP_REACH
+_FACET_PITCH = H._RESTEP_PITCH
+_FACET_STATIONS = H._RESTEP_STATIONS
+_FACET_FIT = H._RESTEP_FIT
+_FACET_WIDTH = H._RESTEP_WIDTH
+_FACET_SUPPORT = H._RESTEP_SUPPORT
+_FACET_FADE = H._RESTEP_FADE
+_FACET_PROTECT = H._RESTEP_PROTECT
+_FACET_PROTECT_FADE = H._RESTEP_PROTECT_FADE
 
 
 @functools.lru_cache(maxsize=None)
@@ -335,6 +351,203 @@ def _setup(name, size, k, idx):
     return idx, base, lin, alpha, raw, n, vis, seen, anchor
 
 
+def _facet_smooth_stations(v_at_good, good, n_stations):
+    """Fill and smooth one coefficient along the fold chord.
+
+    This is the same median-5 plus box-5 station smoothing used by
+    hybrid._fold_restep. Keeping the construction identical prevents the
+    animated coefficient field from inventing longitudinal ripples that the
+    canonical fold does not have.
+    """
+    v = np.interp(np.arange(n_stations), good, v_at_good)
+    med = np.array([np.median(v[max(0, i - 2):i + 3]) for i in range(len(v))])
+    pad = np.pad(med, 2, mode="edge")
+    return np.convolve(pad, np.ones(5) / 5.0, "valid")
+
+
+def _facet_geometry(name, size, idx):
+    """Fix one fold centre line from the canonical frame.
+
+    The search runs once per rendered size, never per source or output frame.
+    Therefore neither interpolation nor a bright moving sheen can move the
+    centre or alter the width of the reconstructed transition. Returns
+    ``(geometry, error)`` so an unresolved chord can safely fall back to the
+    ordinary per-pixel light path.
+    """
+    chord = H._fold_chord(name, idx)
+    if chord is None:
+        return None, "no_fold_chord"
+    (tx, ty), (mx, my) = chord
+    scale = size / V.LOGICAL
+    dx, dy = mx - tx, my - ty
+    seg = float(np.hypot(dx, dy))
+    if seg < 1e-6:
+        return None, "degenerate_chord"
+    ux, uy = dx / seg, dy / seg
+    vx, vy = -uy, ux
+
+    base = np.asarray(canonical_frame(name, size, idx), dtype=np.float64)
+    lum = np.ascontiguousarray(base[..., :3].mean(-1))
+    dist = H._edge_distance_at(name, idx, size)
+    alpha = np.ascontiguousarray(H._up_alpha(name, idx, size).astype(np.float64))
+    ns = np.arange(-_FACET_REACH, _FACET_REACH + _FACET_PITCH, _FACET_PITCH)
+    ts = np.linspace(0.0, 1.0, _FACET_STATIONS)
+    smooth = max(3, int(round(0.15 / _FACET_PITCH)) | 1)
+
+    centers = np.full(len(ts), np.nan)
+    stations = [None] * len(ts)
+    reasons = ["no_station"] * len(ts)
+    for station_idx, t in enumerate(ts):
+        px, py = tx + dx * t, ty + dy * t
+        sx = (px + ns * vx) * scale - 0.5
+        sy = (py + ns * vy) * scale - 0.5
+        y = H._sample1(lum, sx, sy)
+        d = H._sample1(dist, sx, sy)
+        a = H._sample1(alpha, sx, sy)
+        admissible = (d >= _FACET_PROTECT) & (a >= 24.0) & np.isfinite(y)
+        if admissible.sum() < 40:
+            reasons[station_idx] = "guard<1: fewer than 40 admissible samples"
+            continue
+        indices = np.nonzero(admissible)[0]
+        run = max(np.split(indices, np.nonzero(np.diff(indices) > 1)[0] + 1), key=len)
+        if len(run) < 40:
+            reasons[station_idx] = "guard<1: longest run under 40 samples"
+            continue
+        nn, yy = ns[run], y[run]
+        smoothed = np.convolve(np.pad(yy, smooth // 2, mode="edge"),
+                               np.ones(smooth) / smooth, "valid")
+        gradient = np.gradient(smoothed, nn)
+        room = _FACET_FIT[1] + 0.1
+        inner = (nn >= nn.min() + room) & (nn <= nn.max() - room)
+        if inner.sum() < 3:
+            reasons[station_idx] = "guard<1: no room for an inner search window"
+            continue
+        centre = float(nn[int(np.argmax(np.where(inner, np.abs(gradient), 0.0)))])
+        lo, hi = _FACET_FIT
+        left = (nn <= centre - lo) & (nn >= centre - hi)
+        right = (nn >= centre + lo) & (nn <= centre + hi)
+        if left.sum() < 6 or right.sum() < 6:
+            reasons[station_idx] = "guard<1: fit window too thin either side"
+            continue
+        centers[station_idx] = centre
+        stations[station_idx] = (sx[run], sy[run], nn, left, right)
+        reasons[station_idx] = "ok"
+
+    good = np.nonzero(np.isfinite(centers))[0]
+    if len(good) < 5:
+        return None, "fewer than 5 stations resolved on canonical"
+    centres = _facet_smooth_stations(centers[good], good, len(ts))
+    return dict(name=name, size=size, idx=idx, tip=(tx, ty), notch=(mx, my),
+                ux=ux, uy=uy, vx=vx, vy=vy, seg=seg, scale=scale, L=scale,
+                ts=ts, ns=ns, c=centres, good=good, station=stations,
+                reasons=reasons, dist=dist, alpha=alpha), None
+
+
+def _facet_extract_coefficients(geometry):
+    """Read left/right facet levels and slopes from every source master.
+
+    The result has shape ``(source, station, channel, 4)`` and stores
+    ``(a_left, k_left, a_right, k_right)``. All masters use the canonical
+    station geometry, so this extracts light without re-fitting a moving edge.
+    """
+    name, size = geometry["name"], geometry["size"]
+    n_src = len(H.BY_NAME[name]["frames"])
+    ts, good, stations = geometry["ts"], geometry["good"], geometry["station"]
+    coef = np.full((n_src, len(ts), 3, 4), np.nan)
+    for source_idx in range(n_src):
+        master = H._master_rgb(name, source_idx, size)
+        src = V.srgb_to_linear(np.clip(master, 0, 255).astype(np.uint8)).astype(np.float64)
+        for station_idx in good:
+            sx, sy, nn, left, right = stations[station_idx]
+            centre = geometry["c"][station_idx]
+            for channel in range(3):
+                yy = H._sample1(np.ascontiguousarray(src[..., channel]), sx, sy)
+                a_left, k_left = H._restep_line(nn[left] - centre, yy[left])
+                a_right, k_right = H._restep_line(nn[right] - centre, yy[right])
+                coef[source_idx, station_idx, channel] = (
+                    a_left, k_left, a_right, k_right)
+        for channel in range(3):
+            for parameter in range(4):
+                coef[source_idx, :, channel, parameter] = _facet_smooth_stations(
+                    coef[source_idx, good, channel, parameter], good, len(ts))
+    return coef
+
+
+def _facet_reconstruct_local(coef_row, ns_grid, centres):
+    """Reconstruct the two local planes through one fixed-width tanh step."""
+    x = ns_grid[None, :] - centres[:, None]
+    phi = 0.5 * (1.0 + np.tanh(x / _FACET_WIDTH))
+    a_left, k_left, a_right, k_right = (coef_row[..., i] for i in range(4))
+    left = a_left[:, None, :] + k_left[:, None, :] * x[:, :, None]
+    right = a_right[:, None, :] + k_right[:, None, :] * x[:, :, None]
+    return (1.0 - phi)[:, :, None] * left + phi[:, :, None] * right
+
+
+def _facet_pixel_grid(geometry, size):
+    """Precompute the local-to-pixel gather and its guarded blend weight."""
+    tx, ty = geometry["tip"]
+    ux, uy = geometry["ux"], geometry["uy"]
+    vx, vy = geometry["vx"], geometry["vy"]
+    seg, scale = geometry["seg"], geometry["scale"]
+    ts, ns, centres = geometry["ts"], geometry["ns"], geometry["c"]
+    ys, xs = np.mgrid[0:size, 0:size]
+    relx = (xs + 0.5) / scale - tx
+    rely = (ys + 0.5) / scale - ty
+    chord_t = (relx * ux + rely * uy) / seg
+    normal = relx * vx + rely * vy
+    station = np.clip(chord_t, 0.0, 1.0) * (len(ts) - 1)
+    normal_idx = (normal + _FACET_REACH) / _FACET_PITCH
+    k0 = np.clip(np.floor(station).astype(int), 0, len(ts) - 2)
+    j0 = np.clip(np.floor(normal_idx).astype(int), 0, len(ns) - 2)
+    station_mix = station - k0
+    normal_mix = np.clip(normal_idx - j0, 0.0, 1.0)
+    centre = ((1.0 - station_mix) * centres[k0]
+              + station_mix * centres[k0 + 1])
+    inside = ((chord_t >= 0.0) & (chord_t <= 1.0)
+              & (np.abs(normal) <= _FACET_REACH)
+              & (H._mask(geometry["name"], geometry["idx"], size) > 0))
+    guard = np.clip((geometry["dist"] - _FACET_PROTECT)
+                    / _FACET_PROTECT_FADE, 0.0, 1.0)
+    support = np.clip((_FACET_SUPPORT + _FACET_FADE
+                       - np.abs(normal - centre)) / _FACET_FADE, 0.0, 1.0)
+    weight = np.where(inside, support * guard, 0.0)
+    return dict(k0=k0, j0=j0, station_mix=station_mix,
+                normal_mix=normal_mix, inside=inside, weight=weight,
+                chord_t=chord_t, normal=normal, centre=centre)
+
+
+def _facet_remap_field(grid, field):
+    """Bilinearly gather a station/normal/channel field onto the image."""
+    k0, j0 = grid["k0"], grid["j0"]
+    a, b = grid["station_mix"], grid["normal_mix"]
+    out = ((1.0 - a)[..., None] * (1.0 - b)[..., None] * field[k0, j0]
+           + a[..., None] * (1.0 - b)[..., None] * field[k0 + 1, j0]
+           + (1.0 - a)[..., None] * b[..., None] * field[k0, j0 + 1]
+           + a[..., None] * b[..., None] * field[k0 + 1, j0 + 1])
+    return np.where(grid["inside"][..., None], out, 0.0)
+
+
+@functools.lru_cache(maxsize=8)
+def _facet_model(name, size, idx):
+    """Cached fixed geometry, source coefficients and pixel gather."""
+    geometry, error = _facet_geometry(name, size, idx)
+    if geometry is None:
+        return None, error
+    coefficients = _facet_extract_coefficients(geometry)
+    grid = _facet_pixel_grid(geometry, size)
+    return (geometry, coefficients, grid), None
+
+
+def _facet_apply(lin, ship_lin, delta_coef, geometry, grid):
+    """Replace only the guarded fold band of a normally lit frame."""
+    local = _facet_reconstruct_local(delta_coef, geometry["ns"], geometry["c"])
+    fold_delta = _facet_remap_field(grid, local)
+    gamut = _gamut_scale(np.clip(lin, 0.0, 1.0), fold_delta)
+    fold_lin = lin + fold_delta * gamut[..., None]
+    weight = grid["weight"][..., None]
+    return ship_lin * (1.0 - weight) + fold_lin * weight
+
+
 def paced_phases(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     """Where in the author's cycle each output frame of the loop actually sits.
 
@@ -373,6 +586,14 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
         phases = _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor,
                                                    out_n, k)
     field = periodic_at(raw, phases, k) - anchor
+    facet = None
+    coef_anchor = coef_phase = None
+    if name in FACET_LIGHT:
+        facet, _facet_error = _facet_model(name, size, idx)
+        if facet is not None:
+            _geometry, coefficients, _grid = facet
+            coef_anchor = periodic_at(coefficients, [idx / n], k)[0]
+            coef_phase = periodic_at(coefficients, phases, k)
     frames = []
     for t in range(out_n):
         if field.shape[1] == size:
@@ -381,6 +602,12 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             r = np.dstack([H._smooth1(H._resample_signed(field[t, ..., c], size),
                                       _LIGHT_UNIT, size) for c in range(3)]) * _LIGHT_GAIN
         r = r * vis[..., None]
-        rgb = V.linear_to_srgb(_lit(lin, r)).astype(np.float64)
+        frame_lin = _lit(lin, r)
+        if facet is not None:
+            geometry, _coefficients, grid = facet
+            frame_lin = _facet_apply(lin, frame_lin,
+                                     coef_phase[t] - coef_anchor,
+                                     geometry, grid)
+        rgb = V.linear_to_srgb(frame_lin).astype(np.float64)
         frames.append(H._compose(rgb, alpha))
     return frames, [1] * out_n

@@ -950,13 +950,17 @@ def fold_step_profile(name, idx, size, get=frame):
     curv = [abs(slots[i - 1]["c"] - 2 * slots[i]["c"] + slots[i + 1]["c"])
             for i in range(1, len(slots) - 1)
             if slots[i - 1] and slots[i] and slots[i + 1]]
-    s = np.array([m["s"] for m in got])
+    identified = [m for m in got if m.get("s_identified", True)]
+    s = np.array([m["s"] for m in identified])
     return {
         "stations": int(len(got)),
         "cover": float(len(got)) / float(len(slots)),
-        "s": float(np.median(s)),
-        "s_p10": float(np.percentile(s, 10)),
-        "unres": float(sum(1 for m in got if not m["s_resolved"])) / len(got),
+        "identified": int(len(identified)),
+        "unident": 1.0 - float(len(identified)) / float(len(got)),
+        "s": float(np.median(s)) if len(s) else None,
+        "s_p10": float(np.percentile(s, 10)) if len(s) else None,
+        "unres": (float(sum(1 for m in identified if not m["s_resolved"]))
+                  / len(identified) if identified else None),
         "curv": float(np.median(curv)) if curv else 0.0,
         "jumps": int(sum(1 for v in curv if v > _STEP_JUMP)),
         "step": float(np.median([abs(m["step"]) for m in got])),
@@ -1027,8 +1031,8 @@ def author_at(name, size, key, phase):
     exact = round(ph * n)
     if abs(ph * n - exact) < 1e-9:              # a phase he drew: no fit at all
         p = cyc[exact % n]
-        return None if p is None else float(p[key])
-    if any(p is None for p in cyc):
+        return None if p is None or p[key] is None else float(p[key])
+    if any(p is None or p[key] is None for p in cyc):
         return None
     y = np.array([p[key] for p in cyc], dtype=np.float64)
     return float(LA.periodic_at(y, [ph], LA.HARMONICS)[0])
@@ -1169,7 +1173,8 @@ def _step_multiscale(name, sizes):
     would let a candidate trade the feature for the shape, which is exactly the
     trade that has already been made once by mistake."""
     sizes = [s for s in sizes if s in _STEP_SIZES]
-    out = {"resolved": [], "cover": 1.0, "unres": 0.0, "curv": 0.0,
+    out = {"resolved": [], "cover": 1.0, "unident": 0.0, "unres": 0.0,
+           "curv": 0.0,
            "curv_orig": 0.0, "jumps": 0, "rms": 0.0, "s_conv": 1.0,
            "s_ratio_lo": None, "s_ratio_hi": None, "step": None,
            "notch": None, "tip": None, "s_at": {}, "per_size": {}}
@@ -1187,15 +1192,19 @@ def _step_multiscale(name, sizes):
             if p is None:
                 continue
             rows[t] = p
-            seen.setdefault(t, {})[size] = p["s"]
             out["cover"] = min(out["cover"], p["cover"])
-            out["unres"] = max(out["unres"], p["unres"])
+            out["unident"] = max(out["unident"], p["unident"])
+            if p["unres"] is not None:
+                out["unres"] = max(out["unres"], p["unres"])
             out["curv"] = max(out["curv"], p["curv"])
             out["jumps"] = max(out["jumps"], p["jumps"])
             out["rms"] = max(out["rms"], p["rms"])
             ph = phases[t]
+            if p["s"] is not None:
+                seen.setdefault(t, {})[size] = p["s"]
             for key, r in (("s_ratio",
-                            _ratio(p["s"], author_at(name, size, "s", ph), 1e-3)),
+                            (_ratio(p["s"], author_at(name, size, "s", ph), 1e-3)
+                             if p["s"] is not None else None)),
                            ("step",
                             _ratio(p["step"], author_at(name, size, "step", ph), 1.0)),
                            ("notch",
@@ -1210,7 +1219,9 @@ def _step_multiscale(name, sizes):
                     out[key] = r if out[key] is None else min(out[key], r)
         if rows:
             out["resolved"].append(size)
-            out["s_at"][str(size)] = float(np.median([p["s"] for p in rows.values()]))
+            widths = [p["s"] for p in rows.values() if p["s"] is not None]
+            if widths:
+                out["s_at"][str(size)] = float(np.median(widths))
             out["per_size"][str(size)] = {str(i): p for i, p in rows.items()}
         if size in _TIP_SIZES:
             for t, f in enumerate(frames):
@@ -2382,6 +2393,21 @@ def gate(rep, base=None):
                 if st["cover"] < T["fold_cover"]:
                     fail(name, "fold_cover", st["cover"], "<", T["fold_cover"],
                          fresh=True)
+                # A flat width profile is not a narrow fold and not a pass. It
+                # is the instrument saying that several materially different
+                # widths explain the same section. There is no honest absolute
+                # target across the author's ten very different drawings, so
+                # this is a pure ratchet: a renderer change may not make more
+                # stations unidentified than the committed product already has.
+                ref = was.get(name, {}).get("fold_unident")
+                if ref is None:
+                    attention.append(f"{name:12s} {'fold_unident':18s} "
+                                     f"{st['unident']:8.3f}   (no baseline reading yet)")
+                elif st["unident"] > ref * (1.0 + _RATCHET_SLACK) + 1e-6:
+                    bad.append(f"{name:12s} {'fold_unident':18s} "
+                               f"{st['unident']:8.3f} > "
+                               f"{ref * (1.0 + _RATCHET_SLACK):.3f}"
+                               f"  (was {ref:.3f})")
                 if st["unres"] > T["fold_unres"]:
                     fail(name, "fold_unres", st["unres"], ">", T["fold_unres"],
                          fresh=True)
@@ -2591,8 +2617,10 @@ def _flat(e):
         # between two facets, worst case over every size and frame, as a share of
         # the author's own where he has one to be a share of.
         "fold_cover": st["cover"] if got else None,
+        "fold_unident": st.get("unident") if got else None,
         "fold_unres": st["unres"] if got else None,
-        "fold_s": (st["s_at"][str(max(st["resolved"]))] if got else None),
+        "fold_s": (st["s_at"][max(st["s_at"], key=int)]
+                   if got and st.get("s_at") else None),
         "fold_s_min_ratio": st.get("s_ratio_lo") if got else None,
         "fold_s_max_ratio": st.get("s_ratio_hi") if got else None,
         "fold_s_conv": st["s_conv"] if got else None,
@@ -2656,7 +2684,8 @@ def show(rep, base=None):
     cols = [("drift(L)", "scale_drift", 10, ".3f"), ("dens%", "density", 7, ".2f"),
             ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_extreme_contrast", 7, ".3f"),
             ("tipprof", "tip_profile", 8, ".2f"),
-            ("cover", "fold_cover", 6, ".2f"), ("unres", "fold_unres", 6, ".2f"),
+            ("cover", "fold_cover", 6, ".2f"), ("unid", "fold_unident", 6, ".2f"),
+            ("unres", "fold_unres", 6, ".2f"),
             ("s", "fold_s", 6, ".2f"), ("sconv", "fold_s_conv", 6, ".2f"),
             ("curv", "fold_curv", 6, ".2f"), ("stepR", "fold_step", 6, ".2f"),
             ("notchR", "fold_notch", 7, ".2f"), ("tip", "inner_tip", 5, ".2f"),

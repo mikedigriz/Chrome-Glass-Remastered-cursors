@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 import analyze as A  # noqa: E402
+import foldfit as F  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
 from cgr import lightanim as LA  # noqa: E402
 from cgr import vectorlib as V  # noqa: E402
@@ -357,11 +358,52 @@ def test_fold_width():
             finally:
                 restore()
         ok = all(0.7 <= g["s"] / want <= 1.4 and g["unres"] == 0.0
+                 and g["unident"] == 0.0
                  for g in got.values())
         check("fold width %.2f" % want, ok,
               "painted %.2f, read %.2f at 128 and %.2f at 256, unresolved %.0f%%/%.0f%%"
               % (want, got[128]["s"], got[256]["s"],
                  100 * got[128]["unres"], 100 * got[256]["unres"]))
+
+
+def test_fold_soft_l1():
+    """A notch/outlier may lose influence, never disappear from the sample.
+
+    This is the failure mode that blocked the facet-light oracle: the former
+    second pass changed a boolean `keep` mask when a residual crossed a hard
+    cutoff. Soft-L1 must recover the two known facet levels with every point
+    still carrying a strictly positive weight.
+    """
+    n = np.linspace(-4.0, 4.0, 161)
+    phi = 0.5 * (1.0 + np.tanh(n / 0.6))
+    u, v = (1.0 - phi)[None, :], phi[None, :]
+    y = 110.0 * u[0] + 180.0 * v[0]
+    y[len(y) // 2] -= 70.0
+    plain_a, plain_b, _r, _ok = F._solve(u, v, y, None)
+    a, b, res, ok, _score = F._soft_l1_fit(u, v, y, 1.0)
+    weights = 1.0 / np.sqrt(1.0 + (res / 1.0) ** 2)
+    plain_err = abs(plain_a[0] - 110.0) + abs(plain_b[0] - 180.0)
+    robust_err = abs(a[0] - 110.0) + abs(b[0] - 180.0)
+    check("fold soft-L1 keeps all samples",
+          ok[0] and weights.min() > 0.0 and robust_err < 0.15 * plain_err,
+          f"level error {plain_err:.3f} -> {robust_err:.3f}, "
+          f"minimum weight {weights.min():.6f}")
+
+
+def test_fold_profile_identifiability():
+    """A flat width profile is an answer of its own, not a winning grid rank."""
+    dummy = np.zeros(1)
+    flat = [(1.0, float(s), 0.0, 0.0, 0.0, dummy) for s in F.S_GRID]
+    clear = [(1.0 + 8.0 * abs(np.log(float(s) / 0.6)),
+              float(s), 0.0, 0.0, 0.0, dummy) for s in F.S_GRID]
+    _j, lo, hi, _tol, identified = F._profile_verdict(flat, 1.0, 100)
+    j2, lo2, hi2, _tol2, identified2 = F._profile_verdict(clear, 1.0, 100)
+    check("flat fold profile is unidentified",
+          not identified and lo == min(F.S_GRID) and hi == max(F.S_GRID),
+          f"interval {lo:.2f}..{hi:.2f}, identified={identified}")
+    check("sharp fold profile is identified",
+          identified2 and F.S_GRID[j2] == 0.6 and lo2 == hi2 == 0.6,
+          f"interval {lo2:.2f}..{hi2:.2f}, winner {F.S_GRID[j2]:.2f}")
 
 
 def test_fold_discontinuity():
@@ -461,7 +503,8 @@ def test_fold_jitter():
         A._cycle_cache.pop(key, None)
         if keep_cycle is not None:
             A._cycle_cache[key] = keep_cycle
-    check("fold jitter", hurt["p95"] > clean["p95"] * 2.0
+    check("fold jitter", hurt["p95"] > max(clean["p95"] * 1.5,
+                                            A.THRESHOLDS["fold_jitter"])
           and hurt["stations"] >= A._JITTER_STATIONS,
           f"p95 {clean['p95']:.3f} -> {hurt['p95']:.3f} logical units on "
           f"{hurt['stations']} stations, coverage {hurt['pair_coverage']:.2f}")
@@ -838,6 +881,70 @@ def test_canonical_phase():
           "; ".join(bad) or "all three loops agree with their own phase table")
 
 
+def test_facet_light_contract():
+    """Facet light may change RGB only inside its guarded fold support.
+
+    Compare production against the same light path with the facet stage
+    disabled. Alpha and every zero-weight pixel must stay byte-identical, while
+    the active band must actually change. Hand is the control cursor: it uses
+    the shared animation pipeline but is not one of the two facet-light targets.
+    """
+    size = 128
+    targets = ("AppStarting", "Wait")
+    candidate = {}
+    for name in targets + ("Hand",):
+        frames, _ = LA.anim_frames_lighting(name, size)
+        candidate[name] = np.asarray([np.asarray(f) for f in frames])
+
+    enabled = LA.FACET_LIGHT
+    try:
+        LA.FACET_LIGHT = frozenset()
+        ship = {}
+        for name in targets + ("Hand",):
+            frames, _ = LA.anim_frames_lighting(name, size)
+            ship[name] = np.asarray([np.asarray(f) for f in frames])
+    finally:
+        LA.FACET_LIGHT = enabled
+
+    bad, changed = [], []
+    for name in targets:
+        idx = LA.canonical_index(name)
+        model, error = LA._facet_model(name, size, idx)
+        if model is None:
+            bad.append(f"{name}: {error}")
+            continue
+        geometry, coefficients, grid = model
+        outside = grid["weight"] == 0.0
+        if not np.array_equal(candidate[name][..., 3], ship[name][..., 3]):
+            bad.append(f"{name}: alpha changed")
+        if not np.array_equal(candidate[name][..., :3][:, outside],
+                              ship[name][..., :3][:, outside]):
+            bad.append(f"{name}: RGB leaked outside support")
+        n_changed = int(np.any(candidate[name][..., :3] != ship[name][..., :3],
+                               axis=-1).sum())
+        changed.append(f"{name} {n_changed} px")
+        if n_changed == 0:
+            bad.append(f"{name}: facet stage did nothing")
+
+        # Exact anchor identity is the fixed-geometry contract in its smallest
+        # form: zero coefficient motion over the canonical frame must be a
+        # byte-level no-op after conversion back to the product's sRGB.
+        _i, _base, lin, _a, _raw, n_src, _vis, _seen, _anchor = LA._setup(
+            name, size, LA.HARMONICS, idx)
+        coef_anchor = LA.periodic_at(
+            coefficients, [idx / n_src], LA.HARMONICS)[0]
+        anchor = LA._facet_apply(lin, lin, coef_anchor - coef_anchor,
+                                 geometry, grid)
+        if not np.array_equal(V.linear_to_srgb(anchor), V.linear_to_srgb(lin)):
+            bad.append(f"{name}: anchor is not identity")
+
+    check("facet light stays in support", not bad,
+          "; ".join(bad) or ", ".join(changed))
+    check("Hand is facet-light control",
+          "Hand" not in enabled and np.array_equal(candidate["Hand"], ship["Hand"]),
+          "byte-identical with the facet stage disabled")
+
+
 def test_restep_support():
     """_fold_restep changes the fold's cross-section and nothing else.
 
@@ -1084,11 +1191,14 @@ def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
-              test_fold_width, test_fold_discontinuity, test_fold_notch,
+              test_fold_width, test_fold_soft_l1,
+              test_fold_profile_identifiability,
+              test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
-              test_canonical_phase, test_restep_support,
+              test_canonical_phase, test_facet_light_contract,
+              test_restep_support,
               test_morph_steps_visible, test_no_ring_support,
               test_hole_glass, test_product_manifest,
               test_package_roundtrip_catches_corruption,

@@ -31,9 +31,17 @@ reported per station as:
     d, w           notch depth below the fitted step, and its width
     rms            what the model failed to explain
 
-`s` carries a resolution verdict rather than a bare number: under one hardware
-pixel of transition there is nothing to measure, and the lowest rung of the
-search grid is then a floor, not a reading.
+`s` carries two verdicts rather than a bare number. Under one hardware pixel of
+transition there is nothing to resolve. Independently, a flat profile over
+materially different widths contains no identified width even at high
+resolution. The first state is `s_resolved=False`, the second
+`s_identified=False`; neither is allowed to masquerade as a good narrow fit.
+
+Every width candidate is fitted on the same samples with one scale estimated
+before the search and continuous soft-L1 influence. The previous candidate-
+specific hard outlier mask could make one pixel disappear for one width and
+reappear for its neighbour, producing a discontinuous ranking unrelated to the
+picture. See docs/dev/NEXT.md 72 for the calibration and external basis.
 
 `bend` is a confidence figure, not a defect: small means the straight facet is a
 fair description and the slope can be trusted, large means it is not. On the
@@ -70,6 +78,11 @@ GUARD = 1.0             # logical units around the transition kept out of the
 SMOOTH = 0.15           # logical units the profile is averaged over before its
                         # gradient is read, so single-sample noise cannot win
 C_WINDOW = 2.0          # how far the fitted centre may sit from the prior
+SOFT_L1_FLOOR = 1.0     # luma levels. The robust scale is estimated once from
+                        # the two facets; this is only its quantisation floor.
+SOFT_L1_PASSES = 3      # IRLS passes after the ordinary least-squares seed
+PROFILE_SIGMA = 1.0     # one standard error of the per-sample robust loss
+PROFILE_SPAN = 2.0      # a wider near-optimal interval cannot identify `s`
 
 # Stations, as a fraction along the chord. Fixed here rather than passed in, so
 # that a curvature read at one size is the same set of points as at another.
@@ -151,6 +164,67 @@ def _solve(u, v, y, w):
     return a, b, res, ok
 
 
+def _mad_scale(r):
+    """One robust luma scale, shared by every centre/width candidate.
+
+    The old second pass recomputed a hard inlier mask for each candidate. A
+    sample could therefore disappear for one width and reappear for the next,
+    making an otherwise continuous profile jump between adjacent `S_GRID`
+    ranks. Here the data set never changes. The scale is measured before the
+    width search, from the two facet residuals, so it cannot favour a candidate.
+    """
+    r = np.asarray(r, dtype=np.float64)
+    if not len(r):
+        return SOFT_L1_FLOOR
+    med = float(np.median(r))
+    mad = float(np.median(np.abs(r - med)))
+    return max(SOFT_L1_FLOOR, 1.4826 * mad)
+
+
+def _soft_l1_fit(u, v, y, scale):
+    """Fit the two facet levels with continuous soft-L1 influence.
+
+    This is iteratively reweighted least squares for
+    ``rho(z) = 2 * (sqrt(1 + z) - 1)``. Every sample keeps a positive weight;
+    unlike the former ``res > cutoff`` pass, no candidate owns a different
+    set of pixels. The returned score has luma units and approaches RMS for
+    residuals small compared with ``scale``.
+    """
+    a, b, res, ok = _solve(u, v, y, None)
+    for _ in range(SOFT_L1_PASSES):
+        z = res / scale
+        weights = 1.0 / np.sqrt(1.0 + z * z)
+        a2, b2, res2, ok2 = _solve(u, v, y, weights)
+        use = ok & ok2
+        a = np.where(use, a2, a)
+        b = np.where(use, b2, b)
+        res = np.where(use[:, None], res2, res)
+        ok &= ok2
+    z2 = (res / scale) ** 2
+    rho = 2.0 * (np.sqrt(1.0 + z2) - 1.0)
+    score = scale * np.sqrt(rho.mean(1))
+    return a, b, res, ok, score
+
+
+def _profile_verdict(profile, scale, samples):
+    """Return the best width and its near-optimal profile interval.
+
+    Width is a profiled nonlinear parameter: for each `s`, centre and facet
+    levels have already been minimised out. A flat profile does not contain a
+    defensible width. We call all grid rungs within one estimated standard
+    error of the best score near-optimal; if that interval spans more than a
+    factor of two, `s` is explicitly unidentified instead of inheriting the
+    arbitrary rank that won by a few ten-thousandths of a luma level.
+    """
+    scores = np.array([row[0] for row in profile], dtype=np.float64)
+    j = int(np.argmin(scores))
+    tol = PROFILE_SIGMA * scale / np.sqrt(max(int(samples), 1))
+    near = scores <= scores[j] + tol
+    widths = np.array([row[1] for row in profile], dtype=np.float64)
+    lo, hi = float(widths[near].min()), float(widths[near].max())
+    return j, lo, hi, float(tol), bool(hi / lo <= PROFILE_SPAN)
+
+
 def section(name, idx, size, get, t, inset=RIM_INSET):
     """One cross-section at fraction `t` along the chord, or None."""
     ch = H._fold_chord(name, idx)
@@ -205,39 +279,37 @@ def measure(name, idx, size, get, t):
     left, right = n < c0 - GUARD, n > c0 + GUARD
     if left.sum() < MIN_SIDE or right.sum() < MIN_SIDE:
         return None
-    _aL, k_lo, bend_lo = _robust_line(n[left], raw[left], c0)
-    _aR, k_hi, bend_hi = _robust_line(n[right], raw[right], c0)
+    aL, k_lo, bend_lo = _robust_line(n[left], raw[left], c0)
+    aR, k_hi, bend_hi = _robust_line(n[right], raw[right], c0)
     # continuous at c0, so the step itself survives detrending untouched
     y = raw - np.where(n < c0, k_lo * (n - c0), k_hi * (n - c0))
+
+    # One noise/model-mismatch scale for the whole width profile. It is read
+    # from the held-out facets, before any candidate transition is built.
+    facet_res = np.r_[raw[left] - (aL + k_lo * (n[left] - c0)),
+                      raw[right] - (aR + k_hi * (n[right] - c0))]
+    robust_scale = _mad_scale(facet_res)
 
     inner = n[MIN_SIDE:-MIN_SIDE]
     cs = inner[np.abs(inner - c0) <= C_WINDOW]
     if len(cs) == 0:
         return None
-    best = None
+    profile = []
     for s in S_GRID:
         phi = 0.5 * (1.0 + np.tanh((n[None, :] - cs[:, None]) / s))
         u = 1.0 - phi
-        a, b, res, ok = _solve(u, phi, y, None)
-        # two passes: the notch is a big one-sided residual and would drag the
-        # transition onto itself if it were left in the fit
-        keep = res > -2.0 * np.maximum(res.std(1, keepdims=True), 1e-6)
-        enough = keep.sum(1) > 2 * MIN_SIDE
-        if enough.any():
-            a2, b2, res2, ok2 = _solve(u[enough], phi[enough], y,
-                                       keep[enough].astype(float))
-            a[enough] = np.where(ok2, a2, a[enough])
-            b[enough] = np.where(ok2, b2, b[enough])
-            res[enough] = np.where(ok2[:, None], res2, res[enough])
-        score = np.sqrt((res ** 2).mean(1)) + LAMBDA * np.abs(cs)
+        a, b, res, ok, robust_score = _soft_l1_fit(u, phi, y, robust_scale)
+        score = robust_score + LAMBDA * np.abs(cs)
         score = np.where(ok, score, np.inf)
         i = int(np.argmin(score))
-        if np.isfinite(score[i]) and (best is None or score[i] < best[0]):
-            best = (float(score[i]), float(cs[i]), s,
-                    (float(a[i]), float(b[i])), res[i].copy())
-    if best is None:
+        if np.isfinite(score[i]):
+            profile.append((float(score[i]), float(s), float(cs[i]),
+                            float(a[i]), float(b[i]), res[i].copy()))
+    if not profile:
         return None
-    _score, c, s, (b_lo, b_hi), res = best
+    j, s_lo, s_hi, profile_tol, s_identified = _profile_verdict(
+        profile, robust_scale, len(n))
+    score, s, c, b_lo, b_hi, res = profile[j]
 
     near = np.abs(n - c) <= 1.5
     d = float(-res[near].min()) if near.any() else 0.0
@@ -250,6 +322,9 @@ def measure(name, idx, size, get, t):
     # grid's lowest rung is then a floor, not a reading. Say so instead of
     # quietly storing the number.
     return dict(t=float(t), c=float(c), s=float(s), c0=c0,
+                s_identified=s_identified, s_lo=s_lo, s_hi=s_hi,
+                profile_tol=profile_tol, profile_score=score,
+                robust_scale=robust_scale,
                 s_resolved=bool(2.2 * s > V.LOGICAL / float(size)),
                 b_lo=float(b_lo), b_hi=float(b_hi), step=float(b_hi - b_lo),
                 k_lo=k_lo, k_hi=k_hi, bend_lo=bend_lo, bend_hi=bend_hi,

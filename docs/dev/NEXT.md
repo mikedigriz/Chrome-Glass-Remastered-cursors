@@ -5966,3 +5966,125 @@ robust-loss; либо явное состояние «ширина неиден�
 `tools/fold_light_oracle.py` сохранён как воспроизводимый диагностический
 инструмент (тот единственный файл, который план и разрешал создать);
 `.metrics/fold-light-oracle/` не коммитился.
+
+## 72. Foldfit стабилизирован; AppStarting/Wait facet-light принят в production (2026-08-31)
+
+### Внешние основания и границы заимствования
+
+Проблема раздела 71 оказалась двумя классическими задачами, для которых не
+нужно изобретать ещё один hard-cutoff:
+
+- P. J. Huber ввёл робастную оценку как непрерывный компромисс между
+  квадратичной и линейной потерей: [Robust Estimation of a Location
+  Parameter](https://doi.org/10.1214/aoms/1177703732). В production-код не
+  переносилась чужая реализация; взят принцип непрерывного влияния вместо
+  удаления отсчёта.
+- Официальная документация SciPy задаёт `soft_l1` как
+  `rho(z)=2*(sqrt(1+z)-1)` и прямо называет её гладким приближением L1:
+  [`scipy.optimize.least_squares`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.least_squares.html).
+  `foldfit` использует ту же функцию потерь в маленьком собственном IRLS для
+  двух линейных коэффициентов; SciPy не добавлен в runtime-зависимости.
+- Профильная правдоподобность отделяет «оптимизатор нашёл минимум» от
+  «параметр вообще идентифицируем»: Raue et al., [Structural and practical
+  identifiability analysis ... by exploiting the profile
+  likelihood](https://doi.org/10.1093/bioinformatics/btp358). Наш интервал по
+  дискретной `S_GRID` — диагностический аналог этого принципа, **не** заявленный
+  статистический confidence interval.
+- NIST StRD предоставляет nonlinear-regression задачи с сертифицированным
+  ответом для проверки реализации, а не только реальный шумный набор:
+  [Nonlinear Regression reference
+  datasets](https://www.nist.gov/itl/sed/statistical-reference-datasets/strd-background-information/nonlinear-regression).
+  Поэтому до корпуса добавлены синтетические профили с известной шириной,
+  выбросом и плоским профилем.
+
+### Что изменено в приборе
+
+1. Масштаб residual оценивается один раз по двум удержанным граням **до**
+   перебора `c/s`. Все кандидаты получают один набор данных и один scale.
+2. Второй проход с candidate-specific булевой маской удалён. Три IRLS-прохода
+   дают вес `1/sqrt(1+(r/scale)^2)`; он строго положителен для каждого отсчёта.
+3. Для каждой ширины сначала профилируются центр и два уровня граней. Все
+   ширины в пределах `scale/sqrt(N)` от лучшего score образуют near-optimal
+   интервал. Если `s_hi/s_lo > 2`, возвращается `s_identified=False`.
+4. Это правило — калиброванный инженерный verdict, а не p-value. Его нельзя
+   ужесточать под один renderer без нового контроля на всём авторском корпусе.
+5. `analyze.fold_step_profile` оставляет неидентифицируемые станции в coverage,
+   curv/step/notch/rms, но не даёт им голосовать за `s`, `unres`, ratio и
+   convergence. Новый `fold_unident` — чистый ratchet без абсолютной цели.
+   `fold_tracker` печатает `unid`; oracle CSV пишет `s_identified/s_lo/s_hi`.
+
+Негативные контроли:
+
+- большой односторонний выброс: ошибка уровня обычного LS `0.870`, soft-L1
+  `0.012`, минимальный вес `0.014286`, то есть ни один отсчёт не исчез;
+- плоский профиль: `0.02..2.50`, `identified=False`;
+- резкий профиль известной ширины: интервал `0.60..0.60`, победитель `0.60`;
+- синтетические `s=0.15/0.60` читаются точно на 128 и 256;
+- planted notch двигается `0.2→8.1`, ширина остаётся `0.60`.
+
+Аудит автора на всех десяти fold-курсорах и 128/256/512 подтвердил, что
+неопределённость географически правдоподобна, а не подогнана под AppStarting:
+доля идентифицированных станций примерно 0.90 у Arrow_Down, 0.92 у Arrow и
+UpArrow, 0.88 у NO, 0.78 у Help, 0.72 у SizeAll, 0.70 у Hand/Handwriting,
+0.62 у Wait и 0.40 у AppStarting. Поэтому абсолютный общий порог на
+`fold_unident` не введён.
+
+### Повтор facet-light oracle
+
+Тем же кандидатом, без смены констант, 27 фаз × 128/256/512:
+
+| cursor | ship | candidate | ratchet |
+|---|---|---|---|
+| AppStarting | `unident=.75, s=.60, conv=1.0, step=.674, notch=.550, rms=43.016` | `.75, .60, 1.5, .658, .682, 42.877` | PASS, debt 0 |
+| Wait | `.65, .60, 1.0, .481, .259, 39.895` | `.55, .60, 1.0, .495, .287, 39.927` | PASS; `notch<.4` остаётся долгом, но улучшен |
+| Hand, контроль | `.60, .60, 1.5, .603, .302, 18.957` | `.60, .60, 1.5, .600, .311, 19.494` | новых FAIL нет |
+
+Исходные FAIL раздела 71 исчезли без смены renderer-кандидата: это именно те
+станции, где hard-mask флипал или профиль был плоским. На contact sheets
+AppStarting/Wait/Hand (white/grey/black, ship/candidate и `15×diff`) изменение
+локализовано в складке; шва, раздвоения вершины, потери внутреннего ridge и
+внешних артефактов нет.
+
+### Production
+
+Модель перенесена в `cgr/lightanim.py`:
+
+- `FACET_LIGHT = {AppStarting, Wait}`; Hand в production не меняется;
+- геометрия центра строится один раз с канонического кадра теми же
+  `_RESTEP_*` ограничениями, что статическая складка;
+- с девяти masters снимаются `aL,kL,aR,kR` на 96 станциях и три канала;
+- по фазе интерполируются только коэффициенты, затем собирается tanh фиксированной
+  ширины `_RESTEP_WIDTH`;
+- результат подмешивается только через прежние support/guard. Alpha и RGB там,
+  где weight равен нулю, побайтно совпадают со старым lightanim;
+- модель кэшируется по `(name,size,canonical_idx)`. Если геометрия не разрешится,
+  build безопасно остаётся на старом попиксельном пути; все реально отгружаемые
+  размеры в полном build разрешились.
+
+Oracle теперь вызывает production `_facet_*`, а не свою копию. На 128 px его
+candidate и `anim_frames_lighting` совпали до последнего байта. Контрактный
+selftest дополнительно проверяет alpha, утечку за support, ненулевое действие,
+anchor identity и побитовую неизменность Hand.
+
+### Baseline и финальная проверка
+
+Baseline снимался после раздельного аудита:
+
+- для всех курсоров, кроме AppStarting/Wait, renderer не менялся — значит
+  fold-сдвиги принадлежат калибровке;
+- для AppStarting/Wait прямой oracle отдельно дал ship→candidate;
+- ни одна не-fold acceptance-метрика не сдвинулась; только диагностические
+  `Wait legacy_jitter_rows/coverage` изменились вместе с картинкой;
+- десять `fold_unident` впервые записаны как ratchet;
+- семь красных строк против старого baseline (`Help` wide/conv/curv,
+  `Hand` notch, `Handwriting` curv/notch, `Wait` notch) стали явно названным
+  долгом новой калибровки, а не были скрыты порогом или known-issues.
+
+После reshot текущий итог — `quality: clean, 11 known debt`; AppStarting не
+несёт fold-долга. Проверки:
+
+- полный `tools/selftest.py`: PASS;
+- полный `tools/analyze.py`, лестница 32..512: baseline-кандидат проаудирован;
+- полный `python -m cgr.build --out-dir <scratch>`: exit 0, alpha/sat зелёный,
+  round-trip Windows `.cur/.ani`, Linux Xcursor, Debian `.deb`, macOS `.cape`;
+- `git diff --check` и `py_compile` — зелёные перед финальным diff-аудитом.
