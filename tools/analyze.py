@@ -923,6 +923,58 @@ def fold_profile(name, idx, size, get=frame):
     }
 
 
+def _fold_width(got):
+    """The frame's width from every station's interval, not from a median over
+    whoever identified.
+
+    Each station's profile leaves a set of grid rungs it cannot tell apart -
+    `s_lo..s_hi` from foldfit's own verdict. Here every station votes once,
+    spread evenly over that set: one that pins the width puts its whole vote on
+    a rung or two, one that cannot spreads a thin slice over many, and a station
+    whose interval covers the grid adds a constant that cannot move the winner.
+    Nothing is discarded.
+
+    Discarding the unidentified is what this replaces, and it was not a small
+    thing. On Handwriting three to five stations of twenty-four identify, so the
+    frame's width was a median over that handful: swapping one of them moved
+    `fold_s_wide` by a factor of six while a paired station-by-station reading
+    of the same two renders showed the fold not widening at all (NEXT.md 78).
+
+    Measured against the alternatives on the author's own frames rebuilt at
+    known widths, this is the only rule that returns what it was built from at
+    0.15 through 0.9 alike; a centroid of the vote is smoother but drags every
+    width toward the middle of the grid and goes blind to a real regression.
+
+    Identifiability itself is not swept up here - it stays its own number in
+    `unident`, counted exactly as before.
+
+    Returns `(s, s_p10)`, both None when no station resolved.
+    """
+    grid = np.asarray(FF.S_GRID, dtype=np.float64)
+    vote = np.zeros(len(grid))
+    for m in got:
+        lo = m.get("s_lo") or m["s"]
+        hi = m.get("s_hi") or m["s"]
+        inside = (grid >= lo - 1e-9) & (grid <= hi + 1e-9)
+        k = int(inside.sum())
+        if k:
+            vote[inside] += 1.0 / k
+    total = float(vote.sum())
+    if total <= 0.0:
+        return None, None
+    top = np.nonzero(vote >= vote.max() - 1e-12)[0]
+    # Ties: the tied rung nearest the vote's own centre of mass. Taking the
+    # middle of the tied run instead is an asymmetry by construction - on the
+    # two-way tie it always returns the wider rung, and that alone moved
+    # Handwriting's width ratio from 1.25 to 1.50 on a frame whose vote is
+    # skewed low and whose author reads the narrower rung.
+    lg = np.log(grid)
+    centre = float((vote * lg).sum() / total)
+    s_hat = float(grid[top[int(np.argmin(np.abs(lg[top] - centre)))]])
+    cum = np.cumsum(vote) / total
+    return s_hat, float(grid[int(np.searchsorted(cum, 0.10))])
+
+
 def fold_step_profile(name, idx, size, get=frame):
     """The fold as a step between two facets, summarised along the chord.
 
@@ -951,14 +1003,14 @@ def fold_step_profile(name, idx, size, get=frame):
             for i in range(1, len(slots) - 1)
             if slots[i - 1] and slots[i] and slots[i + 1]]
     identified = [m for m in got if m.get("s_identified", True)]
-    s = np.array([m["s"] for m in identified])
+    s_hat, s_p10 = _fold_width(got)
     return {
         "stations": int(len(got)),
         "cover": float(len(got)) / float(len(slots)),
         "identified": int(len(identified)),
         "unident": 1.0 - float(len(identified)) / float(len(got)),
-        "s": float(np.median(s)) if len(s) else None,
-        "s_p10": float(np.percentile(s, 10)) if len(s) else None,
+        "s": s_hat,
+        "s_p10": s_p10,
         "unres": (float(sum(1 for m in identified if not m["s_resolved"]))
                   / len(identified) if identified else None),
         "curv": float(np.median(curv)) if curv else 0.0,
