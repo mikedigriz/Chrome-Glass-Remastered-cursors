@@ -3712,10 +3712,22 @@ def _fold_restep(rgb, name, idx, size):
     facet models - Wait's left facet is curved and does not need straightening,
     only a tangent at the transition.
 
-    Nothing else is preserved or synthesised. There is no notch term because
-    there is no notch: on the author the wide model leaves nothing to be one,
-    and the 4..5 levels the fold tracker reports as `notch` are that tracker
-    fitting two *flat* facets to sloped ones, not a drawn feature.
+    Nothing else is preserved or synthesised, and there is no notch term. The
+    reason that used to stand here - that the 4..5 levels the tracker reports
+    as `notch` are only that tracker fitting two *flat* facets to sloped ones,
+    not a drawn feature - was tested and refuted, so it is removed rather than
+    left to justify the omission. The current fit removes each facet's slope
+    before measuring, and refitting the facets as quadratics on the author's
+    own art leaves the depth standing: Hand 3.0..3.6, Handwriting 5.3..6.3,
+    NO 5.6..6.7 and Wait 4.6..5.1 levels, each above its own noise scale at
+    128, 256 and 512 alike (NEXT.md 75-77). About half of Wait's linear
+    reading really was facet curvature, so a target depth has to be read off
+    the quadratic detrend and per cursor - never carried across from the
+    linear one, which would install twice the notch he drew.
+
+    So the author draws a notch and this model does not reproduce it. That is
+    an open address, not a pending fix: no candidate has been built and none
+    has been through the oracle.
 
     The correction is zero outside `_RESTEP_SUPPORT` of the transition and
     inside `_RESTEP_PROTECT` of the outline, both by construction.
