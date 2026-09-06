@@ -390,6 +390,105 @@ def test_fold_soft_l1():
           f"minimum weight {weights.min():.6f}")
 
 
+def _dipole_case(amp, sign=1.0, column=None, noise=0.0):
+    """A synthetic step carrying `amp` of the dipole, fitted with `column`.
+
+    `noise` is not decoration. Without it the true column fits exactly and
+    scores zero, so every control beats nothing and the comparison proves
+    nothing. The level is comparable with the author's own robust_scale.
+    """
+    n = np.linspace(-4.0, 4.0, 161)
+    dip_x = np.arange(len(F.DIPOLE)) * F.DIPOLE_PITCH + F.DIPOLE_X0
+    shape = np.interp(n, dip_x, F.DIPOLE, left=0.0, right=0.0)
+    phi = 0.5 * (1.0 + np.tanh(n / 0.6))
+    u, v = (1.0 - phi)[None, :], phi[None, :]
+    y = 110.0 * u[0] + 180.0 * v[0] + sign * amp * shape
+    if noise:
+        y = y + np.random.default_rng(20260906).normal(0.0, noise, len(n))
+    col = shape if column is None else np.interp(
+        n, dip_x, column, left=0.0, right=0.0)
+    return F._soft_l1_joint(u, v, col[None, :], y, 1.0)
+
+
+def test_fold_dipole_recovery():
+    """The third column has to give back the amplitude that was painted, and
+    take none when nothing was painted.
+
+    A nuisance parameter that reads high on a clean step would be buying width
+    identifiability with an invention, which is the failure this whole column
+    exists to avoid.
+    """
+    _a, _b, A0, _r, _ok, _s = _dipole_case(0.0)
+    a, b, A, _res, ok, _score = _dipole_case(17.0)
+    check("clean step takes no dipole", float(A0[0]) == 0.0,
+          f"A = {float(A0[0]):.4f} on a step with nothing painted")
+    check("painted dipole comes back",
+          bool(ok[0]) and abs(float(A[0]) - 17.0) < 0.5
+          and abs(float(a[0]) - 110.0) + abs(float(b[0]) - 180.0) < 0.5,
+          f"A 17.0 -> {float(A[0]):.2f}, levels {float(a[0]):.1f}/"
+          f"{float(b[0]):.1f}")
+
+
+def test_fold_dipole_sign():
+    """`A` is non-negative, so the shape can never be installed upside down."""
+    _a, _b, A, _res, _ok, _score = _dipole_case(17.0, sign=-1.0)
+    check("inverted dipole is refused, not flipped", float(A[0]) == 0.0,
+          f"A = {float(A[0]):.4f} where the shape is painted the wrong way up")
+
+
+def test_fold_dipole_controls():
+    """The column must fit the drawn shape, not any smooth shape.
+
+    Mirror and phase-scramble keep the spectrum and destroy the form. Either
+    scoring as well as the real thing would mean the third column is soaking up
+    whatever is there, and the width verdict it buys would be worthless.
+    """
+    rng = np.random.default_rng(20260906)
+    _a, _b, _A, _r, _ok, true = _dipole_case(17.0, noise=2.0)
+    _a, _b, _A, _r, _ok, mirror = _dipole_case(
+        17.0, column=F.DIPOLE[::-1].copy(), noise=2.0)
+    worst = 0.0
+    for _ in range(24):
+        f = np.fft.rfft(F.DIPOLE)
+        f = np.abs(f) * np.exp(2j * np.pi * rng.random(len(f)))
+        q = np.fft.irfft(f, len(F.DIPOLE))
+        _a, _b, _A, _r, _ok, sc = _dipole_case(
+            17.0, column=q / np.linalg.norm(q), noise=2.0)
+        worst = max(worst, float(true[0]) / float(sc[0]))
+    check("mirrored dipole scores worse than the drawn one",
+          float(mirror[0]) > float(true[0]),
+          f"true {float(true[0]):.4f}, mirror {float(mirror[0]):.4f}")
+    check("phase-scrambled dipole scores worse than the drawn one", worst < 1.0,
+          f"best of 24 scrambles scores {worst:.3f} of the drawn shape, "
+          f"1.0 would mean it fits as well")
+
+
+def test_fold_dipole_eligibility():
+    """A cursor the author did not draw the shape on gets no third column.
+
+    Not a preference: Help's own mean residual leans against the shared shape,
+    so a fitted column would read his drawing upside down. He must come out
+    bit-for-bit as he did before this column existed.
+    """
+    same = []
+    for t in (0.3, 0.5, 0.7):
+        off = F.measure("Help", 0, 256, A.orig_frame, t, joint=False)
+        on = F.measure("Help", 0, 256, A.orig_frame, t)
+        if off is None or on is None:
+            continue
+        same.append(off["s"] == on["s"] and off["d"] == on["d"]
+                    and off["s_identified"] == on["s_identified"]
+                    and on["A"] == 0.0)
+    check("ineligible cursor reads exactly as before",
+          bool(same) and all(same),
+          f"{sum(same)} of {len(same)} stations unchanged")
+    check("eligibility is decided, not assumed",
+          F.dipole_eligible("Hand") and not F.dipole_eligible("Help")
+          and not F.dipole_eligible("AppStarting"),
+          f"Hand={F.dipole_eligible('Hand')}, Help={F.dipole_eligible('Help')}, "
+          f"AppStarting={F.dipole_eligible('AppStarting')}")
+
+
 def test_fold_profile_identifiability():
     """A flat width profile is an answer of its own, not a winning grid rank."""
     dummy = np.zeros(1)
@@ -1192,6 +1291,8 @@ def main():
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
               test_fold_width, test_fold_soft_l1,
+              test_fold_dipole_recovery, test_fold_dipole_sign,
+              test_fold_dipole_controls, test_fold_dipole_eligibility,
               test_fold_profile_identifiability,
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_fold_jitter,

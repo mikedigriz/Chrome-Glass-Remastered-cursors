@@ -61,7 +61,10 @@ Alpha is used only as a floor for "there is a signal here at all". Admission is
 geometric. Any station count of zero is a fault in this file until proven
 otherwise.
 """
+import functools
+
 import numpy as np
+from PIL import Image
 
 from cgr import hybrid as H
 from cgr import vectorlib as V
@@ -88,6 +91,51 @@ PROFILE_SPAN = 2.0      # a wider near-optimal interval cannot identify `s`
 # that a curvature read at one size is the same set of points as at another.
 T_LO, T_HI = 0.08, 0.92
 STATIONS = 24
+
+# The shape the author draws on the transition, measured 2026-09-06 from his
+# own art at 128, 256 and 512 (NEXT.md 81, 82).
+#
+# Not a notch: his residual against a fitted tanh step is a dipole - brighter
+# than the step just past its centre, darker again around +1.15, with a mild
+# dark shoulder to the left. One shared shape, rank 1. Rank is not taste: a
+# second component only reduces a residual already under the fit's own
+# robust_scale, and a per-station table would store 70-90% noise, since one
+# fixed shape explains 0.10..0.30 of a station's residual energy while a
+# split-half says the shape itself is real. Stable across the three rungs
+# (r 0.88..1.00), and the pooled shape beats each cursor's own on held-out
+# stations for five of seven.
+#
+# Why the instrument carries it: the positive lobe sits on the transition and
+# competes with the tanh for the width, so a picture that has the shape the
+# author drew reads as less width-identifiable than one that does not. That is
+# a property of a two-column model, not of the drawing. `A` is therefore a
+# nuisance parameter here - minimised out at every (c, s) exactly as the facet
+# levels already are - and `s` is judged on what is left. Measured on his own
+# corpus this is neutral to better: 2391 stations, unident 0.349 -> 0.332.
+#
+# Unit norm, so `A` carries the levels. Sampled every DIPOLE_PITCH from
+# DIPOLE_X0.
+DIPOLE_X0 = -2.45
+DIPOLE_PITCH = 0.05
+DIPOLE = np.array([
+    +0.01075, +0.00302, -0.00729, -0.01905, -0.03002, -0.03921, -0.04653, -0.05544,
+    -0.06151, -0.06904, -0.07947, -0.08922, -0.09631, -0.09818, -0.09822, -0.09696,
+    -0.09594, -0.09435, -0.09030, -0.08507, -0.07898, -0.07276, -0.06489, -0.05534,
+    -0.04409, -0.03565, -0.02739, -0.01690, -0.00621, +0.00275, +0.00984, +0.01700,
+    +0.02270, +0.02685, +0.03075, +0.03330, +0.03365, +0.03734, +0.04209, +0.04569,
+    +0.04624, +0.04813, +0.05311, +0.06375, +0.07866, +0.09532, +0.11422, +0.13316,
+    +0.15208, +0.17218, +0.18765, +0.19822, +0.20196, +0.19961, +0.19118, +0.17799,
+    +0.15816, +0.13208, +0.10335, +0.07311, +0.03793, +0.00318, -0.03093, -0.05865,
+    -0.08473, -0.11120, -0.13147, -0.14843, -0.16496, -0.17725, -0.18493, -0.18985,
+    -0.19057, -0.18659, -0.18029, -0.17168, -0.15906, -0.14634, -0.13435, -0.12060,
+    -0.10770, -0.09524, -0.08327, -0.06842, -0.05083, -0.03367, -0.01686, -0.00338,
+    +0.00761, +0.01736, +0.02613, +0.03415, +0.04191, +0.04621, +0.05065, +0.05512,
+    +0.06002, +0.06509, +0.07026, +0.07434,
+])
+DIPOLE_SPAN = 0.5       # logical units of section a station needs beyond the
+                        # template before its residual may be projected on it.
+                        # At the very edge the residual ramps, and the ramp
+                        # flips the projection's sign
 
 
 def _robust_line(n, y, pivot):
@@ -225,6 +273,132 @@ def _profile_verdict(profile, scale, samples):
     return j, lo, hi, float(tol), bool(hi / lo <= PROFILE_SPAN)
 
 
+def _solve3(u, v, w, y, weights):
+    """Least squares over three columns, one fit per candidate row.
+
+    `_solve` one column wider. The 3x3 normal equations are solved as a batch
+    so that adding the dipole keeps every candidate centre a single array
+    operation, the property that makes the width search affordable at all.
+    """
+    cols = (u, v, w)
+    G = np.empty((3, 3, u.shape[0]))
+    for i in range(3):
+        for j in range(i, 3):
+            p = cols[i] * cols[j]
+            G[i, j] = G[j, i] = (p * weights).sum(1) if weights is not None                 else p.sum(1)
+    b = np.empty((3, u.shape[0]))
+    for i in range(3):
+        p = cols[i] * y
+        b[i] = (p * weights).sum(1) if weights is not None else p.sum(1)
+    M = np.moveaxis(G, (0, 1), (-2, -1))
+    det = np.linalg.det(M)
+    ok = np.abs(det) > 1e-12
+    M = np.where(ok[:, None, None], M, np.eye(3))
+    # numpy reads a 2-D right-hand side as one matrix, not a stack of vectors
+    sol = np.linalg.solve(M, np.moveaxis(b, 0, -1)[..., None])[..., 0]
+    res = y[None, :] - (sol[:, 0:1] * u + sol[:, 1:2] * v + sol[:, 2:3] * w)
+    return sol[:, 0], sol[:, 1], sol[:, 2], res, ok
+
+
+def _soft_l1_joint(u, v, w, y, scale):
+    """`_soft_l1_fit` with the dipole as a third column and `A >= 0`.
+
+    One inequality on one coefficient: where the unconstrained optimum wants
+    A < 0 the constrained optimum sits at A = 0, so those rows keep the
+    two-column fit. Exact for least squares, and exact per iteration for the
+    reweighted problem - the standing the two-column IRLS already has.
+
+    Non-negative because the shape has a direction. A free sign would let the
+    column install the author's dipole upside down wherever that happened to
+    fit better, which is not a reading of anything he drew.
+    """
+    a2, b2, res2, ok2 = _solve(u, v, y, None)
+    a3, b3, A3, res3, ok3 = _solve3(u, v, w, y, None)
+    for _ in range(SOFT_L1_PASSES):
+        z = res2 / scale
+        n2, m2, r2, k2 = _solve(u, v, y, 1.0 / np.sqrt(1.0 + z * z))
+        use = ok2 & k2
+        a2 = np.where(use, n2, a2)
+        b2 = np.where(use, m2, b2)
+        res2 = np.where(use[:, None], r2, res2)
+        ok2 = use
+        z = res3 / scale
+        n3, m3, q3, r3, k3 = _solve3(u, v, w, y, 1.0 / np.sqrt(1.0 + z * z))
+        use = ok3 & k3
+        a3 = np.where(use, n3, a3)
+        b3 = np.where(use, m3, b3)
+        A3 = np.where(use, q3, A3)
+        res3 = np.where(use[:, None], r3, res3)
+        ok3 = use
+    take3 = ok3 & (A3 > 0.0)
+    a = np.where(take3, a3, a2)
+    b = np.where(take3, b3, b2)
+    A = np.where(take3, A3, 0.0)
+    res = np.where(take3[:, None], res3, res2)
+    ok = np.where(take3, ok3, ok2)
+    rho = 2.0 * (np.sqrt(1.0 + (res / scale) ** 2) - 1.0)
+    return a, b, A, res, ok, scale * np.sqrt(rho.mean(1))
+
+
+def _author_at(name, idx, size):
+    """The author's own frame at `size`. His art, never our render."""
+    im = H.original(name, idx)
+    if size != im.size[0]:
+        im = im.resize((size, size), Image.LANCZOS)
+    return np.asarray(im, dtype=np.float64)
+
+
+def _dipole_of(m):
+    """A station's residual projected on the shared shape, or None.
+
+    None where the section does not clear the template's span with
+    `DIPOLE_SPAN` to spare: at the very edge the residual ramps, and the ramp
+    decides the sign of the projection rather than the drawing does.
+    """
+    x0 = DIPOLE_X0
+    x1 = x0 + DIPOLE_PITCH * (len(DIPOLE) - 1)
+    if x0 < m["n"].min() - m["c"] + DIPOLE_SPAN             or x1 > m["n"].max() - m["c"] - DIPOLE_SPAN:
+        return None
+    grid = np.arange(len(DIPOLE)) * DIPOLE_PITCH + x0 + m["c"]
+    return np.interp(grid, m["n"], m["res"])
+
+
+@functools.lru_cache(maxsize=None)
+def dipole_eligible(name):
+    """Does this cursor's fold carry the shared dipole at all?
+
+    Decided on his art alone and by sign only, so there is nothing to tune and
+    no list of names to keep in step with the drawing. A cursor whose own mean
+    residual leans against the shared shape would have it fitted upside down;
+    it gets no third column, and reads exactly as it did before this existed.
+
+    Per frame rather than pooled, because a cursor that cannot make up its mind
+    frame to frame is the one that does not belong: AppStarting votes 12 frames
+    for and 15 against, Help none for, while every other cursor is unanimous.
+    Measured with the two-column fit, so this cannot recurse.
+    """
+    votes = 0
+    for idx in range(len(H.BY_NAME[name]["frames"])):
+        rows = []
+        for t in np.linspace(T_LO, T_HI, STATIONS):
+            m = measure(name, idx, DIPOLE_SIZE, _author_at, t, joint=False)
+            if m is None:
+                continue
+            g = _dipole_of(m)
+            if g is not None:
+                rows.append(g)
+        if len(rows) < 6:
+            continue
+        votes += 1 if float(np.corrcoef(np.mean(rows, axis=0),
+                                        DIPOLE)[0, 1]) > 0 else -1
+    return votes > 0
+
+
+DIPOLE_SIZE = 256       # the rung eligibility is decided on. The sign of the
+                        # correlation is the same at 128 and 512 for every
+                        # cursor, so one rung is read rather than three
+
+
 def section(name, idx, size, get, t, inset=RIM_INSET):
     """One cross-section at fraction `t` along the chord, or None."""
     ch = H._fold_chord(name, idx)
@@ -267,8 +441,13 @@ def chord_length(name, idx):
     return float(np.hypot(x1 - x0, y1 - y0))
 
 
-def measure(name, idx, size, get, t):
-    """Fit one station, or None if the section cannot carry a fit."""
+def measure(name, idx, size, get, t, joint=None):
+    """Fit one station, or None if the section cannot carry a fit.
+
+    `joint` overrides the eligibility decision, and exists so that the decision
+    itself can be taken with the two-column fit without recursing. Callers
+    leave it alone.
+    """
     got = section(name, idx, size, get, t)
     if got is None:
         return None
@@ -294,23 +473,42 @@ def measure(name, idx, size, get, t):
     cs = inner[np.abs(inner - c0) <= C_WINDOW]
     if len(cs) == 0:
         return None
+    use_dipole = dipole_eligible(name) if joint is None else joint
     profile = []
     for s in S_GRID:
         phi = 0.5 * (1.0 + np.tanh((n[None, :] - cs[:, None]) / s))
         u = 1.0 - phi
-        a, b, res, ok, robust_score = _soft_l1_fit(u, phi, y, robust_scale)
+        if use_dipole:
+            # anchored on the candidate centre - the frame the shape was
+            # measured in. Neither its shift nor its width is fitted.
+            col = np.interp((n[None, :] - cs[:, None]).ravel(),
+                            np.arange(len(DIPOLE)) * DIPOLE_PITCH + DIPOLE_X0,
+                            DIPOLE, left=0.0, right=0.0).reshape(phi.shape)
+            a, b, A, res, ok, robust_score = _soft_l1_joint(u, phi, col, y,
+                                                            robust_scale)
+        else:
+            a, b, res, ok, robust_score = _soft_l1_fit(u, phi, y, robust_scale)
+            A = np.zeros(len(cs))
         score = robust_score + LAMBDA * np.abs(cs)
         score = np.where(ok, score, np.inf)
         i = int(np.argmin(score))
         if np.isfinite(score[i]):
             profile.append((float(score[i]), float(s), float(cs[i]),
-                            float(a[i]), float(b[i]), res[i].copy()))
+                            float(a[i]), float(b[i]), res[i].copy(),
+                            float(A[i])))
     if not profile:
         return None
     j, s_lo, s_hi, profile_tol, s_identified = _profile_verdict(
         profile, robust_scale, len(n))
-    score, s, c, b_lo, b_hi, res = profile[j]
+    score, s, c, b_lo, b_hi, joint_res, A = profile[j]
 
+    # `d`, `w` and `rms` are read against the STEP ALONE, never against the
+    # joint residual. The dipole is in the model to keep it out of the width
+    # verdict; letting it also absorb the notch would silently redefine
+    # `fold_notch` and `fold_rms`, and every number recorded against those two
+    # would stop being comparable.
+    phi = 0.5 * (1.0 + np.tanh((n - c) / s))
+    res = y - (b_lo * (1.0 - phi) + b_hi * phi)
     near = np.abs(n - c) <= 1.5
     d = float(-res[near].min()) if near.any() else 0.0
     w = float("nan")
@@ -321,7 +519,9 @@ def measure(name, idx, size, get, t):
     # Under one hardware pixel of that there is nothing left to measure, and the
     # grid's lowest rung is then a floor, not a reading. Say so instead of
     # quietly storing the number.
-    return dict(t=float(t), c=float(c), s=float(s), c0=c0,
+    return dict(t=float(t), c=float(c), s=float(s), c0=c0, A=float(A),
+                joint_res=joint_res,
+                joint_rms=float(np.sqrt((joint_res ** 2).mean())),
                 s_identified=s_identified, s_lo=s_lo, s_hi=s_hi,
                 profile_tol=profile_tol, profile_score=score,
                 robust_scale=robust_scale,
