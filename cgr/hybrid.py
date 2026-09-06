@@ -3674,6 +3674,43 @@ _RESTEP_STATIONS = 96
 _RESTEP_REACH = 4.0
 _RESTEP_PITCH = 0.05
 
+# The shape the author actually draws on the transition, measured 2026-09-06.
+#
+# Not a notch. His residual against a fitted tanh step is a dipole: brighter
+# than the step just past its centre, darker again around +1.15, with a mild
+# dark shoulder to the left. Both earlier candidates installed a symmetric
+# gaussian dip - the first centred on the transition, which is exactly where
+# he is *bright* - and both under-delivered for that reason (NEXT.md 78, 80).
+#
+# One shared shape for every cursor that carries it, rank 1. Rank is not a
+# preference: on his own art a second component only reduces a residual that
+# is already under the fit's own robust_scale, and a per-station table would
+# be storing 70-90% noise, since one fixed shape explains only 0.10-0.30 of a
+# station's residual energy while a split-half says the shape itself is real
+# (NEXT.md 81). Stable across 128, 256 and 512 (r 0.88..1.00), and the pooled
+# shape beats each cursor's own on held-out stations for five of seven.
+#
+# Unit norm, so the amplitude carries the levels. The array itself lives in
+# tools/foldfit.py as DIPOLE, and is read from there rather than copied: the
+# stage installs an amplitude that the very same file later reads back, so a
+# second literal here would be a second thing to keep in step with the first,
+# and the two would drift silently the moment either was retuned.
+
+
+@functools.lru_cache(maxsize=1)
+def _restep_dipole():
+    """The author's shared fold residual: (sample positions, template).
+
+    Positions are logical units from the fitted centre, so the caller adds
+    the station's own c. foldfit is loaded lazily - see _foldfit.
+    """
+    FF = _foldfit()
+    return (np.arange(len(FF.DIPOLE)) * FF.DIPOLE_PITCH + FF.DIPOLE_X0,
+            FF.DIPOLE)
+
+
+_RESTEP_DIPOLE_CHORD = 5    # stations the amplitude is smoothed over
+
 
 def _restep_line(x, y):
     """Local tangent, with outliers dropped twice."""
@@ -3693,6 +3730,100 @@ def _restep_line(x, y):
             break
         keep = new
     return float(a), float(k)
+
+
+def _foldfit():
+    """tools/foldfit.py, loaded lazily.
+
+    It imports this module, so it cannot be imported at the top; and it is not
+    duplicated here on purpose. The amplitude the stage installs has to be read
+    against the very fit the gate later measures with, or the renderer and the
+    instrument drift apart - which is the whole reason foldfit exists as one
+    file shared by analyze and fold_tracker.
+    """
+    global _FOLDFIT
+    if _FOLDFIT is None:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "tools", "foldfit.py")
+        spec = importlib.util.spec_from_file_location("foldfit", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _FOLDFIT = mod
+    return _FOLDFIT
+
+
+_FOLDFIT = None
+
+
+def _author_at(name, idx, size):
+    """The author's own frame at `size`. Author art, nothing of ours."""
+    im = original(name, idx)
+    if size != im.size[0]:
+        im = im.resize((size, size), Image.LANCZOS)
+    return np.asarray(im, dtype=np.float64)
+
+
+@functools.lru_cache(maxsize=None)
+def _restep_dipole_read(name, idx, size):
+    """Per author station: fraction along the chord, and the dipole amplitude.
+
+    The amplitude is the projection of his residual on the shared shape - one
+    number per station, no search and no free parameter. Stations whose section
+    does not clear the template's span are left out rather than read off a
+    ramp. Returned before smoothing, so the caller can smooth along the chord
+    once, over the stations it actually has.
+    """
+    FF = _foldfit()
+    ts, amps = [], []
+    for t in np.linspace(FF.T_LO, FF.T_HI, FF.STATIONS):
+        m = FF.measure(name, idx, size, _author_at, t)
+        ts.append(float(t))
+        g = None if m is None else FF._dipole_of(m)
+        amps.append(np.nan if g is None else float(g @ FF.DIPOLE))
+    return tuple(ts), tuple(amps)
+
+
+def _restep_dipole_ok(name):
+    """Does this cursor's fold carry the shared dipole at all?
+
+    foldfit.dipole_eligible is the rule and this is only its name here.
+    Deciding it twice would let the stage install the shape on a cursor the
+    gate does not expect it on, which is the one disagreement that cannot be
+    caught by reading either file alone. It also has to be read with the
+    two-column fit: the joint fit's residual has the dipole subtracted out
+    already, so correlating that against the template answers nothing.
+    """
+    return _foldfit().dipole_eligible(name)
+
+
+def _restep_dipole_amp(name, idx, size, ts):
+    """The amplitude to install at each of the stage's stations, or None.
+
+    Smoothed along the chord because a per-station projection jitters as much
+    as it varies - the median step between neighbours is 6.6 to 12.9 levels
+    against an interquartile spread of 9.5 to 59.6 - and installing that
+    jitter would draw a comb along the fold. Non-negative after the smoothing,
+    not before: clipping first throws away the very stations the smoothing is
+    there to carry.
+    """
+    if not _restep_dipole_ok(name):
+        return None
+    at, raw = _restep_dipole_read(name, idx, size)
+    a = np.array(raw, dtype=np.float64)
+    if not np.isfinite(a).any():
+        return None
+    h = _RESTEP_DIPOLE_CHORD // 2
+    sm = np.full(len(a), np.nan)
+    for i in range(len(a)):
+        w = a[max(0, i - h):i + h + 1]
+        w = w[np.isfinite(w)]
+        if len(w):
+            sm[i] = np.median(w)
+    ok = np.isfinite(sm)
+    if ok.sum() < 3:
+        return None
+    return np.clip(np.interp(ts, np.array(at)[ok], sm[ok]), 0.0, None)
 
 
 def _fold_restep(rgb, name, idx, size):
@@ -3801,11 +3932,22 @@ def _fold_restep(rgb, name, idx, size):
         pad = np.pad(med, 2, mode="edge")
         par[:, c] = np.convolve(pad, np.ones(5) / 5.0, "valid")
 
+    # His dipole, at his own amplitude, on the transition this stage builds.
+    # Anchored on the edge the stage puts the transition on, not on foldfit's
+    # fitted centre a quarter unit to its left: measured both ways on his own
+    # sections, the edge anchor returns more depth (0.57 of his against 0.46)
+    # and disturbs the width far less (6% of stations against 40%).
+    amp = _restep_dipole_amp(name, idx, size, ts)
+    dip_x, dip_y = _restep_dipole()
+
     for k in good:
         run, nn, yy = runs[k]
         ce, al, kl, ar, kr = par[k]
         s = 0.5 * (1.0 + np.tanh((nn - ce) / _RESTEP_WIDTH))
         want = (1.0 - s) * (al + kl * (nn - ce)) + s * (ar + kr * (nn - ce))
+        if amp is not None:
+            want = want + amp[k] * np.interp(nn - ce, dip_x, dip_y,
+                                             left=0.0, right=0.0)
         w = np.clip((_RESTEP_SUPPORT + _RESTEP_FADE - np.abs(nn - ce))
                     / _RESTEP_FADE, 0.0, 1.0)
         delta[k, run] = (want - yy) * w
