@@ -1013,6 +1013,74 @@ def _material_layer(name, idx, donor, size):
     return np.clip(own + _material_detail(name, idx, donor, size), 0, 255)
 
 
+_CHORD_ALIGN_REACH = 6.0    # logical units either side of the chord the donor
+                         # borrow is registered on the fold rather than on the
+                         # silhouette. The fold fit reads +-6 (foldfit.REACH),
+                         # so this is the window whose readings the alignment
+                         # exists to fix.
+_CHORD_ALIGN_FADE = 2.0     # units the alignment fades out over, back to the
+                         # moment map's own registration.
+
+
+def _chord_align(name, idx, donor, size, qx, qy):
+    """Correct the moment map so the donor's fold lands on this frame's fold.
+
+    `_moment_map` registers two silhouettes by centroid and principal axes, and
+    on Handwriting[3] that is not enough: the donor's chord is 18.6 logical units
+    against this frame's 16.9, so the map drifts along the fold, from 0.30 units
+    at t=0.30 to 1.08 at t=0.88. The drift is the same at every size - it is the
+    affine, not the sampling.
+
+    The consequence is not the crease itself, which the keep-out suppresses
+    either way, but everything beside it: the donor's own facet edges arrive 2.4
+    to 3.5 units off the chord, where the keep-out is already back at full
+    strength, as ridges of 25 to 51 levels. The fold fit reads +-6 units, so a
+    ridge that size competes with the frame's own step of -55 and wins - on
+    Handwriting[3] at 512 it moved the fit's centre to -2.10 and +3.45 at four
+    stations, and `fold_curv` with it.
+
+    So the borrow is anchored on the feature it must not disturb: the similarity
+    that carries the moment-mapped chord onto the donor's own chord. Uniform
+    scale and rotation only, so the donor's texture is not stretched, and no
+    frame is named - a pair without a chord on either side is left alone."""
+    ch_t, ch_d = _fold_chord(name, idx), _fold_chord(name, donor)
+    if ch_t is None or ch_d is None:
+        return qx, qy
+    s = size / V.LOGICAL
+    a_t = np.array(ch_t[0], dtype=np.float64) * s
+    b_t = np.array(ch_t[1], dtype=np.float64) * s
+    a_d = np.array(ch_d[0], dtype=np.float64) * s
+    b_d = np.array(ch_d[1], dtype=np.float64) * s
+    xs = np.array([a_t[0], b_t[0]]); ys = np.array([a_t[1], b_t[1]])
+    mx = _sample1(np.ascontiguousarray(qx), xs, ys)
+    my = _sample1(np.ascontiguousarray(qy), xs, ys)
+    if not (np.isfinite(mx).all() and np.isfinite(my).all()):
+        return qx, qy
+    u = np.array([mx[1] - mx[0], my[1] - my[0]])
+    v = b_d - a_d
+    lu = float(np.hypot(*u))
+    if lu < 1e-6:
+        return qx, qy
+    k = float(np.hypot(*v)) / lu
+    ca = float(u[0] * v[0] + u[1] * v[1]) / (lu * lu * k)
+    sa = float(u[0] * v[1] - u[1] * v[0]) / (lu * lu * k)
+    dx, dy = qx - mx[0], qy - my[0]
+    cx = a_d[0] + k * (ca * dx - sa * dy)
+    cy = a_d[1] + k * (sa * dx + ca * dy)
+    # Only where the fold is read. Past the fit's own reach the moment map is
+    # the better of the two by construction - it is the one that maximises mask
+    # overlap - and moving the borrow out there buys nothing while it does cost:
+    # at 32px it pushed Handwriting's steps 2->3 and 3->4 further from the
+    # author's (cadence_err 0.377 -> 0.400 against a 0.396 ratchet).
+    d = b_t - a_t
+    ln = max(float(np.hypot(*d)), 1e-9)
+    nx, ny = -d[1] / ln, d[0] / ln
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    off = np.abs((xs - a_t[0]) * nx + (ys - a_t[1]) * ny) / s
+    w = np.clip((_CHORD_ALIGN_REACH - off) / max(_CHORD_ALIGN_FADE, 1e-6), 0.0, 1.0)
+    return qx + (cx - qx) * w, qy + (cy - qy) * w
+
+
 def _material_detail(name, idx, donor, size):
     """The borrowed material on its own, before it is laid on the frame.
 
@@ -1025,6 +1093,7 @@ def _material_detail(name, idx, donor, size):
     tm = _mask(name, idx, size) / 255.0
     dm = _mask(name, donor, size) / 255.0
     _iou, qx, qy = _moment_map(tm, dm)
+    qx, qy = _chord_align(name, idx, donor, size, qx, qy)
     warped = _sample(_master_rgb(name, donor, size), qx, qy)
     # _mblur, not _gauss: outside the silhouette the master runs 80-100 levels
     # darker, and a plain blur drags that in, so the low-pass reads too dark
