@@ -975,6 +975,25 @@ def _fold_width(got):
     return s_hat, float(grid[int(np.searchsorted(cum, 0.10))])
 
 
+def _fold_bends(slots, identified_only=False):
+    """Second differences across adjacent, usable fold stations.
+
+    An unidentified fit is allowed to keep its other diagnostics, but it is not
+    evidence for the path of the transition centre.  In particular, a run of
+    fits parked on the same fallback centre must not flatten ``fold_curv``.
+    Missing or unidentified stations split the path; never bridge across them.
+    """
+    bends = []
+    for i in range(1, len(slots) - 1):
+        triple = slots[i - 1:i + 2]
+        if not all(m is not None for m in triple):
+            continue
+        if identified_only and not all(m.get("s_identified", True) for m in triple):
+            continue
+        bends.append(abs(triple[0]["c"] - 2 * triple[1]["c"] + triple[2]["c"]))
+    return bends
+
+
 def fold_step_profile(name, idx, size, get=frame):
     """The fold as a step between two facets, summarised along the chord.
 
@@ -999,9 +1018,8 @@ def fold_step_profile(name, idx, size, get=frame):
     got = [m for m in slots if m is not None]
     if len(got) < _STEP_STATIONS_MIN:
         return None
-    curv = [abs(slots[i - 1]["c"] - 2 * slots[i]["c"] + slots[i + 1]["c"])
-            for i in range(1, len(slots) - 1)
-            if slots[i - 1] and slots[i] and slots[i + 1]]
+    curv = _fold_bends(slots, identified_only=True)
+    jumps = _fold_bends(slots)
     identified = [m for m in got if m.get("s_identified", True)]
     s_hat, s_p10 = _fold_width(got)
     return {
@@ -1014,7 +1032,7 @@ def fold_step_profile(name, idx, size, get=frame):
         "unres": (float(sum(1 for m in identified if not m["s_resolved"]))
                   / len(identified) if identified else None),
         "curv": float(np.median(curv)) if curv else 0.0,
-        "jumps": int(sum(1 for v in curv if v > _STEP_JUMP)),
+        "jumps": int(sum(1 for v in jumps if v > _STEP_JUMP)),
         "step": float(np.median([abs(m["step"]) for m in got])),
         "notch": float(np.median([m["d"] for m in got])),
         "rms": float(np.percentile([m["rms"] for m in got], 95)),

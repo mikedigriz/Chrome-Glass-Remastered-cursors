@@ -330,6 +330,13 @@ def _soft_l1_joint(u, v, w, y, scale):
         A3 = np.where(use, q3, A3)
         res3 = np.where(use[:, None], r3, res3)
         ok3 = use
+    # The active constraint is A == 0.  A solve may return a few ulps on its
+    # positive side for a pure step (NumPy 2.3.5 produced 3.6e-15), which is the
+    # same constrained solution, not a detected dipole.  Canonicalise only that
+    # roundoff-sized neighbourhood; real amplitudes are many orders larger.
+    zero = (32.0 * np.finfo(A3.dtype).eps
+            * np.maximum(1.0, np.maximum(np.abs(a3), np.abs(b3))))
+    A3 = np.where((A3 >= 0.0) & (A3 <= zero), 0.0, A3)
     take3 = ok3 & (A3 > 0.0)
     a = np.where(take3, a3, a2)
     b = np.where(take3, b3, b2)

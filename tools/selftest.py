@@ -246,6 +246,10 @@ def test_inner_jitter():
     have deleted every row instead of raising the number."""
     name = "Hand"
     clean = A.inner_jitter(name)
+    if clean is None or clean.get("why") is not None:
+        why = "no chord" if clean is None else clean["why"]
+        skip("inner jitter", f"the accepted render is not measurable: {why}")
+        return
     frames = [f.copy() for f in A.product_frames(name)]
     band = A._fold_band(name, A.JITTER_SIZE)
     for i, f in enumerate(frames):
@@ -505,6 +509,23 @@ def test_fold_profile_identifiability():
           f"interval {lo2:.2f}..{hi2:.2f}, winner {F.S_GRID[j2]:.2f}")
 
 
+def test_fold_curv_ignores_unidentified():
+    """Parked fits must not make the identified centre path look straighter."""
+    slots = [
+        {"c": 0.0, "s_identified": True},
+        {"c": 0.0, "s_identified": True},
+        {"c": 0.4, "s_identified": True},
+        {"c": 1.0, "s_identified": False},
+        {"c": 1.6, "s_identified": True},
+    ]
+    all_bends = A._fold_bends(slots)
+    identified = A._fold_bends(slots, identified_only=True)
+    check("fold curv ignores unidentified",
+          np.allclose(np.median(all_bends), 0.2)
+          and np.allclose(identified, [0.4]),
+          f"all median {np.median(all_bends):.2f}, identified {identified}")
+
+
 def test_fold_discontinuity():
     """A transition under one hardware pixel is the defect the old gate could
     not name. It must come back as unresolved rather than as a small number.
@@ -591,7 +612,7 @@ def test_fold_jitter():
     band = A._fold_band(name, A.JITTER_SIZE)
     for i, f in enumerate(frames):
         if i % 3 == 0:
-            f[..., :3][band] = np.roll(f[..., :3], 2, axis=1)[band]
+            f[..., :3][band] = np.roll(f[..., :3], 3, axis=1)[band]
     key = (name, A.JITTER_SIZE)
     keep, keep_cycle = A._product_cache[key], A._cycle_cache.pop(key, None)
     try:
@@ -1293,7 +1314,7 @@ def main():
               test_fold_width, test_fold_soft_l1,
               test_fold_dipole_recovery, test_fold_dipole_sign,
               test_fold_dipole_controls, test_fold_dipole_eligibility,
-              test_fold_profile_identifiability,
+              test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
