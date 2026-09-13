@@ -4477,6 +4477,121 @@ _SAT_LIFT = {"NO": 1.00}     # named, because NO's red ring is not a sheet of
                              # not its colour, and no lift reaches it.
 
 
+_FOLD_PROFILE_ON = {"Help"}   # cursors whose master lost the slow shape of the
+                         # glass beside the fold. Named rather than tested for:
+                         # the departure of a facet's slope from the author's is
+                         # not a discriminator - measured at 512 on every cursor
+                         # that has a chord, the worst station runs 15 to 312
+                         # levels per unit on all ten of them (NEXT.md 92), so a
+                         # threshold that reaches Help reaches everyone.
+_FOLD_PROFILE_BAND = 4.0    # logical units either side of the chord the slow
+                         # profile is corrected over
+_FOLD_PROFILE_FADE = 1.0    # units it fades out over beyond the band
+_FOLD_PROFILE_BLUR = 1.2    # units the profile is low-passed across the fold
+                         # before the difference is taken. Wider than
+                         # `_RESTEP_WIDTH`, so the crease itself is not carried
+                         # over from his 32px art - only the shape of the glass
+                         # each side of it, which is what he is right about.
+_FOLD_PROFILE_CHORD = 7     # stations the correction is smoothed over along the
+                         # chord, so a single section cannot print a band
+_FOLD_PROFILE_CAP = 48.0    # levels the correction may carry
+_FOLD_PROFILE_STATIONS = 96
+_FOLD_PROFILE_REACH = 6.0   # units sampled each side - `foldfit.REACH`, the
+                         # window whose readings this stage exists to fix
+_FOLD_PROFILE_PITCH = 0.05
+
+
+def _fold_profile_from_author(rgb, name, idx, size):
+    """Restore the slow cross-fold level profile from the author's own frame.
+
+    Measured on Help at 512: the crease itself is in the render, and
+    `_fold_restep` puts it within 0.10 units of where the author has it. What
+    the master lost is the glass beside it - at stations 14 and 15 the author's
+    right-hand facet climbs from 149 to 198 levels while ours sits flat at
+    152-153 across two and a half units.
+
+    A flat facet is not a small error to a fit that reads two facets joined by a
+    transition: with nothing to stand against, the crease stops being the best
+    explanation of the section, and the fit answers with one wide ramp centred
+    a quarter unit off the chord. That is exactly what `fold_curv` reads as
+    2.000, and the width it returns is the top of `foldfit.S_GRID` - extend the
+    grid to 5.0 and the width follows it while the centre does not move
+    (NEXT.md 92), which is a fit with no scale of its own rather than a wide
+    fold.
+
+    So what crosses is the low-passed difference only, at a radius wider than
+    the transition this render draws: his slow shape, never his 32px crease,
+    and never his alpha - the silhouette is not this stage's business. Level
+    only, equally in all three channels, so no chroma rides along.
+    """
+    if name not in _FOLD_PROFILE_ON:
+        return rgb
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return rgb
+    (tx, ty), (ex, ey) = ch
+    L = size / V.LOGICAL
+    dx, dy = ex - tx, ey - ty
+    seg = float(np.hypot(dx, dy))
+    if seg < 1e-6:
+        return rgb
+    ux, uy = dx / seg, dy / seg
+    vx, vy = -uy, ux
+    his = _resize(_orig(_key(name, idx)), size)[0].mean(-1)
+    ours = rgb.mean(-1)
+    his_c = np.ascontiguousarray(his)
+    our_c = np.ascontiguousarray(ours)
+    dist = _edge_distance_at(name, idx, size)
+    alpha = np.ascontiguousarray(_up_alpha(name, idx, size).astype(np.float64))
+    ns = np.arange(-_FOLD_PROFILE_REACH,
+                   _FOLD_PROFILE_REACH + _FOLD_PROFILE_PITCH, _FOLD_PROFILE_PITCH)
+    ts = np.linspace(0.0, 1.0, _FOLD_PROFILE_STATIONS)
+    k = max(3, int(round(_FOLD_PROFILE_BLUR / _FOLD_PROFILE_PITCH)) | 1)
+    ker = np.ones(k) / k
+    delta = np.zeros((len(ts), len(ns)))
+    for j, t in enumerate(ts):
+        px, py = tx + dx * t, ty + dy * t
+        sx, sy = (px + ns * vx) * L - 0.5, (py + ns * vy) * L - 0.5
+        a = _sample1(alpha, sx, sy)
+        d = _sample1(dist, sx, sy)
+        yo = _sample1(our_c, sx, sy)
+        yh = _sample1(his_c, sx, sy)
+        ok = (a >= 24.0) & (d >= _RESTEP_PROTECT) & np.isfinite(yo) & np.isfinite(yh)
+        if ok.sum() < 40:
+            continue
+        run = max(np.split(np.nonzero(ok)[0],
+                           np.nonzero(np.diff(np.nonzero(ok)[0]) > 1)[0] + 1),
+                  key=len)
+        if len(run) < 40:
+            continue
+        lo = np.convolve(np.pad(yo[run], k // 2, mode="edge"), ker, "valid")
+        lh = np.convolve(np.pad(yh[run], k // 2, mode="edge"), ker, "valid")
+        w = np.clip((_FOLD_PROFILE_BAND + _FOLD_PROFILE_FADE - np.abs(ns[run]))
+                    / _FOLD_PROFILE_FADE, 0.0, 1.0)
+        delta[j, run] = np.clip(lh - lo, -_FOLD_PROFILE_CAP,
+                                _FOLD_PROFILE_CAP) * w
+    m = _FOLD_PROFILE_CHORD
+    pad = np.pad(delta, ((m // 2, m // 2), (0, 0)), mode="edge")
+    delta = np.apply_along_axis(
+        lambda col: np.convolve(col, np.ones(m) / m, "valid"), 0, pad)
+    ys, xs = np.mgrid[0:size, 0:size]
+    relx, rely = (xs + 0.5) / L - tx, (ys + 0.5) / L - ty
+    tt = (relx * ux + rely * uy) / seg
+    nnp = relx * vx + rely * vy
+    fk = np.clip(tt, 0.0, 1.0) * (len(ts) - 1)
+    fj = (nnp + _FOLD_PROFILE_REACH) / _FOLD_PROFILE_PITCH
+    k0 = np.clip(np.floor(fk).astype(int), 0, len(ts) - 2)
+    j0 = np.clip(np.floor(fj).astype(int), 0, len(ns) - 2)
+    a1, b1 = fk - k0, np.clip(fj - j0, 0.0, 1.0)
+    out = ((1 - a1) * (1 - b1) * delta[k0, j0] + a1 * (1 - b1) * delta[k0 + 1, j0]
+           + (1 - a1) * b1 * delta[k0, j0 + 1] + a1 * b1 * delta[k0 + 1, j0 + 1])
+    inside = ((tt >= 0.0) & (tt <= 1.0) & (np.abs(nnp) <= _FOLD_PROFILE_REACH)
+              & (_mask(name, idx, size) > 0))
+    guard = np.clip((dist - _RESTEP_PROTECT) / _RESTEP_PROTECT_FADE, 0.0, 1.0)
+    out = np.where(inside, out, 0.0) * guard
+    return np.clip(rgb + out[..., None], 0, 255)
+
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -4487,6 +4602,7 @@ def frame_image(name, idx, size):
     rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
     if (name, idx) in _MATERIAL_BASIS:
         rgb = _material_layer(name, idx, _MATERIAL_BASIS[(name, idx)], size)
+    rgb = _fold_profile_from_author(rgb, name, idx, size)
     if name == "Help":
         rgb = _engrave(rgb, name, size)
         rgb = _bead(rgb, name, idx, size)
