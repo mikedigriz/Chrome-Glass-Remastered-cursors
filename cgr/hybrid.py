@@ -85,17 +85,17 @@ def _ai(key):
                       .convert("RGBA"), dtype=np.float64)
 
 
-def _resize(arr, size):
+def _resize(arr, size, filt=Image.LANCZOS):
     """Premultiplied Lanczos resize of an RGBA float array -> (rgb, a), done
     in linear light so translucent edges don't come out dark/soft."""
     a = arr[..., 3] / 255.0
     rgb_lin = V.srgb_to_linear(np.clip(arr[..., :3], 0, 255).astype(np.uint8))
     premult = rgb_lin * a[..., None]
     chans = [np.asarray(Image.fromarray(premult[..., c].astype(np.float32), mode="F")
-                         .resize((size, size), Image.LANCZOS), dtype=np.float64)
+                         .resize((size, size), filt), dtype=np.float64)
               for c in range(3)]
     oa = np.asarray(Image.fromarray(a.astype(np.float32), mode="F")
-                     .resize((size, size), Image.LANCZOS), dtype=np.float64)
+                     .resize((size, size), filt), dtype=np.float64)
     rgb_lin_out = np.dstack(chans) / np.maximum(oa, 1e-6)[..., None]
     rgb = V.linear_to_srgb(rgb_lin_out).astype(np.float64)
     return rgb, np.clip(oa, 0, 1) * 255.0
@@ -3621,14 +3621,29 @@ _FREEZE_FOLD = 1.2       # logical units either side of the fold chord that stay
                          # _freeze_weight
 
 
+_MASTER_BOX_BELOW = 128  # sizes under this take the master's colour by area, not Lanczos
+
+
 @functools.lru_cache(maxsize=None)
 def _master_rgb(name, idx, size):
-    """The sharpened master's colour at `size`, before any correction."""
+    """The sharpened master's colour at `size`, before any correction.
+
+    Below _MASTER_BOX_BELOW the rim - about one logical unit - is under four
+    pixels wide, and Lanczos' lobes are as wide as it is: they break the
+    author's outline into dashes, near-black and orange in turn on Wait and
+    AppStarting at 48 and 64. Averaged by area it comes out as one even line.
+    Against the 512 frame box-reduced, the outer 1.5 units: Wait 64 4.94 ->
+    3.08, AppStarting 64 8.10 -> 6.17, and the same at 32..96. From 128 up
+    the lobes read as crispness instead; box there costs Arrow's point a third
+    of its contrast (0.222 -> 0.148) and NO's fold its notch (0.898 -> 0.348).
+    Clamping Lanczos to the source's own range under each pixel does not help
+    (4.91): the dashes are ringing inside that range, not overshoot past it."""
     m_rgb, anchor = _master(name, idx)
     if size == anchor:
         return m_rgb
     _, m_a = _resize(_orig(_key(name, idx)), anchor)
-    rgb, _ = _resize(np.dstack([m_rgb, m_a]), size)
+    rgb, _ = _resize(np.dstack([m_rgb, m_a]), size,
+                     Image.BOX if size < _MASTER_BOX_BELOW else Image.LANCZOS)
     if size > anchor:                                  # only when past native detail
         rgb = _unsharp(rgb, radius=1.6 * size / 128.0, percent=40)
     else:
@@ -3656,6 +3671,8 @@ def _master_rgb(name, idx, size):
         # to catch what this one leaves. Measured on Wait's own point at 32px,
         # (0, 0, 22) at 44% alpha: the default threshold only pulls it to
         # (1, 1, 16), still visibly blue; this one reaches (2, 2, 7).
+        # 32px is resized by area now (_MASTER_BOX_BELOW) and does not ring;
+        # the pass stays for 128..384 and for whatever the master invents.
         got = _hue_outlier_weight(name, idx, rgb, 4.0, 15.0, 0.5, 1.0)
         if got is not None:
             lum, chroma, outlier = got
