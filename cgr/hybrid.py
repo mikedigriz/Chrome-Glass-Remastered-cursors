@@ -1387,10 +1387,121 @@ def _up_alpha_native(key):
             break
         a = np.clip(a * (target / lvl), 0, 255)
     kind, cname, cidx = key.split("__")
-    return _thin_lift_glass(a, cname, int(cidx), a.shape[0])
+    return _even_blade(_thin_lift_glass(a, cname, int(cidx), a.shape[0]), cname, int(cidx))
 
 
-_LEVEL_REACH = 0.5       # least mask coverage a pixel needs to speak for the level
+_BLADE_CURSORS = {"Arrow", "Arrow_Down", "UpArrow", "AppStarting", "Wait"}
+_BLADE_END = 0.4         # logical units redrawn: past the deepest the master stops (0.35..0.42)
+_BLADE_FADE = 0.15       # then handed back to the master over this much
+_BLADE_RING = (0.35, 0.7)  # logical units: where the glass behind the band is read
+_BLADE_BLUR = 0.5        # logical units that reading is spread by
+_BLADE_CLEAR = 1.5       # logical units round a traced vertex left out of the profile
+_BLADE_TAPER = 3.0       # the band is this many times narrower at a convex point,
+_BLADE_TAPER_REACH = 3.0  # eased in over this many logical units
+_BLADE_BIN = 1 / 64.0    # logical units per profile bin
+
+
+def _even_blade(a, name, idx):
+    """One translucent blade all round the edge, redrawn from the outline.
+
+    The outer edge of the glass is a half-opacity band: wherever the AI master
+    stops short of the traced outline only the Lanczos share of the author's
+    own alpha is left. It reads as the edge of a glass blade and it is kept.
+    What is not kept is where the master happens to stop - 0.10..0.32 logical
+    units in from the outline along the sides, 0.34..0.67 of the glass level,
+    with the author's 32px staircase showing through as a ripple along the
+    arc. At 256 and up that is the band swelling, thinning and breaking off.
+
+    So the band is drawn from the distance to the outline instead: the frame's
+    own median profile (measured away from the traced vertices), scaled by the
+    glass just behind it. Width and opacity come out one and the same along
+    every side (0.21..0.23 units, 0.44..0.47 of the level), the distance field
+    mitres the convex corners and rounds the notch by itself. Toward a convex
+    point the band narrows (_BLADE_TAPER): drawn at full width it meets itself
+    over the last unit and the point goes translucent - disc alpha 0.73 ->
+    0.63, tip_sheen -13%.
+
+    Done here, on the native map, so every size is this one band resampled and
+    _hold_coverage still holds the ladder; redrawn after it instead, scale_drift
+    went 0.006 -> 0.160. Costs delta_e 0.15..0.23 on the five: the staircase
+    the band no longer carries is the author's 32px edge, pixel for pixel.
+    Following the master's level per side to win that back (smoothed 2 and 4
+    units) brought the staircase back and read worse, 3.28 and 3.68 on Arrow
+    against 3.17."""
+    if name not in _BLADE_CURSORS:
+        return a
+    size = a.shape[0]
+    d = _edge_distance_at(name, idx, size)
+    lv = _blade_level(a, d, size)
+    P = _blade_profile(a, d, lv, name, idx)
+    if P is None:
+        return a
+    u = 1.0 - _point_distance(_sharp_corners(name, _geom(name, idx)), size) / _BLADE_TAPER_REACH
+    d = d * (1.0 + (_BLADE_TAPER - 1.0) * _smoothstep(u))
+    t = lv * _blade_footprint(P, size, d)
+    h = np.clip((_BLADE_END + _BLADE_FADE - d) / _BLADE_FADE, 0.0, 1.0)
+    return np.clip(a + h * (t - a), 0, 255)
+
+
+def _blade_level(a, d, size):
+    """Glass level just behind the band, spread over it from a ring deeper in."""
+    ring = ((d >= _BLADE_RING[0]) & (d < _BLADE_RING[1])).astype(np.float64)
+    num = _smooth1(a * ring, _BLADE_BLUR, size)
+    den = _smooth1(ring, _BLADE_BLUR, size)
+    return np.where(den > 1e-4, num / np.maximum(den, 1e-6), a)
+
+
+def _point_distance(pts, size):
+    """Distance to the nearest of `pts` (logical units), in logical units."""
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
+    near = np.full((size, size), np.inf)
+    for cx, cy in pts:
+        near = np.minimum(near, np.hypot(px - cx, py - cy))
+    return near
+
+
+def _blade_profile(a, d, lv, name, idx):
+    """Median of the map over the glass behind it, per depth bin, made monotone.
+
+    Read on the fully covered pixels only, away from every traced vertex, so
+    the corners - where the master behaves differently - do not set the side."""
+    size = a.shape[0]
+    verts = [(p[0], p[1]) for poly in C.TRACED[name]["frames"][_geom(name, idx)]["polys"]
+             for p in poly if p[2]]
+    reach = _BLADE_END + _BLADE_FADE + 0.1
+    sel = ((_mask(name, idx, size) >= 255) & (d < reach)
+           & (_point_distance(verts, size) > _BLADE_CLEAR) & (lv > 20))
+    r = a[sel] / lv[sel]
+    db = np.floor(d[sel] / _BLADE_BIN).astype(int)
+    nb = int(np.ceil(reach / _BLADE_BIN))
+    P = np.full(nb, np.nan)
+    for i in range(nb):
+        v = r[db == i]
+        if len(v) >= 20:
+            P[i] = np.median(v)
+    ok = np.isfinite(P)
+    if not ok.any():
+        return None
+    P = np.interp(np.arange(nb), np.nonzero(ok)[0], P[ok])
+    return np.clip(np.maximum.accumulate(P), 0.0, 1.0)
+
+
+def _blade_footprint(P, size, d):
+    """The profile averaged over the part of each pixel inside the outline."""
+    k = size / V.LOGICAL
+    step = 1 / 256.0
+    g = np.arange(0.0, 2.0, step)
+    pf = np.interp(g, (np.arange(len(P)) + 0.5) * _BLADE_BIN, P, left=P[0], right=1.0)
+    cs = np.concatenate([[0.0], np.cumsum(pf) * step])
+    gx = np.arange(len(cs)) * step
+    hi = np.clip(d + 0.5 / k, step, g[-1])
+    lo = np.clip(np.minimum(d - 0.5 / k, hi - step), 0.0, None)
+    return (np.interp(hi, gx, cs) - np.interp(lo, gx, cs)) / (hi - lo)
+
+
+_LEVEL_REACH = 0.5      # least mask coverage a pixel needs to speak for the level
 
 
 _LEVEL_REF = 128         # size the glass level is matched at
