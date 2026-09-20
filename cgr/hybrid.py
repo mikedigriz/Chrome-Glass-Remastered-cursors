@@ -3270,6 +3270,36 @@ _RIM_XFER_BLEND = 0.35     # logical units of arc the sections are blended
 _RIM_XFER_CAP = 60.0       # levels of composite luma the correction may carry
 _RIM_XFER_BG = 128.0       # the ground the section is composited on, the same
                            # one analyze.rim_layers reads over
+# A section is read along a ray 0.5..1.0 units inside the outline and a station
+# whose ray leaves the silhouette is dropped, so how much of the correction
+# survives is a question about hardware pixels: at 32 the whole window is under
+# one pixel, no station keeps it and the guard below returns the frame
+# untouched; at 48 the mean correction is +0.20 levels, at 64 +2.06, and only
+# from 96 is it the +10.8 the cursor is drawn with. The rim the product showed
+# at 32..64 was therefore not the rim it shows at 256 - AppStarting's outline
+# read a flat dark line there against the ladder's own reference (the 512 frame
+# composited and area-reduced): 5.8/6.0/6.2 levels of edge error at 32/48/64,
+# against Wait's 3.0, and Arrow's 6.1/5.9/5.5.
+#
+# So the field is fitted once where every section resolves and area-reduced for
+# the rungs that cannot fit their own. Edge error 4.2/3.9/3.6/2.8 for
+# AppStarting, 3.8/2.7/2.5/2.2 for Arrow, 4.8/3.6/2.0/1.5 for Help and
+# 7.1/5.6/4.4/2.5 for NO at 32/48/64/96.
+_RIM_XFER_BORROW = {"Arrow", "Help", "AppStarting"}   # cursors that borrow it.
+                           # NO is out: its morph cadence is read at 32, where
+                           # the stage was silent, so any field at all moves it
+                           # (0.2017 -> 0.2029 against a ratchet at 0.2024 -
+                           # 0.6% of a budget the box downsample already spent
+                           # 4.6% of). Its rim is worth 7.8/7.6/7.3/5.5 ->
+                           # 7.1/5.6/4.4/2.5 and waits for the NO work, where
+                           # the cadence can be re-read rather than nudged.
+_RIM_XFER_REF = 512        # the size the field is fitted at, and
+_RIM_XFER_MIN = 128        # ...the rung below which it is borrowed from there.
+                           # Borrowing at 128 as well halves the error there too
+                           # (AppStarting 5.6 -> 3.0) and costs NO's fold its
+                           # resolution: fold_unres 0.200 -> 0.333, a debt of
+                           # its own made worse. The rungs the analyzer reads
+                           # are left fitting their own.
 
 
 @functools.lru_cache(maxsize=None)
@@ -3311,8 +3341,9 @@ def _sample1(field, x, y):
     return _sample(field[..., None], x, y)[..., 0]
 
 
-def _rim_transfer(rgb, name, idx, size):
-    """Rewrite how the glass rises off its edge, keeping everything else."""
+def _rim_native(rgb, name, idx, size):
+    """Rewrite how the glass rises off its edge, keeping everything else, with
+    every section read at this size. _rim_transfer is the way in."""
     if name not in _RIM_XFER:
         return rgb
     got = _rim_stations(name, idx)
@@ -3429,6 +3460,28 @@ def _rim_transfer(rgb, name, idx, size):
                                 0.0, 1.0)
     delta = delta * (mask / 255.0) * (d <= _RIM_XFER_DEPTH)
     return np.clip(rgb + delta[..., None], 0, 255)
+
+
+@functools.lru_cache(maxsize=None)
+def _rim_ref_field(name, idx):
+    """The stage's own field at _RIM_XFER_REF, as levels to be scaled down."""
+    pre = _rgb_pre_rim(name, idx, _RIM_XFER_REF)
+    return (_rim_native(pre, name, idx, _RIM_XFER_REF) - pre).astype(np.float32)
+
+
+def _rim_transfer(rgb, name, idx, size):
+    """The rim transfer, fitted here or borrowed from _RIM_XFER_REF."""
+    if name not in _RIM_XFER_BORROW or size >= _RIM_XFER_MIN:
+        return _rim_native(rgb, name, idx, size)
+    f = _rim_ref_field(name, idx)
+    # By area, the way the colour itself comes down below _MASTER_BOX_BELOW: a
+    # rung whose whole rim band is one pixel wide wants the band's mean, not a
+    # sample of it. Normalising by the reduced coverage first was tried and
+    # moves the edge error by 0.01 - the field is already zero outside.
+    small = np.dstack([np.asarray(Image.fromarray(f[..., c], mode="F")
+                                  .resize((size, size), Image.BOX))
+                       for c in range(f.shape[2])])
+    return np.clip(rgb + small, 0, 255)
 
 
 # The fold's own shape, transferred the same way, along its length instead of
@@ -4720,12 +4773,9 @@ def _fold_profile_from_author(rgb, name, idx, size):
     return np.clip(rgb + out[..., None], 0, 255)
 
 
-@functools.lru_cache(maxsize=None)
-def frame_image(name, idx, size):
-    """Final RGBA frame at any size. Every size, 32px included, draws its colour
-    from the sharpened AI master (_master, native up to 512px) inside a
-    vector-crisp silhouette; smaller sizes downsample the already-sharpened
-    master, so the crispness carries down without a second sharpen pass."""
+def _rgb_pre_rim(name, idx, size):
+    """Everything frame_image does before the rim transfer. Its own function so
+    that _rim_ref_field can run the same chain at _RIM_XFER_REF."""
     orig = _orig(_key(name, idx))
     rgb = _freeze_lines(_master_rgb(name, idx, size), name, idx, size)
     if (name, idx) in _MATERIAL_BASIS:
@@ -4743,8 +4793,16 @@ def frame_image(name, idx, size):
     rgb = _edge_shadow_declutter(rgb, name, idx, size)
     rgb = _edge_comb(rgb, name, idx, size)
     rgb = _notch_declutter(rgb, name, idx, size)
-    rgb = _notch_from_author(rgb, name, idx, size)
-    rgb = _rim_transfer(rgb, name, idx, size)
+    return _notch_from_author(rgb, name, idx, size)
+
+
+@functools.lru_cache(maxsize=None)
+def frame_image(name, idx, size):
+    """Final RGBA frame at any size. Every size, 32px included, draws its colour
+    from the sharpened AI master (_master, native up to 512px) inside a
+    vector-crisp silhouette; smaller sizes downsample the already-sharpened
+    master, so the crispness carries down without a second sharpen pass."""
+    rgb = _rim_transfer(_rgb_pre_rim(name, idx, size), name, idx, size)
     rgb = _fold_transfer(rgb, name, idx, size)
     rgb = _facet_split(rgb, name, idx, size)
     rgb = _tip_level(rgb, name, idx, size)
