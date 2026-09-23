@@ -97,6 +97,17 @@ _LIGHT_GAIN = 2.0    # amplitude of the light field. The blur that takes the
                      # far the light does
 _DIM_FLOOR = 0.10    # darkest a facet may be driven by the light leaving it, as
                      # a fraction of its canonical brightness
+_DIM_SHARE = 0.75    # how far a dark pixel's share of the leaving light is taken
+                     # toward its neighbourhood's, see _dim_ref. The loss is the
+                     # master's light blurred over _MASTER_UNIT - what the
+                     # neighbourhood lost - and dividing it by one dark rim
+                     # pixel's own luminance put the rim on _DIM_FLOOR in blots
+                     # the size of the blur: 24-41% of the dark rim at the tail
+                     # corners of AppStarting/Wait/Hand, black caps on the points
+                     # at frames 12-16 and 21-25. 0 is that; 1 (the neighbourhood
+                     # outright) is clean but lighter than the render's own keys
+                     # at their phases, 0.75 is the least error against them, and
+                     # at 0.5 and under the blots are still there by eye
 #
 # Two other ways of keeping the light off the master's dark crease were built
 # and measured before the split model above made them unnecessary. Both are out:
@@ -256,7 +267,7 @@ def periodic_at(field, phases, k=HARMONICS):
     return out
 
 
-def _paced_phases(raw, lin, vis, seen, anchor, out_n=OUT_N, k=HARMONICS):
+def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS):
     """out_n phases spaced by equal change of the picture, not by equal time.
 
     Measured on the rendered colour and not on the field itself: the light model
@@ -273,9 +284,11 @@ def _paced_phases(raw, lin, vis, seen, anchor, out_n=OUT_N, k=HARMONICS):
     f = periodic_at(raw_s, ph, k) - a_s
     if f.shape[1] != lin_s.shape[0]:                 # a 32px field under a render
         return np.arange(out_n) / out_n
+    ref_s = _dim_ref(lin_s, alpha[::d, ::d])
     # float, not the uint8 linear_to_srgb hands back: a step of -3 levels read
     # as 253 turns the pace curve into noise, and the pacing into nothing
-    shot = [V.linear_to_srgb(_lit(lin_s, f[i] * _LIGHT_GAIN * vis_s[..., None])).astype(np.float64)
+    shot = [V.linear_to_srgb(_lit(lin_s, f[i] * _LIGHT_GAIN * vis_s[..., None],
+                                  ref_s)).astype(np.float64)
             for i in range(_PACE_FINE)]
     step = np.array([float(np.abs(shot[(i + 1) % _PACE_FINE][seen_s]
                                   - shot[i][seen_s]).mean()) for i in range(_PACE_FINE)])
@@ -301,8 +314,26 @@ def _gamut_scale(lin, r):
     return np.clip(np.where(np.isfinite(t), t, 1.0), 0.0, 1.0)
 
 
-def _lit(lin, r):
-    """One frame's linear colour: the canonical glass under a light residual."""
+def _dim_ref(lin, alpha):
+    """What _lit takes the leaving light as a fraction of, per pixel.
+
+    The pixel's own luminance where it is at least as bright as its
+    neighbourhood (the alpha-weighted mean over _MASTER_UNIT, the same unit the
+    loss was blurred over); below that, _DIM_SHARE of the way toward the
+    neighbourhood's, geometrically."""
+    size = lin.shape[0]
+    y = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722
+    w = np.clip(alpha / 255.0, 0.0, 1.0)
+    yn = (H._smooth1(y * w, _MASTER_UNIT, size)
+          / np.maximum(H._smooth1(w, _MASTER_UNIT, size), 1e-6))
+    return np.where(y < yn, np.maximum(y, 1e-6) ** (1.0 - _DIM_SHARE) * yn ** _DIM_SHARE, y)
+
+
+def _lit(lin, r, ref=None):
+    """One frame's linear colour: the canonical glass under a light residual.
+
+    `ref` is _dim_ref of the same frame; None divides by each pixel's own
+    luminance, which is what put the dark rim on _DIM_FLOOR in blots."""
     if MODE == "mul":
         return (lin + _EPS) * np.exp(np.clip(r, -_GAIN_CAP, _GAIN_CAP)) - _EPS
     if MODE == "split":
@@ -312,7 +343,8 @@ def _lit(lin, r):
         # a yellow whose red has gone is green. Light that leaves a surface
         # scales it; light that arrives adds to it.
         dy = r[..., 0] * 0.2126 + r[..., 1] * 0.7152 + r[..., 2] * 0.0722
-        y = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722
+        y = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722 \
+            if ref is None else ref
         f = np.clip(1.0 + np.minimum(dy, 0.0) / np.maximum(y, 1e-4), _DIM_FLOOR, 1.0)
         add = np.clip(r, 0.0, None)
         return lin * f[..., None] + add * _gamut_scale(lin * f[..., None], add)[..., None]
@@ -565,8 +597,8 @@ def paced_phases(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     idx = canonical_index(name) if idx is None else idx
     key = (name, size, out_n, k, idx)
     if key not in _phase_cache:
-        _idx, _b, lin, _a, raw, _n, vis, seen, anchor = _setup(name, size, k, idx)
-        _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor, out_n, k)
+        _idx, _b, lin, alpha, raw, _n, vis, seen, anchor = _setup(name, size, k, idx)
+        _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n, k)
     return _phase_cache[key]
 
 
@@ -584,7 +616,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
         phases = _phase_cache[key]
     else:
         phases = _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor,
-                                                   out_n, k)
+                                                   alpha, out_n, k)
     field = periodic_at(raw, phases, k) - anchor
     facet = None
     coef_anchor = coef_phase = None
@@ -594,6 +626,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             _geometry, coefficients, _grid = facet
             coef_anchor = periodic_at(coefficients, [idx / n], k)[0]
             coef_phase = periodic_at(coefficients, phases, k)
+    ref = _dim_ref(lin, alpha)
     frames = []
     for t in range(out_n):
         if field.shape[1] == size:
@@ -602,7 +635,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             r = np.dstack([H._smooth1(H._resample_signed(field[t, ..., c], size),
                                       _LIGHT_UNIT, size) for c in range(3)]) * _LIGHT_GAIN
         r = r * vis[..., None]
-        frame_lin = _lit(lin, r)
+        frame_lin = _lit(lin, r, ref)
         if facet is not None:
             geometry, _coefficients, grid = facet
             frame_lin = _facet_apply(lin, frame_lin,

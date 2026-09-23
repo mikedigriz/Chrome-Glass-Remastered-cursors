@@ -82,9 +82,10 @@ def build_frames(name, size, verbose=False):
     field_light = LA.periodic_at(raw, phases, LA.HARMONICS) - anchor  # production's own field
 
     ship_frames, candidate_frames, diag = [], [], []
+    ref = LA._dim_ref(lin, alpha)
     for t in range(out_n):
         r = field_light[t] * LA._LIGHT_GAIN * vis[..., None]
-        ship_lin = LA._lit(lin, r)
+        ship_lin = LA._lit(lin, r, ref)
 
         delta_coef = coef_phase[t] - coef_anchor                      # (stations,3,4)
         candidate_lin = LA._facet_apply(lin, ship_lin, delta_coef, geom, grid)

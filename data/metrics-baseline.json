@@ -36,7 +36,7 @@
   "tip_convergence": 1.3,
   "tip_extreme_contrast": 0.137793,
   "tip_profile": 0.834688,
-  "tip_sheen": 31.12515,
+  "tip_sheen": 29.051211,
   "tip_wobble": 0.285137
  },
  "Arrow": {
@@ -130,7 +130,7 @@
   "fold_s_max_ratio": 1.5,
   "fold_s_min_ratio": 1.0,
   "fold_step": 0.571492,
-  "fold_unident": 0.6,
+  "fold_unident": 0.65,
   "fold_unres": 0.0,
   "ghost_rgb": 0.050275,
   "inner_tip": 0.333333,
@@ -145,7 +145,7 @@
   "tip_convergence": 1.4,
   "tip_extreme_contrast": 0.25298,
   "tip_profile": 1.709293,
-  "tip_sheen": 32.735148,
+  "tip_sheen": 30.953881,
   "tip_wobble": 0.371
  },
  "Handwriting": {
@@ -405,7 +405,7 @@
   "fold_unident": 0.6,
   "fold_unres": 0.0,
   "ghost_rgb": 0.053395,
-  "inner_tip": 0.166667,
+  "inner_tip": 0.0,
   "legacy_jitter_coverage": 0.274411,
   "legacy_jitter_rows": 22,
   "rim_layers": 1.0,
