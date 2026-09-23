@@ -2237,6 +2237,27 @@ def _ring_pointer(name, idx, size):
     return _smooth1(grey.astype(np.float64), _RING_FADE, size)
 
 
+def _sign_owned(rgb, name, idx, size):
+    """How much of each pixel the sign owns, 0..1, for the fold stages. None
+    off `_NO_RING`.
+
+    His sign and ours, both: measured on NO 2 and 3 at 512, his field alone
+    reads 0.01-0.14 on our own sign's outline, and `_fold_restep` fitted
+    through it rewrote that outline station by station into beads. Ours by the
+    same channel spread as his, off the stage's own input. Grown by
+    `_RING_MARGIN` and faded over `_RING_FADE` - the band `_no_ring` owns
+    around the ring. The fits skip samples it owns past the middle of that
+    fade, and the correction fades out over the rest. Outside the silhouette
+    his field is 1 as well; the fold stages hold off the outline by
+    `_RESTEP_PROTECT` anyway."""
+    if name not in _NO_RING:
+        return None
+    m = (((1.0 - _ring_pointer(name, idx, size)) >= 0.5)
+         | (rgb.max(-1) - rgb.min(-1) >= _RING_GREY))
+    m = _smooth1(m.astype(np.float64), _RING_MARGIN, size) > 1e-3
+    return np.ascontiguousarray(_smooth1(m.astype(np.float64), _RING_FADE, size))
+
+
 def _no_ring(rgb, alpha, name, idx, size):
     """Redraw NO's prohibition sign as the template the author used.
 
@@ -2374,9 +2395,11 @@ _WEDGE_TIPS = {"Arrow", "Arrow_Down", "Hand", "UpArrow", "Wait", "AppStarting"}
 # carry the same pointer in their silhouette as Arrow does - their chords land
 # within 0.25 logical units of his - so the fold the stage rebuilds is the same
 # fold, and it was left out by scope rather than by a finding (NEXT.md 51).
-# NO carries it too and is deliberately absent: the stage reads the same on him
-# but costs `fold_step` 0.439 -> 0.387 against a 0.45 ratchet (NEXT.md 61).
-_FOLD_RESTEP_ON = _WEDGE_TIPS | {"Help", "Handwriting"}
+# NO carries it too, and alone it did not pay: NO's master steps its facets at
+# half the author's and frame 3 is a ramp, which a local tangent only carries on
+# (NEXT.md 61, 89). With `_FOLD_PROFILE_ON` first and the sign kept out of
+# both (`_sign_owned`) it closes four fold debts (NEXT.md 93).
+_FOLD_RESTEP_ON = _WEDGE_TIPS | {"Help", "Handwriting", "NO"}
 
 _TIP_RELIGHT_DIFF = 34.0     # luma swing between the two facets the relight paints
 _TIP_RELIGHT_RIDGE_W = 0.35  # logical units the transition spans, away from the point
@@ -4129,6 +4152,7 @@ def _fold_restep(rgb, name, idx, size):
     lum_c = np.ascontiguousarray(lum)
     dist = _edge_distance_at(name, idx, size)
     alpha = np.ascontiguousarray(_up_alpha(name, idx, size).astype(np.float64))
+    owned = _sign_owned(rgb, name, idx, size)
     ns = np.arange(-_RESTEP_REACH, _RESTEP_REACH + _RESTEP_PITCH, _RESTEP_PITCH)
     ts = np.linspace(0.0, 1.0, _RESTEP_STATIONS)
     delta = np.zeros((len(ts), len(ns)))
@@ -4147,6 +4171,8 @@ def _fold_restep(rgb, name, idx, size):
         d = _sample1(dist, sx, sy)
         a = _sample1(alpha, sx, sy)
         ok = (d >= _RESTEP_PROTECT) & (a >= 24.0) & np.isfinite(y)
+        if owned is not None:
+            ok &= _sample1(owned, sx, sy) < 0.5
         if ok.sum() < 40:
             continue
         run = max(np.split(np.nonzero(ok)[0],
@@ -4218,6 +4244,8 @@ def _fold_restep(rgb, name, idx, size):
               & (_mask(name, idx, size) > 0))
     guard = np.clip((dist - _RESTEP_PROTECT) / _RESTEP_PROTECT_FADE, 0.0, 1.0)
     out = np.where(inside, out, 0.0) * guard
+    if owned is not None:
+        out = out * (1.0 - np.clip(owned, 0.0, 1.0))
     return np.clip(rgb + out[..., None], 0, 255)
 
 
@@ -4658,13 +4686,16 @@ _SAT_LIFT = {"NO": 1.00}     # named, because NO's red ring is not a sheet of
                              # not its colour, and no lift reaches it.
 
 
-_FOLD_PROFILE_ON = {"Help"}   # cursors whose master lost the slow shape of the
-                         # glass beside the fold. Named rather than tested for:
-                         # the departure of a facet's slope from the author's is
-                         # not a discriminator - measured at 512 on every cursor
-                         # that has a chord, the worst station runs 15 to 312
-                         # levels per unit on all ten of them (NEXT.md 92), so a
-                         # threshold that reaches Help reaches everyone.
+_FOLD_PROFILE_ON = {"Help", "NO"}   # cursors whose master lost the slow shape
+                         # of the glass beside the fold. Named rather than tested
+                         # for: the departure of a facet's slope from the
+                         # author's is not a discriminator - measured at 512 on
+                         # every cursor that has a chord, the worst station runs
+                         # 15 to 312 levels per unit on all ten of them (NEXT.md
+                         # 92), so a threshold that reaches Help reaches
+                         # everyone. NO: the master's facets step 41-45 levels
+                         # on frames 0-1 against the author's 82-95, and frame
+                         # 3's lower half is one ramp (NEXT.md 93).
 _FOLD_PROFILE_BAND = 4.0    # logical units either side of the chord the slow
                          # profile is corrected over
 _FOLD_PROFILE_FADE = 1.0    # units it fades out over beyond the band
@@ -4724,6 +4755,7 @@ def _fold_profile_from_author(rgb, name, idx, size):
     our_c = np.ascontiguousarray(ours)
     dist = _edge_distance_at(name, idx, size)
     alpha = np.ascontiguousarray(_up_alpha(name, idx, size).astype(np.float64))
+    owned = _sign_owned(rgb, name, idx, size)
     ns = np.arange(-_FOLD_PROFILE_REACH,
                    _FOLD_PROFILE_REACH + _FOLD_PROFILE_PITCH, _FOLD_PROFILE_PITCH)
     ts = np.linspace(0.0, 1.0, _FOLD_PROFILE_STATIONS)
@@ -4738,6 +4770,8 @@ def _fold_profile_from_author(rgb, name, idx, size):
         yo = _sample1(our_c, sx, sy)
         yh = _sample1(his_c, sx, sy)
         ok = (a >= 24.0) & (d >= _RESTEP_PROTECT) & np.isfinite(yo) & np.isfinite(yh)
+        if owned is not None:
+            ok &= _sample1(owned, sx, sy) < 0.5
         if ok.sum() < 40:
             continue
         run = max(np.split(np.nonzero(ok)[0],
@@ -4770,6 +4804,8 @@ def _fold_profile_from_author(rgb, name, idx, size):
               & (_mask(name, idx, size) > 0))
     guard = np.clip((dist - _RESTEP_PROTECT) / _RESTEP_PROTECT_FADE, 0.0, 1.0)
     out = np.where(inside, out, 0.0) * guard
+    if owned is not None:
+        out = out * (1.0 - np.clip(owned, 0.0, 1.0))
     return np.clip(rgb + out[..., None], 0, 255)
 
 
