@@ -1449,6 +1449,8 @@ _POINT_READ = 2.5         # logical units: where a convex point reads its own we
 _POINT_READ_REACH = 8.0   # logical units: identity again here. Over 2 * _POINT_READ
                           # or the remap folds; four times it halves the radius at
                           # the point, and the cycle keeps its liveliness
+_POINT_BAND = 0.7         # logical units: the rim band's depth. The read fades in
+                          # from one hardware pixel of band (46px) to two (91px)
 _POINT_CONVERGE = _BLADE_CURSORS | {"Hand", "Help", "Handwriting", "NO"}
 _POINT_WIDEST = 80.0      # degrees: the widest point converged. Every point of the
                           # arrows reads 50-75, the shoulders of Handwriting's
@@ -1508,10 +1510,22 @@ def _point_converge(rgb, name, idx, size):
     bands bend into an arc toward the corner, so only points up to
     _POINT_WIDEST are converged. Points closer than two reaches (Handwriting's
     middle keys, 13.4 apart) take their discs in turn, each read from the last,
-    so the disc read second does not throw the first away where they overlap."""
+    so the disc read second does not throw the first away where they overlap.
+
+    Only where the band has pixels of its own. At 32 it is 0.7 of one and the
+    tip is the author's point, rim to its end and the darkest glass on the
+    cursor; reading the wedge there put the body's glass on it instead, and on
+    white the stage made the points 20-60 levels paler (AppStarting's tail
+    120 -> 178, his 116). No chisel shows at that size either way: tip_nest
+    reads 3.5-7 without the stage. So the read depth fades in with the band's
+    width in pixels, `_POINT_BAND`, from one to two; at 64 the part-read keeps
+    tip_nest at 6.5-13.2, where the full read reached 18.5 and none 22.8."""
     if name not in _POINT_CONVERGE:
         return rgb
     L = size / float(V.LOGICAL)
+    read = _POINT_READ * min(max(_POINT_BAND * L - 1.0, 0.0), 1.0)
+    if read <= 0.0:
+        return rgb
     ys, xs = np.mgrid[0:size, 0:size] + 0.5
     px, py = xs / L, ys / L
     out = np.asarray(rgb, dtype=np.float64).copy()
@@ -1524,7 +1538,7 @@ def _point_converge(rgb, name, idx, size):
         r = np.hypot(dx, dy)
         m = r < _POINT_READ_REACH
         rm = r[m]
-        k = 1.0 + _POINT_READ * (1.0 - rm / _POINT_READ_REACH) ** 2 / np.maximum(rm, 1e-9)
+        k = 1.0 + read * (1.0 - rm / _POINT_READ_REACH) ** 2 / np.maximum(rm, 1e-9)
         out[m] = _sample(src, (cx + dx[m] * k) * L - 0.5, (cy + dy[m] * k) * L - 0.5)
     return out
 
