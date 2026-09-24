@@ -109,12 +109,17 @@ _DIM_SHARE = 0.75    # how far a dark pixel's share of the leaving light is take
                      # at their phases, 0.75 is the least error against them, and
                      # at 0.5 and under the blots are still there by eye
 _POINT_UNIT = (1.0, 1.75)  # logical units round each sharp convex corner of the
-                     # outline inside which _field_at holds the light in full,
+                     # outline inside which _field_at and _point_dim act in full,
                      # and past which it is gone. The points are where the rim
                      # is thinnest and the keys swing by a factor of eight; over
                      # the whole cursor the same clamp cost AppStarting's
                      # liveliness 0.914 -> 0.857, because there the ringing is
                      # sweep the gate counts (DEAD_ENDS.md, 2026-09-23)
+_POINT_BLACK = 0.004 # linear luminance of the darkest glass the author draws at
+                     # the points: sRGB ~13, his p1 over the cycle at the tails
+                     # of AppStarting and Wait (13.4 and 11.7). Where _DIM_FLOOR
+                     # of the canonical glass is darker than this, the floor is
+                     # black rather than a dim copy of the glass, see _lit
 #
 # Two other ways of keeping the light off the master's dark crease were built
 # and measured before the split model above made them unnecessary. Both are out:
@@ -336,10 +341,11 @@ def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
     if f.shape[1] != lin_s.shape[0]:                 # a 32px field under a render
         return np.arange(out_n) / out_n
     ref_s = _dim_ref(lin_s, alpha[::d, ::d])
+    pt_s = None if point is None else point(lin_s.shape[0])
     # float, not the uint8 linear_to_srgb hands back: a step of -3 levels read
     # as 253 turns the pace curve into noise, and the pacing into nothing
     shot = [V.linear_to_srgb(_lit(lin_s, f[i] * _LIGHT_GAIN * vis_s[..., None],
-                                  ref_s)).astype(np.float64)
+                                  ref_s, pt_s)).astype(np.float64)
             for i in range(_PACE_FINE)]
     step = np.array([float(np.abs(shot[(i + 1) % _PACE_FINE][seen_s]
                                   - shot[i][seen_s]).mean()) for i in range(_PACE_FINE)])
@@ -380,11 +386,33 @@ def _dim_ref(lin, alpha):
     return np.where(y < yn, np.maximum(y, 1e-6) ** (1.0 - _DIM_SHARE) * yn ** _DIM_SHARE, y)
 
 
-def _lit(lin, r, ref=None):
+def _point_dim(lin, x, f, point):
+    """The leaving light at the points, where _DIM_FLOOR of the glass is black.
+
+    `x` is the loss as a fraction of ref after _LIGHT_GAIN and `f` the linear
+    dimming 1 + x over the floor. At Wait's tail point the master's blurred
+    light, ungained, already reads the render keys' own dimming (key 3: 0.57 of
+    canonical in both, key 4: 0.77 and 0.75) - the blur the gain makes up for
+    lost nothing there - so doubling a 43% loss asks for 86%, and a tenth of
+    glass that dark (sRGB 34) is a black cap even with the ring held.
+    Taken as a power of the ratio, (1 + x/G)^G is the same to first order and
+    never goes past zero. Only on glass whose floor is under _POINT_BLACK, in
+    full an octave below: the wing tips and every point of Hand are light enough
+    that the floor is a dim copy of the glass, and they keep the linear gain and
+    their swing (tip_sheen Hand 30.95 either way, 26.98 over the whole disc)."""
+    G = _LIGHT_GAIN
+    y0 = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722
+    w = point * np.clip(np.log2(_POINT_BLACK / _DIM_FLOOR / np.maximum(y0, 1e-6)), 0.0, 1.0)
+    f_pow = np.clip(np.clip(1.0 + x / G, 0.0, 1.0) ** G, _DIM_FLOOR, 1.0)
+    return f + w * (f_pow - f)
+
+
+def _lit(lin, r, ref=None, point=None):
     """One frame's linear colour: the canonical glass under a light residual.
 
     `ref` is _dim_ref of the same frame; None divides by each pixel's own
-    luminance, which is what put the dark rim on _DIM_FLOOR in blots."""
+    luminance, which is what put the dark rim on _DIM_FLOOR in blots. `point`
+    is _point_weight on lin's grid, for _point_dim."""
     if MODE == "mul":
         return (lin + _EPS) * np.exp(np.clip(r, -_GAIN_CAP, _GAIN_CAP)) - _EPS
     if MODE == "split":
@@ -396,7 +424,10 @@ def _lit(lin, r, ref=None):
         dy = r[..., 0] * 0.2126 + r[..., 1] * 0.7152 + r[..., 2] * 0.0722
         y = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722 \
             if ref is None else ref
-        f = np.clip(1.0 + np.minimum(dy, 0.0) / np.maximum(y, 1e-4), _DIM_FLOOR, 1.0)
+        x = np.minimum(dy, 0.0) / np.maximum(y, 1e-4)
+        f = np.clip(1.0 + x, _DIM_FLOOR, 1.0)
+        if point is not None:
+            f = _point_dim(lin, x, f, point)
         add = np.clip(r, 0.0, None)
         return lin * f[..., None] + add * _gamut_scale(lin * f[..., None], add)[..., None]
     return lin + r * _gamut_scale(lin, r)[..., None]
@@ -680,6 +711,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             coef_anchor = periodic_at(coefficients, [idx / n], k)[0]
             coef_phase = periodic_at(coefficients, phases, k)
     ref = _dim_ref(lin, alpha)
+    point = _point_weight(name, idx, size)
     frames = []
     for t in range(out_n):
         if field.shape[1] == size:
@@ -688,7 +720,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             r = np.dstack([H._smooth1(H._resample_signed(field[t, ..., c], size),
                                       _LIGHT_UNIT, size) for c in range(3)]) * _LIGHT_GAIN
         r = r * vis[..., None]
-        frame_lin = _lit(lin, r, ref)
+        frame_lin = _lit(lin, r, ref, point)
         if facet is not None:
             geometry, _coefficients, grid = facet
             frame_lin = _facet_apply(lin, frame_lin,
