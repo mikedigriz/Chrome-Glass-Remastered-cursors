@@ -4250,6 +4250,7 @@ def _fold_restep(rgb, name, idx, size):
     # on Arrow_Down before these five were smoothed along the chord.
     par = np.full((len(ts), 5), np.nan)
     runs = [None] * len(ts)
+    edge = np.full(len(ts), np.nan)
 
     for k, t in enumerate(ts):
         px, py = tx + dx * t, ty + dy * t
@@ -4275,7 +4276,8 @@ def _fold_restep(rgb, name, idx, size):
         inner = (nn >= nn.min() + room) & (nn <= nn.max() - room)
         if inner.sum() < 3:
             continue
-        ce = float(nn[int(np.argmax(np.where(inner, np.abs(g), 0.0)))])
+        je = int(np.argmax(np.where(inner, np.abs(g), 0.0)))
+        ce = float(nn[je])
         lo, hi = _RESTEP_FIT
         left = (nn <= ce - lo) & (nn >= ce - hi)
         right = (nn >= ce + lo) & (nn <= ce + hi)
@@ -4285,8 +4287,23 @@ def _fold_restep(rgb, name, idx, size):
         ar, kr = _restep_line(nn[right] - ce, yy[right])
         par[k] = (ce, al, kl, ar, kr)
         runs[k] = (run, nn, yy)
+        edge[k] = g[je]
 
+    # The fold is one edge, dark on the same side all along it. The chord's far
+    # end is only the outline's deepest concavity, and on Help that is where the
+    # question mark meets the arrow, well past the fold's own end: from there on
+    # the steepest edge in a section was the mark's creases, running either way,
+    # and fitted station by station the stage cut its junction into a dashed
+    # crack. So the fold is the run of stations whose edge keeps one sign and
+    # carries the most gradient between them, and the stage ends where it ends.
+    # Not the single strongest station: one crease of the mark is as steep as
+    # the whole fold. Towards the point there is no cut - the chord starts the
+    # fold there by construction.
     good = np.nonzero(np.isfinite(par[:, 0]))[0]
+    if len(good):
+        same = np.split(good, np.nonzero(np.diff(np.sign(edge[good])))[0] + 1)
+        good = good[good <= max(same, key=lambda r: np.abs(edge[r]).sum())[-1]]
+        par[good[-1] + 1:] = np.nan
     if len(good) < 5:
         return rgb
     for c in range(par.shape[1]):
