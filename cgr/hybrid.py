@@ -1810,6 +1810,37 @@ def _sat_anchor(name, idx):
 
 
 _BEAD_FEATHER = 0.25     # logical units the bead blends back into the glass
+_BEAD_SS = 8             # samples per pixel side its tone is averaged over
+
+
+def _bead_q(cx, cy, r, size, ys, xs):
+    """(rho/r)^2 from the bead's centre, clamped at its edge, averaged over
+    each pixel's footprint."""
+    s = size / V.LOGICAL
+    o = (np.arange(_BEAD_SS) + 0.5) / _BEAD_SS
+    acc = np.zeros(ys.shape)
+    for oy in o:
+        for ox in o:
+            acc += np.minimum(np.hypot((xs + ox) / s - cx, (ys + oy) / s - cy) / r, 1.0) ** 2
+    return acc / _BEAD_SS ** 2
+
+
+@functools.lru_cache(maxsize=None)
+def _bead_tone(name, idx, cx, cy, r):
+    """The author's dot as a radial tone: (a, b) per channel of a + b (rho/r)^2.
+
+    Fitted to his 32px pixels, weighted by his alpha, as the means over their
+    footprints - the dot is three pixels across, and each is an average over
+    most of it."""
+    base, oa = _resize(_orig(_key(name, idx)), V.LOGICAL)
+    ys, xs = np.mgrid[0:V.LOGICAL, 0:V.LOGICAL]
+    near = np.hypot(xs + 0.5 - cx, ys + 0.5 - cy) < r + _BEAD_FEATHER
+    if near.sum() < 2:
+        return None
+    w = np.sqrt(oa[near] / 255.0)[:, None]
+    q = _bead_q(cx, cy, r, V.LOGICAL, ys, xs)[near]
+    basis = np.stack([np.ones(len(q)), q], 1)
+    return np.linalg.lstsq(basis * w, base[near] * w, rcond=None)[0]
 
 
 def _bead(rgb, name, idx, size):
@@ -1838,15 +1869,16 @@ def _bead(rgb, name, idx, size):
             continue
         # The dot floats free of the arrow, so there is no glass around it to
         # borrow a tone from - a push-pull fill here reads the transparent
-        # background and washes the bead out. The author's own three pixels do
-        # carry the right tone even though they carry no shape, so the bead is
-        # levelled onto their mean and gets its form from the shading alone.
-        base, oa = _resize(_orig(_key(name, idx)), size)
-        w0 = inside.astype(np.float64) * (oa.astype(np.float64) / 255.0)
-        if w0.sum() < 1.0:
+        # background and washes the bead out. The author's own three pixels
+        # carry the tone, and not flat: a light ring round a dark core, 125 at
+        # the centre and 191-238 round it on white. Levelled onto their mean
+        # the bead was a flat light disc at 32-128, its centre 57 levels
+        # lighter than his, so it takes his radial profile instead and still
+        # gets its form from the shading.
+        tone = _bead_tone(name, idx, float(cx), float(cy), float(r))
+        if tone is None:
             continue
-        tone = (base.astype(np.float64) * w0[..., None]).sum((0, 1)) / w0.sum()
-        around = np.broadcast_to(tone, rgb.shape)
+        around = tone[0] + _bead_q(cx, cy, r, size, ys, xs)[..., None] * tone[1]
         # A sphere, not a cone: the height r - dist has a crease running out of
         # the centre because its normal turns over discontinuously there, and
         # the bead came out with a seam across it.
