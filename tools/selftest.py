@@ -621,6 +621,45 @@ def test_tip_nest():
           % (clean, hurt, A.THRESHOLDS["tip_nest"]))
 
 
+def test_point_ink():
+    """_point_converge leaves the author's point alone at 32.
+
+    There the rim band is 0.7 of a pixel and the point is his: rim to its end,
+    the darkest glass on the cursor. Read at full depth, the stage put the
+    body's glass on it and the points came out 20-60 levels paler on white
+    (NEXT.md 101). Read here as the darkest on-white luma within 2.5 units of
+    each converged point, the stage against no stage; the fade taken out has
+    to show it, and at 512 the stage still has to act."""
+    def ink(size):
+        L = size / float(V.LOGICAL)
+        ys, xs = np.mgrid[0:size, 0:size] + 0.5
+        f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
+        al = f[..., 3] / 255.0
+        w = f[..., :3].mean(-1) * al + 255.0 * (1.0 - al)
+        return np.array([w[(np.hypot(xs / L - cx, ys / L - cy) <= 2.5) & (al > 0.05)].min()
+                         for cx, cy in H._sharp_corners(name, H._geom(name, 0))])
+
+    def paler(size, band):
+        keep = H._POINT_CONVERGE, H._POINT_BAND
+        try:
+            H._POINT_BAND = band
+            repoint()
+            on = ink(size)
+            H._POINT_CONVERGE = set()
+            repoint()
+            return float((on - ink(size)).max())
+        finally:
+            H._POINT_CONVERGE, H._POINT_BAND = keep
+            repoint()
+
+    name = "AppStarting"
+    clean, hurt = paler(32, H._POINT_BAND), paler(32, 1e9)
+    acts = paler(512, H._POINT_BAND)
+    check("point ink at 32", clean <= 0.5 < hurt and abs(acts) > 0.5,
+          "%.1f -> %.1f levels paler on white with the fade out; %.1f at 512"
+          % (clean, hurt, acts))
+
+
 def test_fold_jitter():
     """The same damage test_inner_jitter plants, read by the step-aware fit.
 
@@ -1397,7 +1436,7 @@ def main():
               test_fold_dipole_controls, test_fold_dipole_eligibility,
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
-              test_inner_tip, test_tip_nest, test_fold_jitter,
+              test_inner_tip, test_tip_nest, test_point_ink, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
