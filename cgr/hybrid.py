@@ -1449,6 +1449,35 @@ _POINT_READ = 2.5         # logical units: where a convex point reads its own we
 _POINT_READ_REACH = 8.0   # logical units: identity again here. Over 2 * _POINT_READ
                           # or the remap folds; four times it halves the radius at
                           # the point, and the cycle keeps its liveliness
+_POINT_CONVERGE = _BLADE_CURSORS | {"Hand", "Help", "Handwriting", "NO"}
+_POINT_WIDEST = 80.0      # degrees: the widest point converged. Every point of the
+                          # arrows reads 50-75, the shoulders of Handwriting's
+                          # passing keys 87-90
+_POINT_ANGLE_AT = 1.5     # logical units along the outline that angle is read over
+
+
+def _outline_angle(name, idx, c):
+    """Interior angle at traced corner c of the smoothed outline the silhouette
+    is drawn from, between the chords to where it is _POINT_ANGLE_AT away."""
+    c = np.asarray(c, dtype=np.float64)
+    d, pts = min(((float(np.hypot(*(p - c).T).min()), p) for p in
+                  (np.asarray(g, dtype=np.float64) for kind, g in _mask_prims(name, idx)
+                   if kind == "poly")), key=lambda t: t[0])
+    i = int(np.argmin(np.hypot(*(pts - c).T)))
+    sides = []
+    for step in (1, -1):
+        prev, j = pts[i], i
+        for _ in range(len(pts) - 1):
+            j = (j + step) % len(pts)
+            a, b = float(np.hypot(*(prev - pts[i]))), float(np.hypot(*(pts[j] - pts[i])))
+            if b >= _POINT_ANGLE_AT:
+                prev = prev + (_POINT_ANGLE_AT - a) / max(b - a, 1e-9) * (pts[j] - prev)
+                break
+            prev = pts[j]
+        sides.append(prev - pts[i])
+    u, v = sides
+    return float(np.degrees(np.arccos(np.clip(u @ v / max(np.hypot(*u) * np.hypot(*v), 1e-12),
+                                              -1.0, 1.0))))
 
 
 def _point_converge(rgb, name, idx, size):
@@ -1471,15 +1500,26 @@ def _point_converge(rgb, name, idx, size):
 
     Magnifying the radius alone (rho = T r) only moves the inner point in - at
     T = _BLADE_TAPER it is still most of a unit back. Remapping the lit frame
-    instead of the glass moved the light with it: cadence 1.035 -> 1.136."""
-    if name not in _BLADE_CURSORS:
+    instead of the glass moved the light with it: cadence 1.035 -> 1.136.
+
+    The arrow family carries the same rim and the same chisel (tip_nest 27-62).
+    Their morphs pass through keys whose traced corners are shoulders of a
+    passing silhouette, not points: read along its rays there, the long edge's
+    bands bend into an arc toward the corner, so only points up to
+    _POINT_WIDEST are converged. Points closer than two reaches (Handwriting's
+    middle keys, 13.4 apart) take their discs in turn, each read from the last,
+    so the disc read second does not throw the first away where they overlap."""
+    if name not in _POINT_CONVERGE:
         return rgb
     L = size / float(V.LOGICAL)
     ys, xs = np.mgrid[0:size, 0:size] + 0.5
     px, py = xs / L, ys / L
-    src = np.asarray(rgb, dtype=np.float64)
-    out = src.copy()
-    for cx, cy in _sharp_corners(name, _geom(name, idx)):
+    out = np.asarray(rgb, dtype=np.float64).copy()
+    g = _geom(name, idx)
+    for cx, cy in _sharp_corners(name, g):
+        if _outline_angle(name, g, (cx, cy)) > _POINT_WIDEST:
+            continue
+        src = out.copy()
         dx, dy = px - cx, py - cy
         r = np.hypot(dx, dy)
         m = r < _POINT_READ_REACH
