@@ -660,6 +660,48 @@ def test_point_ink():
           % (clean, hurt, acts))
 
 
+def test_band_even():
+    """_even_band keeps the rim band's inner edge on one course along a side.
+
+    The master's band swelled into dark patches and broke off: its inner edge
+    wandered 0.4..1.2 LU deep along a side (NEXT.md 103). Read with this file's
+    own instruments rather than the stage's: analyze's outline stations and rim
+    sections at 512, the edge as the steepest rise 0.3..1.5 LU in, its wander as
+    the mean distance from the median over 3 LU of arc. Arrow and Wait, the
+    stage against no stage."""
+    us = np.arange(0.0, A._RIM_DEPTH + 1e-9, A._RIM_STEP)
+    lo, hi = np.searchsorted(us, 0.3), np.searchsorted(us, 1.5)
+    w = int(round(3.0 / A._RIM_STATION))
+
+    def wander(name):
+        st = A._outline_stations(name, 0)
+        f = np.asarray(H.frame_image(name, 0, 512), dtype=np.float64)
+        prof = A._rim_profiles(f, H._mask(name, 0, 512), st, 512)
+        ok = ~np.isnan(prof[:, 0])
+        e = np.full(len(st), np.nan)
+        e[ok] = us[lo + np.argmax(np.diff(prof[ok], axis=1)[:, lo:hi], axis=1)]
+        dev = []
+        for i in np.nonzero(ok)[0]:
+            win = e[max(0, i - w):i + w + 1]
+            win = win[np.isfinite(win)]
+            if len(win) >= 5:
+                dev.append(abs(e[i] - np.median(win)))
+        return float(np.mean(dev))
+
+    names, eps = ("Arrow", "Wait"), 0.075
+    clean = float(np.mean([wander(n) for n in names]))
+    keep = H._BAND_CURSORS
+    H._BAND_CURSORS = set()
+    repoint()
+    try:
+        hurt = float(np.mean([wander(n) for n in names]))
+    finally:
+        H._BAND_CURSORS = keep
+        repoint()
+    check("band even", clean <= eps < hurt,
+          "%.3f -> %.3f LU of wander without the stage, bound %.3f" % (clean, hurt, eps))
+
+
 def test_bead_core():
     """Help's dot keeps the author's dark core at 32.
 
@@ -1469,7 +1511,7 @@ def main():
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
-              test_fold_jitter,
+              test_band_even, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
