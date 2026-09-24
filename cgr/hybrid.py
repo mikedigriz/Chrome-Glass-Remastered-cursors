@@ -4982,6 +4982,316 @@ def _rgb_pre_rim(name, idx, size):
     return _notch_from_author(rgb, name, idx, size)
 
 
+# The rim band evened along the outline (NEXT.md 103).
+#
+# The master draws the author's one-pixel outline as a band whose inner edge
+# wanders 0.4..1.2 LU deep along a side: on the five blade cursors it swells
+# into dark patches and breaks off, which is the "parasitic shadow" the owner
+# reported on 2026-09-19. _even_blade evened the translucent blade outside it;
+# this evens the band itself. Per station along the smoothed outline the band's
+# inner edge is traced, the band is averaged along its side in a geometry where
+# every station's edge sits at one depth, and laid back at the station's own
+# edge smoothed along the arc.
+#
+# Three things are kept on purpose. How bright the band runs along the arc is
+# the author's: read on his 32px frames the band level tracks the master's
+# station for station, so each station keeps its own level (smoothed over
+# _BAND_LEVEL) and only the shape is averaged. Each section keeps its mean
+# colour - evening removes the dark patches, and without that the rim came out
+# lighter everywhere and AppStarting's delta_e crossed 5.0. And the dark line
+# at the band's inner edge, which beside the apex is the inner tip's separator,
+# leads the average instead of being averaged away (_BAND_LINE_*).
+#
+# Near every traced corner and the notch the stage fades out: at the points the
+# band belongs to _point_converge, and at the notch the fold ends in it and the
+# remap drew doubled lines. The depth target is each station's own edge
+# smoothed along the side, never one common depth: easing a common depth in
+# from the corners bent the band there (DEAD_ENDS.md, 2026-09-19).
+_BAND_CURSORS = _BLADE_CURSORS
+_BAND_DEPTH = 1.75       # LU: deepest a section is read and remapped
+_BAND_DSTEP = 1 / 32.0   # LU between samples along a section
+_BAND_ASTEP = 1 / 16.0   # LU of arc between stations
+_BAND_EDGE = (0.3, 1.5)  # LU: where the band's inner edge is looked for
+_BAND_SIGMA = 3.0        # LU of arc the band's shape is averaged over
+_BAND_COURSE = 3.0       # LU of arc the edge's own depth is smoothed over
+_BAND_LEVEL = 1.0        # LU of arc a station's own level is smoothed over
+_BAND_CORNER = (1.0, 3.0)   # LU from a traced corner: not averaged, then in full
+_BAND_KEEP = (1.0, 3.0)     # LU from a corner or the notch: untouched, then in full
+_BAND_STEP_COST = 0.15   # a trace step of one sample costs this share of the typical rise
+_BAND_OVER = 0.2         # LU past the edge the averaged band reaches
+_BAND_DARK = 0.6         # a band this much darker than the glass is a drawn outline
+_BAND_LINE_MIN = 3.0     # levels of prominence a dark line needs to be lined up on
+_BAND_LINE_KEEP = 4.0    # levels: a line this deep starts to lead the average...
+_BAND_LINE_CAP = 10.0    # ...up to this weight
+_BAND_TRUST = 0.35 * 255  # alpha below which the straight colour is not trusted
+_BAND_CONS = 1.0         # LU of arc the section-mean balance is smoothed over
+_BAND_LUM = np.array([0.2126, 0.7152, 0.0722])
+
+
+def _band_bilinear(img, x, y):
+    h, w = img.shape[:2]
+    x = np.clip(x, 0, w - 1.001)
+    y = np.clip(y, 0, h - 1.001)
+    x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+    fx, fy = x - x0, y - y0
+    if img.ndim == 3:
+        fx, fy = fx[..., None], fy[..., None]
+    return (img[y0, x0] * (1 - fx) * (1 - fy) + img[y0, x0 + 1] * fx * (1 - fy)
+            + img[y0 + 1, x0] * (1 - fx) * fy + img[y0 + 1, x0 + 1] * fx * fy)
+
+
+@functools.lru_cache(maxsize=None)
+def _band_outline(name, idx):
+    """Stations along the outline: position, inward normal, side (runs between
+    convex corners), distance to the nearest corner or the notch, and the
+    half-width inward (where the edge distance stops growing)."""
+    g = _geom(name, idx)
+    polys = [p for kind, p in _mask_prims(name, g) if kind == "poly"]
+    P = np.array([(p[0], p[1]) for p in max(polys, key=len)], float)
+    Q = np.vstack([P, P[:1]])
+    cum = np.concatenate([[0], np.cumsum(np.hypot(*(Q[1:] - Q[:-1]).T))])
+    s = np.arange(0, cum[-1], _BAND_ASTEP)
+    x, y = np.interp(s, cum, Q[:, 0]), np.interp(s, cum, Q[:, 1])
+    raw = max(C.TRACED[name]["frames"][g]["polys"], key=len)
+    corners = np.array([(p[0], p[1]) for p in raw if p[2]], float).reshape(-1, 2)
+    w = max(1, int(round(0.25 / _BAND_ASTEP)))
+    tx, ty = np.roll(x, -w) - np.roll(x, w), np.roll(y, -w) - np.roll(y, w)
+    ln = np.hypot(tx, ty)
+    nx, ny = -ty / ln, tx / ln
+    m = _mask(name, idx, 512) / 255.0
+    if _band_bilinear(m, (x + 0.5 * nx) * 16 - 0.5, (y + 0.5 * ny) * 16 - 0.5).mean() < 0.5:
+        nx, ny = -nx, -ny
+    ci = sorted(int(np.argmin(np.hypot(x - cx, y - cy))) for cx, cy in corners)
+    side = np.zeros(len(s), int)
+    for j, c in enumerate(ci):
+        side[c:] = j + 1
+    if ci:
+        side[side == len(ci)] = 0          # wrap: the last run joins the first
+    cd = np.full(len(s), np.inf)
+    for cx, cy in corners:
+        cd = np.minimum(cd, np.hypot(x - cx, y - cy))
+    ch = _fold_chord(name, g)
+    if ch is not None:
+        cd = np.minimum(cd, np.hypot(x - ch[1][0], y - ch[1][1]))
+    dep = np.arange(0, 6.0, _BAND_DSTEP)
+    D = _edge_distance_at(name, idx, 512)
+    prof = _band_bilinear(D, (x[None] + dep[:, None] * nx[None]) * 16 - 0.5,
+                          (y[None] + dep[:, None] * ny[None]) * 16 - 0.5)
+    grow = np.diff(prof, axis=0) > 0.3 * _BAND_DSTEP
+    hw = dep[np.argmin(np.vstack([grow, np.zeros((1, len(s)), bool)]), axis=0)]
+    return x, y, nx, ny, side, cd, hw
+
+
+def _band_sides(side):
+    """Each side's stations in arc order; the side that wraps is rotated whole."""
+    n = len(side)
+    for sd in np.unique(side):
+        idx = np.nonzero(side == sd)[0]
+        if idx[0] == 0 and idx[-1] == n - 1:
+            gap = np.nonzero(np.diff(idx) > 1)[0]
+            if len(gap):
+                idx = np.concatenate([idx[gap[0] + 1:], idx[:gap[0] + 1]])
+        yield sd, idx
+
+
+def _band_smooth(v, side, sigma):
+    """Gaussian along the arc over `sigma` LU, never across a corner; v is (..., NS)."""
+    sp = sigma / _BAND_ASTEP
+    out = np.empty_like(v)
+    r = int(3 * sp) + 1
+    ker = np.exp(-0.5 * (np.arange(-r, r + 1) / max(sp, 1e-6)) ** 2)
+    for _sd, idx in _band_sides(side):
+        seg = v[..., idx]
+        pad = np.concatenate([seg[..., :1].repeat(r, -1), seg, seg[..., -1:].repeat(r, -1)], -1)
+        wpad = np.concatenate([np.zeros(r), np.ones(seg.shape[-1]), np.zeros(r)])
+        num = np.apply_along_axis(lambda a: np.convolve(a, ker, "valid"), -1, pad * wpad)
+        out[..., idx] = num / np.convolve(wpad, ker, "valid")
+    return out
+
+
+def _band_trace(g, side):
+    """The band's inner edge as one path per side through the unrolled luma
+    rise: most rise collected, at most one depth sample per station."""
+    nj, n = g.shape
+    out = np.zeros(n, int)
+    for _sd, idx in _band_sides(side):
+        sc = g[:, idx]
+        sc = sc / max(np.percentile(sc.max(0), 75), 1e-6)
+        m = len(idx)
+        acc = sc[:, 0].copy()
+        back = np.zeros((m, nj), int)
+        for i in range(1, m):
+            cand = np.stack([np.r_[-np.inf, acc[:-1]] - _BAND_STEP_COST, acc,
+                             np.r_[acc[1:], -np.inf] - _BAND_STEP_COST])
+            k = np.argmax(cand, 0)
+            back[i] = np.arange(nj) + (k - 1)
+            acc = cand[k, np.arange(nj)] + sc[:, i]
+        path = np.zeros(m, int)
+        path[-1] = int(np.argmax(acc))
+        for i in range(m - 1, 0, -1):
+            path[i - 1] = back[i, path[i]]
+        out[idx] = path
+    return out
+
+
+def _band_anchor(lum_s, b):
+    """Where to line each station up: the dark line just outside its rise, to
+    a fraction of a sample, carried to the rise's scale; the rise where there is
+    none. The line is about 0.1 LU wide, so lining up on the rise spread it over
+    its own width. Also the line's prominence per station, 0 where none."""
+    ND, NS = lum_s.shape
+    jb = np.round(b / _BAND_DSTEP - 0.5).astype(int)
+    m = np.full(NS, np.nan)
+    prom = np.zeros(NS)
+    for s in range(NS):
+        lo, hi = max(jb[s] - int(0.4 / _BAND_DSTEP), 1), min(jb[s] + 2, ND - 2)
+        p = lum_s[:, s]
+        best = _BAND_LINE_MIN
+        for j in range(lo, hi + 1):
+            if p[j] <= p[j - 1] and p[j] <= p[j + 1]:
+                pr = min(p[max(0, j - 16):j].max(), p[j:j + 16].max()) - p[j]
+                if pr >= best:
+                    den = p[j - 1] - 2 * p[j] + p[j + 1]
+                    off = np.clip(0.5 * (p[j - 1] - p[j + 1]) / den, -0.5, 0.5) if den > 1e-9 else 0.0
+                    m[s] = (j + off) * _BAND_DSTEP
+                    best = prom[s] = pr
+    ok = np.isfinite(m)
+    if ok.sum() < 20:
+        return b, prom
+    return np.where(ok, m + float(np.median(b[ok] - m[ok])), b), prom
+
+
+def _band_warp(t, e0, e1, dm):
+    """Depth in a band with its edge at e0 -> the same place with the edge at
+    e1; linear from the edge to dm, untouched past it."""
+    out = np.where(t <= e0[None], t * e1[None] / e0[None],
+                   e1[None] + (t - e0[None]) * (dm[None] - e1[None]) / np.maximum(dm[None] - e0[None], 1e-6))
+    return np.where(t <= dm[None], out, t)
+
+
+def _band_along(v, pos):
+    """v (ND, NS, C) read at depth pos (ND, NS) along each station's normal."""
+    ND, NS = v.shape[:2]
+    fi = np.clip(pos / _BAND_DSTEP, 0, ND - 1.001)
+    i0 = np.floor(fi).astype(int)
+    f = (fi - i0)[..., None]
+    cols = np.arange(NS)[None].repeat(pos.shape[0], 0)
+    return v[i0, cols] * (1 - f) + v[i0 + 1, cols] * f
+
+
+def _band_target(rgba, name, idx, size):
+    """Sections of the frame, the evened band, and where it goes back."""
+    k = size / 32.0
+    x, y, nx, ny, side, cd, hw = _band_outline(name, idx)
+    dep = np.arange(0, _BAND_DEPTH + 1e-9, _BAND_DSTEP)
+    t = dep[:, None]
+    X = (x[None] + t * nx[None]) * k - 0.5
+    Y = (y[None] + t * ny[None]) * k - 0.5
+    pm = np.dstack([rgba[..., :3] * rgba[..., 3:4] / 255.0, rgba[..., 3]])
+    S = _band_bilinear(pm, X, Y)                              # (ND, NS, 4) premultiplied
+    rgb = S[..., :3] / np.maximum(S[..., 3:4], 1e-3) * 255.0
+    lum_s = _band_smooth(rgb @ _BAND_LUM, side, 0.25)
+    lo, hi = int(_BAND_EDGE[0] / _BAND_DSTEP), int(_BAND_EDGE[1] / _BAND_DSTEP)
+    b = (lo + _band_trace(np.clip(np.diff(lum_s, axis=0), 0.0, None)[lo:hi], side) + 0.5) * _BAND_DSTEP
+    anchor, line = _band_anchor(lum_s, b)
+    # Averaging weight: none near the corners, none where the half-width is
+    # too shallow to hold the band and some glass behind it.
+    b = _band_smooth(b[None], side, 0.3)[0]
+    dm = np.minimum(_BAND_DEPTH, 0.75 * hw)
+    ok = (cd > _BAND_CORNER[1]) & (dm >= _BAND_DEPTH - 1e-6)
+    bt = float(np.median(b[ok]))
+    ws = np.clip((cd - _BAND_CORNER[0]) / (_BAND_CORNER[1] - _BAND_CORNER[0]), 0.0, 1.0)
+    ws = _band_smooth((ws * np.clip((dm - 0.2 - np.maximum(b, bt)) / 0.3, 0.0, 1.0))[None], side, 0.5)[0]
+    b = _band_smooth(anchor[None], side, 0.1)[0]
+    tg = _band_smooth(b[None], side, _BAND_COURSE)[0]
+    # Averaged in a reference geometry with every edge at one depth, then laid
+    # back at its own target: a target that follows the side must not smear the
+    # edge the average lines up on.
+    ok = ws > 0.5
+    r0 = float(np.median(tg[ok])) if ok.any() else float(np.median(b))
+    re = np.where(dm > r0 + 0.05, r0, tg)
+    ref = _band_warp(t, re, b, dm)
+    al = _band_along(rgb, ref)
+    trust = np.clip((_band_along(S[..., 3:4], ref)[..., 0] - _BAND_TRUST) / (0.2 * 255), 0.0, 1.0)
+    w = (ws[None] * trust)[..., None]
+    lum = al @ _BAND_LUM
+    inb = (t >= 0.15) & (t < re[None] - 0.1)
+    bl = (lum * inb * trust).sum(0) / np.maximum((inb * trust).sum(0), 1e-6)
+    ing = (t >= re[None] + 0.3) & (t < dm[None] - 0.1)
+    gl = (lum * ing * trust).sum(0) / np.maximum((ing * trust).sum(0), 1e-6)
+    lead = np.clip(line / _BAND_LINE_KEEP - 0.5, 0.0, _BAND_LINE_CAP)
+    if ok.any() and np.median(bl[ok]) < _BAND_DARK * np.median(gl[ok]):
+        # A dark outline: where the master lost it the glass shows through
+        # lighter, so the stations that kept it make the average.
+        thr = _band_smooth(bl[None], side, _BAND_SIGMA)[0]
+        w = w * np.maximum(np.clip((thr + 6.0 - bl) / 12.0, 0.0, 1.0), lead)[None, :, None]
+    else:
+        w = w * np.maximum(1.0, lead)[None, :, None]
+    num = _band_smooth(np.moveaxis(al * w, 1, -1), side, _BAND_SIGMA)
+    den = _band_smooth(np.moveaxis(np.broadcast_to(w, al.shape), 1, -1), side, _BAND_SIGMA)
+    sm = np.moveaxis(num / np.maximum(den, 1e-6), -1, 1)
+    wb = ((t >= 0.1) & (t < re[None] + _BAND_OVER)) * np.minimum(trust, 1.0)
+    own = (al * wb[..., None]).sum(0) / np.maximum(wb.sum(0), 1e-6)[:, None]
+    got = (sm * wb[..., None]).sum(0) / np.maximum(wb.sum(0), 1e-6)[:, None]
+    sm = sm + (_band_smooth(own.T, side, _BAND_LEVEL).T - got)[None]
+    edge = np.clip((re[None] + _BAND_OVER + 0.2 - t) / 0.2, 0.0, 1.0)[..., None]
+    F = al + (edge * ws[None, :, None]) * (sm - al)
+    back = _band_warp(t, tg, re, dm)
+    F = _band_along(F, back)
+    edge = _band_along(edge, back)
+    trust = _band_along(trust[..., None], back)[..., 0]
+    wd = (np.clip((dm[None] - t) / 0.25, 0.0, 1.0)
+          * np.clip((S[..., 3] - _BAND_TRUST) / (0.2 * 255), 0.0, 1.0) * np.minimum(trust, 1.0))
+    keep = np.clip((cd - _BAND_KEEP[0]) / (_BAND_KEEP[1] - _BAND_KEEP[0]), 0.0, 1.0)
+    wd = wd * _band_smooth(keep[None], side, 0.3)[0][None]
+    # Each section keeps its mean colour, alpha-weighted as it is seen; the
+    # balance goes back into the replaced band.
+    wa = (S[..., 3] / 255.0) * (t < dm[None])
+    c = -((wa * wd)[..., None] * (F - rgb)).sum(0) / np.maximum((wa * edge[..., 0] * wd).sum(0), 1e-3)[:, None]
+    F = F + edge * _band_smooth(c.T, side, _BAND_CONS).T[None]
+    delta = np.moveaxis(_band_smooth(np.moveaxis((F - rgb) * wd[..., None], 1, -1), side, 0.15), -1, 1)
+    # Inside the band the pixel is replaced, not corrected: pixel + (F - sample)
+    # keeps what the sampling blurred away, and a one-pixel line of the master
+    # survives the round trip at about half its contrast.
+    rep = _band_smooth((edge[..., 0] * ws[None] * wd)[None], side, 0.15)[0]
+    return x, y, nx, ny, delta, F, rep
+
+
+def _even_band(im, name, idx, size):
+    """The rim band of the five blade cursors, evened along the outline."""
+    out = np.array(im, dtype=np.float64)
+    x, y, nx, ny, delta, F, rep = _band_target(out, name, idx, size)
+    k = size / 32.0
+    d = _edge_distance_at(name, idx, size)
+    ys, xs = np.nonzero((out[..., 3] > 0) & (d < _BAND_DEPTH + 0.2))
+    px, py = (xs + 0.5) / k, (ys + 0.5) / k
+    best = np.full(len(xs), np.inf)
+    si = np.zeros(len(xs), int)
+    for c0 in range(0, len(x), 256):
+        c1 = min(len(x), c0 + 256)
+        dd = (px[:, None] - x[None, c0:c1]) ** 2 + (py[:, None] - y[None, c0:c1]) ** 2
+        j = np.argmin(dd, 1)
+        v = dd[np.arange(len(xs)), j]
+        s = v < best
+        best[s], si[s] = v[s], c0 + j[s]
+    rx, ry = px - x[si], py - y[si]
+    tt = rx * nx[si] + ry * ny[si]
+    fs = np.clip(si + (rx * -ny[si] + ry * nx[si]) / _BAND_ASTEP, 0, delta.shape[1] - 1.001)
+    ft = np.clip(tt / _BAND_DSTEP, 0, delta.shape[0] - 1.001)
+    s0, t0 = np.floor(fs).astype(int), np.floor(ft).astype(int)
+    fsf, ftf = (fs - s0)[:, None], (ft - t0)[:, None]
+
+    def at(v):
+        return (v[t0, s0] * (1 - ftf) * (1 - fsf) + v[t0 + 1, s0] * ftf * (1 - fsf)
+                + v[t0, s0 + 1] * (1 - ftf) * fsf + v[t0 + 1, s0 + 1] * ftf * fsf)
+
+    inside = (tt >= 0)[:, None]
+    res = out[ys, xs, :3] + at(delta) * inside
+    res = res + at(rep[..., None]) * inside * (at(F) - res)
+    out[ys, xs, :3] = np.clip(res, 0, 255)
+    return _hide_ghost(_compose(out[..., :3], out[..., 3]), name, size)
+
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -5045,7 +5355,10 @@ def frame_image(name, idx, size):
     # after the saturation anchor on purpose: the sign's colour is measured off
     # the author, not derived from ours, and _sat_match would rescale it
     rgb, alpha = _no_ring(rgb, alpha, name, idx, size)
-    return _hide_ghost(_compose(rgb, alpha), name, size)
+    im = _hide_ghost(_compose(rgb, alpha), name, size)
+    if name in _BAND_CURSORS:
+        im = _even_band(im, name, idx, size)
+    return im
 
 
 def _premult(im):
