@@ -1,8 +1,9 @@
-"""Xcursor reader, symmetric with cgr.build's _pack_ximage/_xcursor writer.
+"""Xcursor reader, symmetric with cgr.build's _pack_ximage/_xcursor writer,
+and the premultiply step the two share.
 
-Only a reader: nothing in this repo needs to rebuild an Xcursor file from
-parsed parts, only to check that the bytes build_linux() already wrote match
-the canonical render.
+A reader and not a writer: nothing in this repo needs to rebuild an Xcursor
+file from parsed parts, only to check that the bytes build_linux() already
+wrote match the canonical render.
 """
 import struct
 import numpy as np
@@ -12,9 +13,24 @@ MAGIC = 0x72756358
 IMG_TYPE = 0xfffd0002
 
 
+def premultiply(img):
+    """RGBA image -> HxWx4 uint8 with RGB multiplied by alpha, the form an
+    Xcursor file stores. X Render and Wayland's ARGB8888 blend premultiplied,
+    and xcursorgen writes it so (premultiply_data); straight RGB read that way
+    comes out over-bright wherever the glass is translucent. Rounds like
+    xcursorgen's div_255."""
+    arr = np.asarray(img.convert("RGBA"), dtype=np.uint32)
+    x = arr[..., :3] * arr[..., 3:4] + 0x80
+    out = arr.copy()
+    out[..., :3] = (x + (x >> 8)) >> 8
+    return out.astype(np.uint8)
+
+
 def read_xcursor(data):
     """.xcursor bytes -> [{"size": int, "hx": int, "hy": int, "delay": int,
-    "img": PIL.Image RGBA}, ...], one per image chunk, TOC order."""
+    "img": PIL.Image RGBA}, ...], one per image chunk, TOC order. The pixels
+    are returned as stored, premultiplied; compare them against premultiply()
+    of the canonical render."""
     magic, _header_size, _version, ntoc = struct.unpack_from("<IIII", data, 0)
     if magic != MAGIC:
         raise ValueError("not an Xcursor file (bad magic)")

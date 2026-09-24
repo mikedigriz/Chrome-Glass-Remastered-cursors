@@ -361,7 +361,7 @@ def _jiffies_ms(rate):
 
 def _pack_ximage(size, img, xh, yh, delay):
     w, h = img.size
-    arr = np.asarray(img, dtype=np.uint32)
+    arr = xcurlib.premultiply(img).astype(np.uint32)
     v = (arr[..., 3] << 24) | (arr[..., 0] << 16) | (arr[..., 1] << 8) | arr[..., 2]
     return (struct.pack("<9I", 36, IMG_TYPE, size, 1, w, h, xh, yh, delay)
             + v.astype("<u4").tobytes())
@@ -911,8 +911,9 @@ def _rgba_equal(a_img, b_img, mask_rgb_by_alpha=False):
     _cape_strip's alpha_composite onto a transparent canvas zeroes RGB
     wherever the result is fully transparent even though the canonical
     render can carry leftover RGB there - so both .cur and .cape callers
-    pass mask_rgb_by_alpha=True. _pack_ximage copies RGBA straight through
-    with no compositing, so Xcursor is compared in full."""
+    pass mask_rgb_by_alpha=True. _pack_ximage premultiplies and does nothing
+    else, so Xcursor is compared in full against _xcur_expect() - the
+    writer's own helper applied to the render, not a second copy of it."""
     a = np.asarray(a_img.convert("RGBA"))
     b = np.asarray(b_img.convert("RGBA"))
     if a.shape != b.shape or not np.array_equal(a[..., 3], b[..., 3]):
@@ -921,6 +922,11 @@ def _rgba_equal(a_img, b_img, mask_rgb_by_alpha=False):
         vis = a[..., 3] > 0
         return np.array_equal(a[..., :3][vis], b[..., :3][vis])
     return np.array_equal(a[..., :3], b[..., :3])
+
+
+def _xcur_expect(img):
+    """What an Xcursor chunk of the canonical render must decode to."""
+    return Image.fromarray(xcurlib.premultiply(img), "RGBA")
 
 
 def _read_cape(path):
@@ -1009,7 +1015,8 @@ def check_packages(win, lin, aliases, cape):
                         f"{role} xcursor[{idx}] size/hotspot mismatch"
                     assert c["delay"] == _jiffies_ms(rate), \
                         f"{role} xcursor[{idx}] delay {c['delay']} != {_jiffies_ms(rate)}"
-                    assert _rgba_equal(c["img"], img), f"{role} xcursor[{idx}] pixels"
+                    assert _rgba_equal(c["img"], _xcur_expect(img)), \
+                        f"{role} xcursor[{idx}] pixels"
                     idx += 1
             assert idx == len(chunks), f"{role} xcursor chunk count {len(chunks)} != {idx}"
         else:
@@ -1019,7 +1026,7 @@ def check_packages(win, lin, aliases, cape):
                 assert c["size"] == size and (c["hx"], c["hy"]) == (hx, hy), \
                     f"{role} xcursor[{size}] hotspot mismatch"
                 assert c["delay"] == 0, f"{role} xcursor[{size}] delay {c['delay']} != 0"
-                assert _rgba_equal(c["img"], static_image(role, size)), \
+                assert _rgba_equal(c["img"], _xcur_expect(static_image(role, size))), \
                     f"{role} xcursor[{size}] pixels != canonical render"
         for alias in names[1:]:
             assert open(os.path.join(lin, "cursors", alias), "rb").read() == data, \

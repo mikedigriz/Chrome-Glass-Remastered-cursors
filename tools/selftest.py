@@ -1299,8 +1299,21 @@ def test_package_roundtrip_catches_corruption():
     data = B._xcursor([chunk])
     c = xcurlib.read_xcursor(data)[0]
     check("xcursor clean round-trip",
-          B._rgba_equal(c["img"], img) and (c["hx"], c["hy"]) == (hx, hy),
+          B._rgba_equal(c["img"], B._xcur_expect(img)) and (c["hx"], c["hy"]) == (hx, hy),
           "identical bytes must compare equal")
+    # The defect shipped until 2026-09-24: straight RGBA in a premultiplied
+    # format. The old round-trip passed it, because the writer and the reader
+    # agreed with each other and not with the format.
+    arr = np.asarray(img.convert("RGBA"), dtype=np.uint32)
+    straight = ((arr[..., 3] << 24) | (arr[..., 0] << 16) | (arr[..., 1] << 8)
+                | arr[..., 2]).astype("<u4").tobytes()
+    flat_c = xcurlib.read_xcursor(B._xcursor([chunk[:36] + straight]))[0]
+    check("xcursor straight alpha caught",
+          not B._rgba_equal(flat_c["img"], B._xcur_expect(img)),
+          "straight RGBA must not compare equal to the premultiplied render")
+    px = np.asarray(c["img"])
+    check("xcursor stores premultiplied", bool((px[..., :3].max(-1) <= px[..., 3]).all()),
+          "no channel may exceed its alpha")
     bad_chunk = B._pack_ximage(size, img, hx + 1, hy, 0)   # simulates a packing bug
     bad_c = xcurlib.read_xcursor(B._xcursor([bad_chunk]))[0]
     check("xcursor hotspot corruption caught", (bad_c["hx"], bad_c["hy"]) != (hx, hy),
