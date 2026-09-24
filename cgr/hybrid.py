@@ -2133,9 +2133,10 @@ _RING_RGB = (217.0, 32.0, 24.0)   # the stroke's one flat colour, and flat is
                          # the opaque one takes frame 7's edge from 4.299 to
                          # 7.116 of delta_e to save 0.478 on thirty pixels
 _RING_RMS = 0.10         # circularity his own art has to reach to be redrawn.
-                         # His frames 7..10 read 0.035..0.047 and frame 6, whose
-                         # ring is four opaque pixels wide, reads 0.256 - there
-                         # is no template there to recover, only a fit to noise
+                         # His frames 7..10 read 0.035..0.047. Frame 6 reads
+                         # 0.256, but that is the pointer under the sign read
+                         # as ring: on his red alone it is 0.050. The template
+                         # there still scores worse (NEXT.md 94), so it stays off
 _RING_MARGIN = 0.60      # logical units either side of the band this stage owns
 _RING_FADE = 0.30        # ...and how far its authority fades out beyond that
 _RING_GREY = 80.0        # channel spread under which one of his pixels is the
