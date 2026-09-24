@@ -660,6 +660,38 @@ def test_point_ink():
           % (clean, hurt, acts))
 
 
+def test_bead_core():
+    """Help's dot keeps the author's dark core at 32.
+
+    His three pixels are a light ring round a dark core, 125 on white at the
+    centre. Levelled onto their mean, as _bead did until 2026-09-24, the dot
+    was a flat light disc with its centre at 182 (NEXT.md 102). Read on white
+    at the pixel under the bead's centre; the flat tone planted back has to
+    fail the same bound."""
+    name, eps = "Help", 15.0
+    (cx, cy, _), = [H.C._round_island(p) for p in H.C.TRACED[name]["frames"][0]["polys"]
+                    if len(p) <= 12 and H.C._round_island(p) is not None]
+    x, y = int(cx), int(cy)
+
+    def core(f):
+        f = np.asarray(f, dtype=np.float64)
+        return float(f[y, x, :3].mean() * f[y, x, 3] / 255.0 + 255.0 * (1.0 - f[y, x, 3] / 255.0))
+
+    his = core(H.original(name, 0))
+    clean = abs(core(H.frame_image(name, 0, 32)) - his)
+    keep = H._bead_tone
+    H._bead_tone = lambda *k: (lambda t: np.stack([t[0] + 0.5 * t[1], 0.0 * t[1]]))(keep(*k))
+    repoint()
+    try:
+        hurt = abs(core(H.frame_image(name, 0, 32)) - his)
+    finally:
+        H._bead_tone = keep
+        repoint()
+    check("bead core at 32", clean <= eps < hurt,
+          "%.1f -> %.1f levels off his %.0f with a flat tone, bound %.0f"
+          % (clean, hurt, his, eps))
+
+
 def test_fold_jitter():
     """The same damage test_inner_jitter plants, read by the step-aware fit.
 
@@ -1436,7 +1468,8 @@ def main():
               test_fold_dipole_controls, test_fold_dipole_eligibility,
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
-              test_inner_tip, test_tip_nest, test_point_ink, test_fold_jitter,
+              test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
+              test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
