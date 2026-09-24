@@ -600,6 +600,27 @@ def test_inner_tip():
           % (100 * clean, 100 * hurt))
 
 
+def test_tip_nest():
+    """Take the points back out of _point_converge: the chisel of 2026-09-24.
+
+    The band that closes behind the point is the render's own rim, so the
+    render with the stage off is the defect itself rather than a picture of
+    it, and the gate has to fall between the two."""
+    name = "Hand"
+    clean, _ = A.tip_nest(name)
+    keep = H._POINT_CONVERGE
+    H._POINT_CONVERGE = set()
+    repoint()
+    try:
+        hurt, _ = A.tip_nest(name)
+    finally:
+        H._POINT_CONVERGE = keep
+        repoint()
+    check("tip nest", clean <= A.THRESHOLDS["tip_nest"] < hurt,
+          "%.1f -> %.1f levels behind the point, gate %.0f"
+          % (clean, hurt, A.THRESHOLDS["tip_nest"]))
+
+
 def test_fold_jitter():
     """The same damage test_inner_jitter plants, read by the step-aware fit.
 
@@ -1329,7 +1350,7 @@ def main():
               test_fold_dipole_controls, test_fold_dipole_eligibility,
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
-              test_inner_tip, test_fold_jitter,
+              test_inner_tip, test_tip_nest, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,

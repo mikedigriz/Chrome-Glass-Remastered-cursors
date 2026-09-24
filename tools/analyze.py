@@ -152,6 +152,9 @@ THRESHOLDS = {
     "tip_extreme_contrast": 1.0,  # the most visible pixel at a point, as a share
                                 # of the author's own. tip_profile is reported
                                 # beside it and is not gated - see tip_profile.
+    "tip_nest": 20.0,           # levels: the chisel's inner point, worst corner.
+                                # He reads 4-14; a nested apex 20-110, and when
+                                # one comes back the worst corner reads 40 and up
     # --- the fold, read at every size on every frame (validate_multiscale) ---
     # Every one of these is calibrated against the author, because the author can
     # now be read: the numbers in the comments are his own, measured 2026-08-22
@@ -1785,7 +1788,7 @@ def tip_nest(name, size=_NEST_SIZE, get=frame):
     Read along each corner's inward bisector, composited on grey: the largest
     change in luma over an eighth of a logical unit, anywhere 0.75-3 units
     behind the point. The author's frames read 4-14 levels, a crisp inner apex
-    20-110. The worst corner. Reported, not gated."""
+    20-110. The worst corner."""
     a = get(name, 0, size)
     al = a[..., 3] / 255.0
     comp = a[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
@@ -2631,6 +2634,8 @@ def gate(rep, base=None):
             fail(name, "tip_extreme_contrast", e["tip_extreme_contrast"], "<",
                  round(e["tip_extreme_contrast_orig"]
                        * T["tip_extreme_contrast"], 3))
+        if e.get("tip_nest") is not None and e["tip_nest"] > T["tip_nest"]:
+            fail(name, "tip_nest", e["tip_nest"], ">", T["tip_nest"])
         it = e.get("interp")
         if it:
             if it["ghost_rgb"] > T["ghost_rgb"]:
