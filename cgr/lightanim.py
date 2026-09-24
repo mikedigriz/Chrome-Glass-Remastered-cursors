@@ -108,6 +108,13 @@ _DIM_SHARE = 0.75    # how far a dark pixel's share of the leaving light is take
                      # outright) is clean but lighter than the render's own keys
                      # at their phases, 0.75 is the least error against them, and
                      # at 0.5 and under the blots are still there by eye
+_POINT_UNIT = (1.0, 1.75)  # logical units round each sharp convex corner of the
+                     # outline inside which _field_at holds the light in full,
+                     # and past which it is gone. The points are where the rim
+                     # is thinnest and the keys swing by a factor of eight; over
+                     # the whole cursor the same clamp cost AppStarting's
+                     # liveliness 0.914 -> 0.857, because there the ringing is
+                     # sweep the gate counts (DEAD_ENDS.md, 2026-09-23)
 #
 # Two other ways of keeping the light off the master's dark crease were built
 # and measured before the split model above made them unnecessary. Both are out:
@@ -267,7 +274,50 @@ def periodic_at(field, phases, k=HARMONICS):
     return out
 
 
-def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS):
+_point_cache = {}
+
+
+def _point_weight(name, idx, n):
+    """(n, n): 1 within _POINT_UNIT[0] logical units of a sharp convex corner
+    of the canonical outline, 0 past _POINT_UNIT[1], on an n-pixel grid."""
+    key = (name, idx, n)
+    if key not in _point_cache:
+        r0, r1 = _POINT_UNIT
+        L = n / float(V.LOGICAL)
+        ys, xs = np.mgrid[0:n, 0:n] + 0.5
+        w = np.zeros((n, n))
+        for cx, cy in H._sharp_corners(name, H._geom(name, idx)):
+            d = np.hypot(xs - cx * L, ys - cy * L) / L
+            w = np.maximum(w, np.clip((r1 - d) / (r1 - r0), 0.0, 1.0))
+        _point_cache[key] = w
+    return _point_cache[key]
+
+
+def _field_at(raw, phases, k=HARMONICS, point=None):
+    """periodic_at, except that at the points the light may not leave further
+    than the lower of the two keys the phase lies between.
+
+    The nine-key fit rings where the keys change sharply, and at the points
+    they change by a factor of eight over the cycle: at phase 2.64 Wait's tail
+    point loses 0.78 of its light against 0 and 0.43 at keys 2 and 3, and
+    _LIGHT_GAIN puts that on _DIM_FLOOR - the black cap of frames 9-11 and 15
+    on both tails. Only the leaving side: the ring above the keys lights the
+    point, it does not blacken it. `point` is _point_weight at the field's size."""
+    out = periodic_at(raw, phases, k)
+    if point is None:
+        return out
+    n = raw.shape[0]
+    ph = np.asarray(phases, dtype=np.float64)
+    j = np.floor(ph * n + 1e-9).astype(int) % n
+    w = point[..., None]
+    for t in range(len(ph)):
+        low = np.minimum(raw[j[t]], raw[(j[t] + 1) % n])
+        out[t] = out[t] + w * (np.maximum(out[t], low) - out[t])
+    return out
+
+
+def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
+                  point=None):
     """out_n phases spaced by equal change of the picture, not by equal time.
 
     Measured on the rendered colour and not on the field itself: the light model
@@ -275,13 +325,14 @@ def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS):
     it, so equal change of the field is not equal change of anything the eye
     sees. Pacing on the field made the sweep hurry worse than not pacing it at
     all (peak/mean 1.39 -> 1.57). Rendered at a decimated size - the pace is one
-    scalar per phase, and 216 frames of it are needed."""
+    scalar per phase, and 216 frames of it are needed. `point` maps a grid size
+    to _point_weight on it, so the pace is measured on the frames that ship."""
     d = _PACE_DECIM
     lin_s, vis_s, seen_s = lin[::d, ::d], vis[::d, ::d], seen[::d, ::d]
     raw_s = raw[:, ::d, ::d] if raw.shape[1] == lin.shape[0] else raw
     a_s = anchor[:, ::d, ::d] if anchor.shape[1] == lin.shape[0] else anchor
     ph = np.arange(_PACE_FINE) / _PACE_FINE
-    f = periodic_at(raw_s, ph, k) - a_s
+    f = _field_at(raw_s, ph, k, None if point is None else point(raw_s.shape[1])) - a_s
     if f.shape[1] != lin_s.shape[0]:                 # a 32px field under a render
         return np.arange(out_n) / out_n
     ref_s = _dim_ref(lin_s, alpha[::d, ::d])
@@ -598,7 +649,8 @@ def paced_phases(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     key = (name, size, out_n, k, idx)
     if key not in _phase_cache:
         _idx, _b, lin, alpha, raw, _n, vis, seen, anchor = _setup(name, size, k, idx)
-        _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n, k)
+        _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n, k,
+                                          functools.partial(_point_weight, name, idx))
     return _phase_cache[key]
 
 
@@ -616,8 +668,9 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
         phases = _phase_cache[key]
     else:
         phases = _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor,
-                                                   alpha, out_n, k)
-    field = periodic_at(raw, phases, k) - anchor
+                                                   alpha, out_n, k,
+                                                   functools.partial(_point_weight, name, idx))
+    field = _field_at(raw, phases, k, _point_weight(name, idx, raw.shape[1])) - anchor
     facet = None
     coef_anchor = coef_phase = None
     if name in FACET_LIGHT:

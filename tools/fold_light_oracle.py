@@ -79,7 +79,8 @@ def build_frames(name, size, verbose=False):
     if identity_gap > 1e-10:
         return None, f"identity check failed: {identity_gap:.3e}", None
 
-    field_light = LA.periodic_at(raw, phases, LA.HARMONICS) - anchor  # production's own field
+    field_light = LA._field_at(raw, phases, LA.HARMONICS,             # production's own field
+                               LA._point_weight(name, idx, raw.shape[1])) - anchor
 
     ship_frames, candidate_frames, diag = [], [], []
     ref = LA._dim_ref(lin, alpha)
