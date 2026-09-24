@@ -1443,6 +1443,52 @@ def _even_blade(a, name, idx):
     return np.clip(a + h * (t - a), 0, 255)
 
 
+_POINT_READ = 2.5         # logical units: where a convex point reads its own wedge.
+                          # The rim's two bands close 2.0-2.75 behind the point
+                          # on these five (measured along the bisector at 512)
+_POINT_READ_REACH = 8.0   # logical units: identity again here. Over 2 * _POINT_READ
+                          # or the remap folds; four times it halves the radius at
+                          # the point, and the cycle keeps its liveliness
+
+
+def _point_converge(rgb, name, idx, size):
+    """The rim runs into each convex point instead of nesting a second one.
+
+    The rim is a band of dim glass a constant 0.7 logical units deep with the
+    master's dark line behind it (see DEAD_ENDS, the dark outline). Two such
+    bands meeting at a point this sharp close 2.0-2.75 units behind it, so the
+    tip is band all the way to there and the body starts with a point of its
+    own: at 128 and up that is a flat bevel on the end of the cursor, a chisel,
+    where the author's 32px point is one soft pixel of rim.
+
+    Each point's disc is read along its own rays: angle kept, radius r taken
+    from rho(r) = r + _POINT_READ (1 - r/_POINT_READ_REACH)^2. The edges near a
+    point are rays from it, so the silhouette and a fold on the bisector stay
+    where they are; the point itself reads the wedge at _POINT_READ, past where
+    the bands close, and the bands, the line and the body become sectors that
+    meet at the point. RGB only, before the alpha and the light: the blade is
+    untouched and the light sweeps over the glass where it now is.
+
+    Magnifying the radius alone (rho = T r) only moves the inner point in - at
+    T = _BLADE_TAPER it is still most of a unit back. Remapping the lit frame
+    instead of the glass moved the light with it: cadence 1.035 -> 1.136."""
+    if name not in _BLADE_CURSORS:
+        return rgb
+    L = size / float(V.LOGICAL)
+    ys, xs = np.mgrid[0:size, 0:size] + 0.5
+    px, py = xs / L, ys / L
+    src = np.asarray(rgb, dtype=np.float64)
+    out = src.copy()
+    for cx, cy in _sharp_corners(name, _geom(name, idx)):
+        dx, dy = px - cx, py - cy
+        r = np.hypot(dx, dy)
+        m = r < _POINT_READ_REACH
+        rm = r[m]
+        k = 1.0 + _POINT_READ * (1.0 - rm / _POINT_READ_REACH) ** 2 / np.maximum(rm, 1e-9)
+        out[m] = _sample(src, (cx + dx[m] * k) * L - 0.5, (cy + dy[m] * k) * L - 0.5)
+    return out
+
+
 def _blade_level(a, d, size):
     """Glass level just behind the band, spread over it from a ring deeper in."""
     ring = ((d >= _BLADE_RING[0]) & (d < _BLADE_RING[1])).astype(np.float64)
@@ -4845,6 +4891,7 @@ def frame_image(name, idx, size):
     rgb = _tip_level(rgb, name, idx, size)
     if name in _FOLD_RESTEP_ON:
         rgb = _fold_restep(rgb, name, idx, size)
+    rgb = _point_converge(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #
