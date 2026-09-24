@@ -1135,6 +1135,53 @@ def test_restep_support():
           % (2 * reach))
 
 
+def test_restep_one_edge():
+    """_fold_restep stops where the fold does.
+
+    Help's chord runs on past its fold into the question mark, and fitted there
+    the stage cut the mark's junction into a dashed crack (NEXT.md 100). Read
+    here without the stage's own fits: the steepest edge of each section, the
+    fold being the run of stations whose edge keeps one sign and carries the
+    most gradient. One station past its end is left for the bilinear splat;
+    beyond that the correction has to be under half a level, and before it the
+    stage has to have done something. Before the cut it read 56 levels at 256
+    and 75 at 512."""
+    eps, bad, said = 0.5, [], []
+    ns = np.arange(-H._RESTEP_REACH, H._RESTEP_REACH + H._RESTEP_PITCH, H._RESTEP_PITCH)
+    win = np.abs(ns) <= H._RESTEP_REACH - H._RESTEP_FIT[1] - 0.1
+    box = np.ones(max(3, int(round(0.15 / H._RESTEP_PITCH)) | 1))
+    for name, idx, size in (("Help", 0, 256), ("Help", 0, 512)):
+        rgb = A.frame(name, idx, size)[..., :3]
+        out = np.ascontiguousarray(
+            np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1))
+        (tx, ty), (ex, ey) = H._fold_chord(name, idx)
+        L = size / V.LOGICAL
+        dx, dy = ex - tx, ey - ty
+        seg = float(np.hypot(dx, dy))
+        vx, vy = -dy / seg, dx / seg
+        lum = np.ascontiguousarray(rgb.mean(-1))
+        dist = H._edge_distance_at(name, idx, size)
+        edge, got = [], []
+        for t in np.linspace(0.0, 1.0, H._RESTEP_STATIONS):
+            sx, sy = (tx + dx * t + ns * vx) * L - 0.5, (ty + dy * t + ns * vy) * L - 0.5
+            ok = win & (H._sample1(dist, sx, sy) >= H._RESTEP_PROTECT)
+            g = np.gradient(np.convolve(H._sample1(lum, sx, sy), box / box.sum(), "same"), ns)
+            edge.append(float(g[ok][np.argmax(np.abs(g[ok]))]) if ok.sum() > 3 else np.nan)
+            got.append(float(np.nanmax(H._sample1(out, sx, sy))))
+        edge, got = np.array(edge), np.array(got)
+        at = np.nonzero(np.isfinite(edge))[0]
+        same = np.split(at, np.nonzero(np.diff(np.sign(edge[at])))[0] + 1)
+        end = max(same, key=lambda r: np.abs(edge[r]).sum())[-1]
+        if end >= at[-1]:
+            bad.append(f"{name}@{size}: the fold reads to the chord's end")
+            continue
+        said.append(f"{name}@{size}: {got[end + 2:].max():.1f} past "
+                    f"t={(end + 1) / (len(edge) - 1):.2f}")
+        if got[end + 2:].max() > eps or got[:end + 1].max() <= eps:
+            bad.append(said[-1])
+    check("restep stops with the fold", not bad, "; ".join(bad or said))
+
+
 def test_morph_steps_visible():
     """The morph cadence reads what shows and nothing else.
 
@@ -1354,7 +1401,7 @@ def main():
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
-              test_restep_support,
+              test_restep_support, test_restep_one_edge,
               test_morph_steps_visible, test_no_ring_support,
               test_hole_glass, test_product_manifest,
               test_package_roundtrip_catches_corruption,
