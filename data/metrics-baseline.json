@@ -189,7 +189,7 @@
   "tip_profile": 1.742213
  },
  "Help": {
-  "delta_e": 3.587238,
+  "delta_e": 3.539508,
   "density": 0.147112,
   "edge_straight": 0.443792,
   "edge_straight_rms": 0.108783,
@@ -210,9 +210,9 @@
   "legacy_fold_jag": 14.483333,
   "legacy_fold_luma_step": 4.083333,
   "legacy_fold_wander": 0.054348,
-  "rim_layers": 0.28479,
+  "rim_layers": 0.375405,
   "rim_layers_orig": 0.053498,
-  "rim_layers_per_station": 0.440129,
+  "rim_layers_per_station": 0.786408,
   "scale_drift": 0.034406,
   "tip_convergence": 1.5,
   "tip_extreme_contrast": 0.233602,
