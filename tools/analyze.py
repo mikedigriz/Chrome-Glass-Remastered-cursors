@@ -1764,6 +1764,48 @@ def tip_profile(name, size=_TIP_SIZE):
     return (min(vals) if vals else None), out
 
 
+_NEST_SIZE = 512      # where the chisel is read: at 256 the band is five pixels
+                      # and the line behind it one
+_NEST_STEP = 1 / 16.0  # logical units between samples along the bisector
+_NEST_SPAN = (0.75, 3.0)
+                      # logical units behind the point the step is looked for:
+                      # past the silhouette's own last pixels, short of the body
+
+
+def tip_nest(name, size=_NEST_SIZE, get=frame):
+    """How hard the body starts behind each point: the chisel.
+
+    The rim is a band of constant depth, so the two bands that meet at a sharp
+    point close some way behind it, the tip is band up to there, and the body
+    starts after it with its own, second, inner point. Drawn crisp at 128 and
+    up, that reads as a flat bevel on the end of the cursor rather than a point.
+    It is not the author's: his point is one 32px pixel of rim, and resampled
+    it is a soft ramp, not a second apex.
+
+    Read along each corner's inward bisector, composited on grey: the largest
+    change in luma over an eighth of a logical unit, anywhere 0.75-3 units
+    behind the point. The author's frames read 4-14 levels, a crisp inner apex
+    20-110. The worst corner. Reported, not gated."""
+    a = get(name, 0, size)
+    al = a[..., 3] / 255.0
+    comp = a[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
+    L = size / 32.0
+    rs = np.arange(0.0, _NEST_SPAN[1] + 2 * _NEST_STEP + 1e-9, _NEST_STEP)
+    out = {}
+    for (px, py), (ox, oy) in corners(name):
+        x = np.clip((px - ox * rs) * L - 0.5, 0, size - 2)
+        y = np.clip((py - oy * rs) * L - 0.5, 0, size - 2)
+        x0, y0 = x.astype(int), y.astype(int)
+        fx, fy = x - x0, y - y0
+        prof = (comp[y0, x0] * (1 - fx) * (1 - fy) + comp[y0, x0 + 1] * fx * (1 - fy)
+                + comp[y0 + 1, x0] * (1 - fx) * fy + comp[y0 + 1, x0 + 1] * fx * fy)
+        step = np.abs(prof[2:] - prof[:-2])
+        mid = rs[1:-1]
+        m = (mid >= _NEST_SPAN[0]) & (mid <= _NEST_SPAN[1])
+        out[f"{px:.1f},{py:.1f}"] = float(step[m].max())
+    return (max(out.values()) if out else None), out
+
+
 _RIM_SIZE = 512       # where the rim is measured. The band this looks for is a
                       # fifth of a logical unit wide; at 256 that is 1.6px and at
                       # 128 it is under one, so a clean reading needs the top
@@ -2300,6 +2342,8 @@ def _collect_one(job):
     e["tip_extreme_contrast"], _ = tip_extreme_contrast(name)
     e["tip_extreme_contrast_orig"], _ = tip_extreme_contrast(name, get=orig_frame)
     e["tip_profile"], _ = tip_profile(name)
+    e["tip_nest"], _ = tip_nest(name)
+    e["tip_nest_orig"], _ = tip_nest(name, get=orig_frame)
     e["rim_layers"] = rim_layers(name)
     e["rim_layers_orig"] = rim_layers_author(name)
     e["edge_straight"] = edge_straight(name)
@@ -2719,6 +2763,7 @@ def _flat(e):
         "morph_cadence_err": mo.get("cadence_err") if mo else None,
         "temporal_fold": ts.get("fold"),
         "temporal_body": ts.get("body"),
+        "tip_nest": e.get("tip_nest"),
         "tip_sheen": (e.get("tip_sheen") or {}).get("amp"),
         "tip_wobble": (e.get("tip_sheen") or {}).get("wobble"),
         "rim_layers": (e.get("rim_layers") or {}).get("share"),
@@ -2753,7 +2798,7 @@ def _known_issues(path):
 def show(rep, base=None):
     cols = [("drift(L)", "scale_drift", 10, ".3f"), ("dens%", "density", 7, ".2f"),
             ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_extreme_contrast", 7, ".3f"),
-            ("tipprof", "tip_profile", 8, ".2f"),
+            ("tipprof", "tip_profile", 8, ".2f"), ("nest", "tip_nest", 6, ".2f"),
             ("cover", "fold_cover", 6, ".2f"), ("unid", "fold_unident", 6, ".2f"),
             ("unres", "fold_unres", 6, ".2f"),
             ("s", "fold_s", 6, ".2f"), ("sconv", "fold_s_conv", 6, ".2f"),
