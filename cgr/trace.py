@@ -849,6 +849,56 @@ def snap_corners(frames):
                 taken[fi].add(vj)
 
 
+OUTLINE_DONOR = "Arrow"  # the pointer the static cursors share, traced cleanest
+DONOR_TOL = 32.0         # levels: the author's alpha of the two must agree this
+                         # closely over the 3x3 px round a vertex. His pointer
+                         # edges agree within 17, the "?" and its dot by 100+
+DONOR_REACH = 0.35       # logical: and the vertex must sit this close to the
+                         # donor's outline. The disagreement is 0.12..0.30;
+                         # features the author drew apart are whole units apart
+
+
+def borrow_outline(out):
+    """Put a static cursor's edge on Arrow's where the author drew them as one.
+
+    Help draws Arrow's pointer: along its upper edge the author's 32px alpha of
+    the two agrees within 17 levels. The 128px AI frame of Help puts that edge
+    a raw pixel higher, so its trace ran 0.12..0.30 logical units outside
+    Arrow's, and as a sawtooth - the simplifier cut it at the peaks into pieces
+    straighten_runs could not balance. At 256 and up that is a bump on the edge
+    before the right tip and a blade swelling along it.
+
+    Where the two alphas agree, a vertex moves onto the donor: a corner onto
+    its nearest corner, anything else onto the nearest point of its outline
+    (_image_of). On Help that is 36 of the pointer's 48 vertices; the "?" and
+    the dot keep their own. Static cursors only: Handwriting and NO carry the
+    same disagreement on some frames and not others, and an outline moved per
+    frame would jump in time."""
+    donor = out[OUTLINE_DONOR]["frames"][0]["polys"]
+    rings = [([tuple(q[:2]) for q in poly], [q[2] for q in poly]) for poly in donor]
+    da = np.asarray(Image.open(os.path.join(ART, "orig", f"cur__{OUTLINE_DONOR}__0.png"))
+                    .convert("RGBA"), dtype=np.float64)[..., 3]
+    for name in STATIC:
+        if name == OUTLINE_DONOR:
+            continue
+        a = np.asarray(Image.open(os.path.join(ART, "orig", f"cur__{name}__0.png"))
+                       .convert("RGBA"), dtype=np.float64)[..., 3]
+        diff = np.abs(a - da)
+        moved = 0
+        for poly in out[name]["frames"][0]["polys"]:
+            for v in poly:
+                xi, yi = int(math.floor(v[0])), int(math.floor(v[1]))
+                win = diff[max(yi - 1, 0):yi + 2, max(xi - 1, 0):xi + 2]
+                if win.size == 0 or win.max() >= DONOR_TOL:
+                    continue
+                q, d = _image_of((v[0], v[1]), v[2], rings)
+                if q is not None and 0 < d < DONOR_REACH:
+                    v[0], v[1] = round(q[0], 2), round(q[1], 2)
+                    moved += 1
+        if moved:
+            print("borrowed", name, moved, "vertices from", OUTLINE_DONOR)
+
+
 def main():
     out = {}
     for name in STATIC:
@@ -857,6 +907,7 @@ def main():
         fr = out[name]["frames"][0]
         print("traced", name, len(fr["polys"]), "components,",
               sum(len(p) for p in fr["polys"]), "pts")
+    borrow_outline(out)
     for name, n in ANI.items():
         out[name] = {"frames": [trace_frame(f"ani__{name}__{i}", name=name)
                                 for i in range(n)]}
