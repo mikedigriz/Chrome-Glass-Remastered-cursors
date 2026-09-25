@@ -3347,15 +3347,17 @@ _NOTCH_BLUR = 1.4      # logical units the local facet baseline is averaged
                        # over - wide enough to bridge the crack itself (a unit
                        # or less across) without reaching past the notch into
                        # the other tail's own facet
-_NOTCH_T0 = 0.985      # share of the tip-to-notch chord the correction is held
-                       # off until. `tools/selftest.py`'s fold-jag probe plants
-                       # its defect on every row `_fold_track` resolves, which
-                       # on Arrow at 256px reaches t=0.959 - a disc keyed on
-                       # distance from the notch vertex alone reached back into
-                       # that band and absorbed the probe (selftest failed:
-                       # jag no longer moved on its own defect). Gating on t
-                       # as well keeps the correction out of ground the
-                       # tracker is already answering for.
+_NOTCH_T0 = 0.90       # share of the tip-to-notch chord the correction is held
+                       # off until. It was 0.985 for `tools/selftest.py`'s
+                       # fold-jag probe, which planted its defect on the rows
+                       # `_fold_track` resolved (to t=0.959 on Arrow at 256)
+                       # and the disc absorbed it. That probe now damages
+                       # analyze's finished frame, out of any stage's reach,
+                       # and is skipped besides (legacy_gone). At 0.985 the
+                       # gate kept the stage off the master's black arc along
+                       # the rim's inner line at t 0.965-0.98: 22-30 levels on
+                       # grey on Arrow, Hand and Arrow_Down, against the
+                       # author's 114 there (NEXT.md 110).
 
 
 def _notch_declutter(rgb, name, idx, size):
@@ -3379,8 +3381,8 @@ def _notch_declutter(rgb, name, idx, size):
     not on the chord itself), which is the departure `_fold_offsets` already
     tracks for the divider line elsewhere. A disc centred on the notch vertex
     reaches the defect without needing that offset fitted a second time here;
-    `_NOTCH_T0` then trims the disc back on the apex-facing side so it starts
-    only past where the fold tracker's own band ends.
+    `_NOTCH_T0` then trims the disc back on the apex-facing side so it does not
+    reach back along the fold.
 
     The correction is a floor, not a flat replacement: `_band_level` in
     `_tip_relight` replaces its whole band outright because that band is
