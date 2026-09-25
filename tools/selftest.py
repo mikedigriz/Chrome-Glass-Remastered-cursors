@@ -702,6 +702,62 @@ def test_band_even():
           "%.3f -> %.3f LU of wander without the stage, bound %.3f" % (clean, hurt, eps))
 
 
+def test_bevel_along():
+    """The grey wedges' glass runs even along their sides at 512.
+
+    Stretched, the author's 32px colour put a blob on every step of a diagonal
+    edge's staircase and the seven wedges read as dented foil (NEXT.md 104).
+    Read at analyze's outline stations, not on the stage's level sets: luma on
+    grey 0.3..1.0 LU in from the contour, stations within 2.5 LU of a point
+    skipped, roughness as the mean distance from the median over 3 LU of arc.
+    IBeam and SizeNWSE, the stage against no stage."""
+    size, eps = 512, 3.0
+    L = size / 32.0
+    ds = np.arange(0.3, 1.0 + 1e-9, 0.1)
+    w = int(round(1.5 / A._RIM_STATION))
+
+    def rough(name):
+        f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
+        al = f[..., 3] / 255.0
+        lum = f[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
+        m = H._mask(name, 0, size) / 255.0
+        cs = np.array(H._sharp_corners(name, 0))
+        v = []
+        for p, nrm in A._outline_stations(name, 0):
+            if np.hypot(*(cs - p).T).min() < 2.5:
+                v.append(np.nan)
+                continue
+            got = np.nan
+            for sgn in (1.0, -1.0):        # inward, whichever way the polygon winds
+                x = (p[0] + sgn * ds * nrm[0]) * L - 0.5
+                y = (p[1] + sgn * ds * nrm[1]) * L - 0.5
+                if (A._sample(m, x, y) >= 0.5).all():
+                    got = float(A._sample(lum, x, y).mean())
+                    break
+            v.append(got)
+        v = np.array(v)
+        dev = []
+        for i in np.nonzero(np.isfinite(v))[0]:
+            win = v[max(0, i - w):i + w + 1]
+            win = win[np.isfinite(win)]
+            if len(win) >= 5:
+                dev.append(abs(v[i] - np.median(win)))
+        return float(np.mean(dev))
+
+    names = ("IBeam", "SizeNWSE")
+    clean = float(np.mean([rough(n) for n in names]))
+    keep = H._BEVEL_ALONG_SIZES
+    H._BEVEL_ALONG_SIZES = (1 << 20, 1 << 21)
+    repoint()
+    try:
+        hurt = float(np.mean([rough(n) for n in names]))
+    finally:
+        H._BEVEL_ALONG_SIZES = keep
+        repoint()
+    check("bevel along", clean <= eps < hurt,
+          "%.2f -> %.2f levels of roughness without the stage, bound %.1f" % (clean, hurt, eps))
+
+
 def test_bead_core():
     """Help's dot keeps the author's dark core at 32.
 
@@ -1511,7 +1567,7 @@ def main():
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
-              test_band_even, test_fold_jitter,
+              test_band_even, test_bevel_along, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
