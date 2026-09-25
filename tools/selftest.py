@@ -797,6 +797,35 @@ def test_notch_floor():
           "%.1f -> %.1f levels at the notch with the old gate, bound %.1f" % (clean, hurt, eps))
 
 
+def test_neutral_glass():
+    """Grey glass carries no colour cast.
+
+    The network paints a red-brown streak and a cyan line by Arrow's tail notch,
+    18 levels of chroma at 256 where the author never passes 6 (NEXT.md 111).
+    Read as the largest chroma, the norm off luma, on Arrow's finished frame 0
+    at 256 wherever alpha is at least half; without the cap it has to fail the
+    same bound."""
+    size, eps = 256, 10.0
+
+    def widest():
+        f = np.asarray(H.frame_image("Arrow", 0, size), dtype=np.float64)
+        rgb = f[..., :3]
+        sat = np.linalg.norm(rgb - (rgb @ H._LUMA)[..., None], axis=-1)
+        return float(sat[f[..., 3] >= 128].max())
+
+    clean = widest()
+    keep = H._NEUTRAL_CAP
+    H._NEUTRAL_CAP = np.inf
+    repoint()
+    try:
+        hurt = widest()
+    finally:
+        H._NEUTRAL_CAP = keep
+        repoint()
+    check("neutral glass", clean <= eps < hurt,
+          "%.1f -> %.1f levels of chroma without the cap, bound %.1f" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -1744,8 +1773,8 @@ def main():
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
-              test_band_even, test_bevel_along, test_notch_floor, test_point_taps,
-              test_fold_jitter,
+              test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
+              test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
