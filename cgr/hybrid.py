@@ -1456,6 +1456,8 @@ _POINT_WIDEST = 80.0      # degrees: the widest point converged. Every point of 
                           # arrows reads 50-75, the shoulders of Handwriting's
                           # passing keys 87-90
 _POINT_ANGLE_AT = 1.5     # logical units along the outline that angle is read over
+_POINT_TAPS = 9           # lookups spread over each pixel's arc: the read squeezes
+                          # the arc up to 5.4 times half a unit from the point
 
 
 def _outline_angle(name, idx, c):
@@ -1519,7 +1521,14 @@ def _point_converge(rgb, name, idx, size):
     120 -> 178, his 116). No chisel shows at that size either way: tip_nest
     reads 3.5-7 without the stage. So the read depth fades in with the band's
     width in pixels, `_POINT_BAND`, from one to two; at 64 the part-read keeps
-    tip_nest at 6.5-13.2, where the full read reached 18.5 and none 22.8."""
+    tip_nest at 6.5-13.2, where the full read reached 18.5 and none 22.8.
+
+    Across the ray the read shrinks: a pixel r from the point spans an arc
+    rho/r pixels long where it reads, 2.9 at one unit and 5.4 at half. One
+    bilinear lookup per pixel took every third pixel of the dark line there,
+    and at 256 the last two units of it were a row of beads. So each pixel
+    averages _POINT_TAPS lookups spread over the arc it covers, less the one
+    pixel the lookup spans itself; where the read is identity they coincide."""
     if name not in _POINT_CONVERGE:
         return rgb
     L = size / float(V.LOGICAL)
@@ -1538,8 +1547,15 @@ def _point_converge(rgb, name, idx, size):
         r = np.hypot(dx, dy)
         m = r < _POINT_READ_REACH
         rm = r[m]
-        k = 1.0 + read * (1.0 - rm / _POINT_READ_REACH) ** 2 / np.maximum(rm, 1e-9)
-        out[m] = _sample(src, (cx + dx[m] * k) * L - 0.5, (cy + dy[m] * k) * L - 0.5)
+        rho = rm + read * (1.0 - rm / _POINT_READ_REACH) ** 2
+        th = np.arctan2(dy[m], dx[m])
+        span = np.maximum(1.0 / np.maximum(rm, 1.0 / L) - 1.0 / rho, 0.0) / L
+        acc = 0.0
+        for j in range(_POINT_TAPS):
+            a = th + ((j + 0.5) / _POINT_TAPS - 0.5) * span
+            acc = acc + _sample(src, (cx + rho * np.cos(a)) * L - 0.5,
+                                (cy + rho * np.sin(a)) * L - 0.5)
+        out[m] = acc / _POINT_TAPS
     return out
 
 
