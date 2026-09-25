@@ -758,6 +758,51 @@ def test_bevel_along():
           "%.2f -> %.2f levels of roughness without the stage, bound %.1f" % (clean, hurt, eps))
 
 
+def test_point_taps():
+    """_point_converge reads each pixel's whole arc near a point.
+
+    The read squeezes the arc up to 5.4 times there, and one bilinear lookup
+    per pixel took every third pixel of the rim's dark line: at 256 its last
+    two units before Arrow's points were a row of beads (NEXT.md 106). The
+    stage's input is caught on Arrow's frame 0 at 256, and its output 0.25-2.5
+    LU from the points is held against the same read at 64 lookups, 95th
+    percentile of the luma difference. One lookup has to fail the same bound."""
+    name, size, eps = "Arrow", 256, 1.0
+    got = {}
+    real = H._point_converge
+
+    def grab(rgb, n, i, s):
+        got["rgb"] = np.array(rgb, dtype=np.float64)
+        return real(rgb, n, i, s)
+
+    H._point_converge = grab
+    try:
+        H.frame_image.__wrapped__(name, 0, size)
+    finally:
+        H._point_converge = real
+    L = size / 32.0
+    g = H._geom(name, 0)
+    pts = [c for c in H._sharp_corners(name, g)
+           if H._outline_angle(name, g, c) <= H._POINT_WIDEST]
+    ys, xs = np.mgrid[0:size, 0:size] + 0.5
+    near = np.min([np.hypot(xs / L - cx, ys / L - cy) for cx, cy in pts], axis=0)
+    zone = (H._mask(name, 0, size) >= 128) & (near > 0.25) & (near < 2.5)
+
+    def lum(taps):
+        keep = H._POINT_TAPS
+        H._POINT_TAPS = taps
+        try:
+            return H._point_converge(got["rgb"], name, 0, size)[..., :3].mean(-1)
+        finally:
+            H._POINT_TAPS = keep
+
+    dense = lum(64)
+    clean = float(np.percentile(np.abs(lum(H._POINT_TAPS) - dense)[zone], 95))
+    hurt = float(np.percentile(np.abs(lum(1) - dense)[zone], 95))
+    check("point taps", clean <= eps < hurt,
+          "%.2f -> %.2f levels off the full arc with one lookup, bound %.1f" % (clean, hurt, eps))
+
+
 def test_bead_core():
     """Help's dot keeps the author's dark core at 32.
 
@@ -1567,7 +1612,7 @@ def main():
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
-              test_band_even, test_bevel_along, test_fold_jitter,
+              test_band_even, test_bevel_along, test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
