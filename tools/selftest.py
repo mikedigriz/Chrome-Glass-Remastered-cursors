@@ -470,14 +470,16 @@ def test_fold_dipole_controls():
 def test_fold_dipole_eligibility():
     """A cursor the author did not draw the shape on gets no third column.
 
-    Not a preference: Help's own mean residual leans against the shared shape,
-    so a fitted column would read his drawing upside down. He must come out
-    bit-for-bit as he did before this column existed.
+    Not a preference: AppStarting's frames split on the shared shape, four for
+    and five against, so a fitted column would read half of his drawing upside
+    down. It must come out bit-for-bit as it did before this column existed.
+    Help was the example until its chord ran along its fold (hybrid
+    _FOLD_CHORD_OF); read there, his residual carries the shape like Arrow's.
     """
     same = []
     for t in (0.3, 0.5, 0.7):
-        off = F.measure("Help", 0, 256, A.orig_frame, t, joint=False)
-        on = F.measure("Help", 0, 256, A.orig_frame, t)
+        off = F.measure("AppStarting", 0, 256, A.orig_frame, t, joint=False)
+        on = F.measure("AppStarting", 0, 256, A.orig_frame, t)
         if off is None or on is None:
             continue
         same.append(off["s"] == on["s"] and off["d"] == on["d"]
@@ -487,7 +489,7 @@ def test_fold_dipole_eligibility():
           bool(same) and all(same),
           f"{sum(same)} of {len(same)} stations unchanged")
     check("eligibility is decided, not assumed",
-          F.dipole_eligible("Hand") and not F.dipole_eligible("Help")
+          F.dipole_eligible("Hand") and F.dipole_eligible("Help")
           and not F.dipole_eligible("AppStarting"),
           f"Hand={F.dipole_eligible('Hand')}, Help={F.dipole_eligible('Help')}, "
           f"AppStarting={F.dipole_eligible('AppStarting')}")
@@ -1000,6 +1002,41 @@ def test_straighten_runs():
           f"corner moved {moved:.2e} logical units")
 
 
+def test_outline_borrow():
+    """Help's pointer lies on Arrow's wherever the author drew them as one.
+
+    Traced on its own, Help's upper edge ran 0.12-0.30 logical units outside
+    Arrow's, a bump before the right tip at 256 (NEXT.md 108). Read on the
+    vertices of data/traced.json whose author alpha agrees with Arrow's, picked
+    the way trace.borrow_outline picks them; Help traced afresh, without that
+    pass, has to fail the same bound."""
+    from cgr import trace as T                          # noqa: E402
+    eps = 0.02                                          # traced.json keeps two decimals
+    rings = [([tuple(q[:2]) for q in p], [q[2] for q in p])
+             for p in H.C.TRACED["Arrow"]["frames"][0]["polys"]]
+    diff = np.abs(np.asarray(H.original("Help", 0), np.float64)[..., 3]
+                  - np.asarray(H.original("Arrow", 0), np.float64)[..., 3])
+
+    def worst(polys):
+        w = 0.0
+        for poly in polys:
+            for v in poly:
+                xi, yi = int(math.floor(v[0])), int(math.floor(v[1]))
+                win = diff[max(yi - 1, 0):yi + 2, max(xi - 1, 0):xi + 2]
+                if win.size == 0 or win.max() >= T.DONOR_TOL:
+                    continue
+                _q, d = T._image_of((v[0], v[1]), v[2], rings)
+                if d < T.DONOR_REACH:
+                    w = max(w, d)
+        return w
+
+    clean = worst(H.C.TRACED["Help"]["frames"][0]["polys"])
+    hurt = worst(T.trace_frame("cur__Help__0", name="Help")["polys"])
+    check("outline borrow", clean <= eps < hurt,
+          "%.3f -> %.3f logical units off Arrow's outline traced afresh, bound %.2f"
+          % (clean, hurt, eps))
+
+
 def test_material_basis():
     """The frames in hybrid._MATERIAL_BASIS carry no material of their own, and
     the contract is worth a control: a frame listed there must move when its
@@ -1385,11 +1422,21 @@ def test_restep_support():
           % (2 * reach))
 
 
+def _chord_caches():
+    """Drop everything cached off a fold chord, after planting one or taking
+    it back."""
+    for f in (H._fold_chord, H._fold_offsets, H._restep_dipole_read,
+              H._foldfit().dipole_eligible, F.dipole_eligible):
+        f.cache_clear()
+
+
 def test_restep_one_edge():
     """_fold_restep stops where the fold does.
 
-    Help's chord runs on past its fold into the question mark, and fitted there
-    the stage cut the mark's junction into a dashed crack (NEXT.md 100). Read
+    Help's own chord runs on past its fold into the question mark, and fitted
+    there the stage cut the mark's junction into a dashed crack (NEXT.md 100).
+    Help now borrows Arrow's chord up to the mark (hybrid._FOLD_CHORD_OF), so
+    the chord its outline gives is planted back for this. Read
     here without the stage's own fits: the steepest edge of each section, the
     fold being the run of stations whose edge keeps one sign and carries the
     most gradient. One station past its end is left for the bilinear splat;
@@ -1400,35 +1447,43 @@ def test_restep_one_edge():
     ns = np.arange(-H._RESTEP_REACH, H._RESTEP_REACH + H._RESTEP_PITCH, H._RESTEP_PITCH)
     win = np.abs(ns) <= H._RESTEP_REACH - H._RESTEP_FIT[1] - 0.1
     box = np.ones(max(3, int(round(0.15 / H._RESTEP_PITCH)) | 1))
-    for name, idx, size in (("Help", 0, 256), ("Help", 0, 512)):
-        rgb = A.frame(name, idx, size)[..., :3]
-        out = np.ascontiguousarray(
-            np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1))
-        (tx, ty), (ex, ey) = H._fold_chord(name, idx)
-        L = size / V.LOGICAL
-        dx, dy = ex - tx, ey - ty
-        seg = float(np.hypot(dx, dy))
-        vx, vy = -dy / seg, dx / seg
-        lum = np.ascontiguousarray(rgb.mean(-1))
-        dist = H._edge_distance_at(name, idx, size)
-        edge, got = [], []
-        for t in np.linspace(0.0, 1.0, H._RESTEP_STATIONS):
-            sx, sy = (tx + dx * t + ns * vx) * L - 0.5, (ty + dy * t + ns * vy) * L - 0.5
-            ok = win & (H._sample1(dist, sx, sy) >= H._RESTEP_PROTECT)
-            g = np.gradient(np.convolve(H._sample1(lum, sx, sy), box / box.sum(), "same"), ns)
-            edge.append(float(g[ok][np.argmax(np.abs(g[ok]))]) if ok.sum() > 3 else np.nan)
-            got.append(float(np.nanmax(H._sample1(out, sx, sy))))
-        edge, got = np.array(edge), np.array(got)
-        at = np.nonzero(np.isfinite(edge))[0]
-        same = np.split(at, np.nonzero(np.diff(np.sign(edge[at])))[0] + 1)
-        end = max(same, key=lambda r: np.abs(edge[r]).sum())[-1]
-        if end >= at[-1]:
-            bad.append(f"{name}@{size}: the fold reads to the chord's end")
-            continue
-        said.append(f"{name}@{size}: {got[end + 2:].max():.1f} past "
-                    f"t={(end + 1) / (len(edge) - 1):.2f}")
-        if got[end + 2:].max() > eps or got[:end + 1].max() <= eps:
-            bad.append(said[-1])
+    frames = {size: A.frame("Help", 0, size)[..., :3] for size in (256, 512)}
+    keep = H._FOLD_CHORD_OF
+    H._FOLD_CHORD_OF = {}
+    _chord_caches()
+    try:
+        for name, idx, size in (("Help", 0, 256), ("Help", 0, 512)):
+            rgb = frames[size]
+            out = np.ascontiguousarray(
+                np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1))
+            (tx, ty), (ex, ey) = H._fold_chord(name, idx)
+            L = size / V.LOGICAL
+            dx, dy = ex - tx, ey - ty
+            seg = float(np.hypot(dx, dy))
+            vx, vy = -dy / seg, dx / seg
+            lum = np.ascontiguousarray(rgb.mean(-1))
+            dist = H._edge_distance_at(name, idx, size)
+            edge, got = [], []
+            for t in np.linspace(0.0, 1.0, H._RESTEP_STATIONS):
+                sx, sy = (tx + dx * t + ns * vx) * L - 0.5, (ty + dy * t + ns * vy) * L - 0.5
+                ok = win & (H._sample1(dist, sx, sy) >= H._RESTEP_PROTECT)
+                g = np.gradient(np.convolve(H._sample1(lum, sx, sy), box / box.sum(), "same"), ns)
+                edge.append(float(g[ok][np.argmax(np.abs(g[ok]))]) if ok.sum() > 3 else np.nan)
+                got.append(float(np.nanmax(H._sample1(out, sx, sy))))
+            edge, got = np.array(edge), np.array(got)
+            at = np.nonzero(np.isfinite(edge))[0]
+            same = np.split(at, np.nonzero(np.diff(np.sign(edge[at])))[0] + 1)
+            end = max(same, key=lambda r: np.abs(edge[r]).sum())[-1]
+            if end >= at[-1]:
+                bad.append(f"{name}@{size}: the fold reads to the chord's end")
+                continue
+            said.append(f"{name}@{size}: {got[end + 2:].max():.1f} past "
+                        f"t={(end + 1) / (len(edge) - 1):.2f}")
+            if got[end + 2:].max() > eps or got[:end + 1].max() <= eps:
+                bad.append(said[-1])
+    finally:
+        H._FOLD_CHORD_OF = keep
+        _chord_caches()
     check("restep stops with the fold", not bad, "; ".join(bad or said))
 
 
@@ -1657,7 +1712,8 @@ def main():
               test_hole_glass, test_product_manifest,
               test_package_roundtrip_catches_corruption,
               test_rim_layers, test_edge_straight, test_mirror_asym,
-              test_straighten_runs, test_material_basis, test_material_dc,
+              test_straighten_runs, test_outline_borrow, test_material_basis,
+              test_material_dc,
               test_material_cover):
         t()
     print()
