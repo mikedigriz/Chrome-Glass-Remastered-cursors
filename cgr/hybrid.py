@@ -5182,9 +5182,12 @@ def _rgb_pre_rim(name, idx, size):
 #
 # Hand draws the same pointer and its band swells the same way (NEXT.md 105),
 # and so does Help since its fold ends at the hook (NEXT.md 109). Handwriting
-# does not get it: its outline morphs, which doubles the line by the notch on
-# the frames where the pointer shrinks.
-_BAND_CURSORS = _BLADE_CURSORS | {"Hand", "Help"}
+# gets it on the frames drawn from its master (NEXT.md 112). Its morph frames
+# (_MATERIAL_BASIS) carry no drawn band: their colour is the author's low
+# frequencies under a warped donor's detail, the stage lays its line over lines
+# that are not there and doubles them by the notch, and there the fold width
+# reads 4.5 times the author's.
+_BAND_CURSORS = _BLADE_CURSORS | {"Hand", "Help", "Handwriting"}
 _BAND_DEPTH = 1.75       # LU: deepest a section is read and remapped
 _BAND_DSTEP = 1 / 32.0   # LU between samples along a section
 _BAND_ASTEP = 1 / 16.0   # LU of arc between stations
@@ -5534,7 +5537,7 @@ def frame_image(name, idx, size):
     # the author, not derived from ours, and _sat_match would rescale it
     rgb, alpha = _no_ring(rgb, alpha, name, idx, size)
     im = _hide_ghost(_compose(rgb, alpha), name, size)
-    if name in _BAND_CURSORS:
+    if name in _BAND_CURSORS and (name, idx) not in _MATERIAL_BASIS:
         im = _even_band(im, name, idx, size)
     return im
 
