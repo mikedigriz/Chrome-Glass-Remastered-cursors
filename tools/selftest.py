@@ -1070,6 +1070,42 @@ def test_material_dc():
               "mean residual %+.4f levels, %+.4f after the clip" % (dc, after))
 
 
+def test_material_cover():
+    """No borrowed detail from past the donor's edge.
+
+    The donor's master outside its silhouette is the net's background: chains
+    of beads and curls round the pen. Mapped onto Handwriting 5 and 6 where the
+    two silhouettes disagree, they were dark scribbles by the edge, 140-160
+    levels deep (NEXT.md 107). Read at 256 on the pixels of this frame whose
+    mapped point has less than half of the donor under it; the layer with full
+    cover everywhere has to fail the same bound."""
+    size, eps = 256, 1.0
+
+    def worst():
+        w = 0.0
+        for idx in (5, 6):
+            donor = H._MATERIAL_BASIS[("Handwriting", idx)]
+            tm = H._mask("Handwriting", idx, size) / 255.0
+            dm = H._mask("Handwriting", donor, size) / 255.0
+            _iou, qx, qy = H._moment_map(tm, dm)
+            qx, qy = H._chord_align("Handwriting", idx, donor, size, qx, qy)
+            past = (tm > 0.5) & (H._sample(dm[..., None], qx, qy)[..., 0] < 0.5)
+            det = H._material_detail("Handwriting", idx, donor, size)[..., 0]
+            w = max(w, float(np.abs(det[past]).max()))
+        return w
+
+    clean = worst()
+    keep = H._MATERIAL_COVER
+    H._MATERIAL_COVER = (-2.0, -1.0)
+    try:
+        hurt = worst()
+    finally:
+        H._MATERIAL_COVER = keep
+    check("material cover", clean <= eps < hurt,
+          "%.1f -> %.1f levels of detail past the donor's edge with full cover, bound %.1f"
+          % (clean, hurt, eps))
+
+
 def test_product_cycle_pairs():
     """A frame and its phase come out of the same call, one for one.
 
@@ -1621,7 +1657,8 @@ def main():
               test_hole_glass, test_product_manifest,
               test_package_roundtrip_catches_corruption,
               test_rim_layers, test_edge_straight, test_mirror_asym,
-              test_straighten_runs, test_material_basis, test_material_dc):
+              test_straighten_runs, test_material_basis, test_material_dc,
+              test_material_cover):
         t()
     print()
     if FAILED:
