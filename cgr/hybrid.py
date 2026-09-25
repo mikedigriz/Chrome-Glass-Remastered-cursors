@@ -459,6 +459,14 @@ _FOLD_DIP = 8.0          # luma a dip must have to be the fold and not flat glas
 _FOLD_REACH = 2.5        # logical units over which the correction fades out
 _FOLD_MIN_DEPTH = 2.0    # concavity that counts as the tail junction
 _FOLD_MIN_SPAN = 8.0     # shortest chord worth straightening
+# Help draws Arrow's pointer (trace.borrow_outline) and its "?" covers the
+# notch, so the deepest departure from the hull is the hook's junction, 4.0
+# units from it. The author's fold runs from the point toward Arrow's notch:
+# read along Help's own chord its centre drifted -0.6 -> -3.2 units off the
+# line. His Help is Arrow pixel for pixel along Arrow's chord (0-1 levels) up
+# to where the hook crosses it, and the fold ends there.
+_FOLD_CHORD_OF = {"Help": "Arrow"}
+_FOLD_COVER_TOL = 32.0   # levels his frame departs from the donor's under the hook
 
 
 def _hull(pts):
@@ -484,7 +492,9 @@ def _fold_chord(name, idx):
     from the point to the notch between the tails, and both ends are in the
     traced outline already: the point is a convex corner, the notch is the
     outline's deepest departure from its own convex hull. Nothing is chosen by
-    hand."""
+    hand, except where the notch is drawn over (_FOLD_CHORD_OF)."""
+    if name in _FOLD_CHORD_OF:
+        return _covered_chord(name, _FOLD_CHORD_OF[name])
     best = None
     for poly in C.TRACED[name]["frames"][idx]["polys"]:
         pts = np.array([(p[0], p[1]) for p in poly], dtype=np.float64)
@@ -515,6 +525,28 @@ def _fold_chord(name, idx):
         if best is None or span > best[0]:
             best = (span, (float(tip[0]), float(tip[1])), (float(notch[0]), float(notch[1])))
     return None if best is None else (best[1], best[2])
+
+
+def _covered_chord(name, donor):
+    """The donor's chord, from its point up to the first of the author's own
+    pixels that departs from the donor's frame.
+
+    Without the stop the chord ran on under the hook to Arrow's notch, and
+    _fold_restep drew the fold 72 levels deep into the "?" past where it ends
+    (selftest `restep stops with the fold`)."""
+    ch = _fold_chord(donor, 0)
+    if ch is None:
+        return None
+    (x0, y0), (x1, y1) = ch
+    diff = np.abs(np.asarray(original(name, 0), np.float64)
+                  - np.asarray(original(donor, 0), np.float64)).max(-1)
+    n = int(np.ceil(np.hypot(x1 - x0, y1 - y0) * 16))
+    for i in range(1, n + 1):
+        x, y = x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n
+        py, px = min(int(y), diff.shape[0] - 1), min(int(x), diff.shape[1] - 1)
+        if diff[py, px] >= _FOLD_COVER_TOL:
+            return (x0, y0), (round(x, 2), round(y, 2))
+    return ch
 
 
 @functools.lru_cache(maxsize=None)

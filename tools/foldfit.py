@@ -380,8 +380,8 @@ def dipole_eligible(name):
     it gets no third column, and reads exactly as it did before this existed.
 
     Per frame rather than pooled, because a cursor that cannot make up its mind
-    frame to frame is the one that does not belong: AppStarting votes 12 frames
-    for and 15 against, Help none for, while every other cursor is unanimous.
+    frame to frame is the one that does not belong: AppStarting votes 4 frames
+    for and 5 against, while every other cursor is unanimous.
     Measured with the two-column fit, so this cannot recurse.
     """
     votes = 0
