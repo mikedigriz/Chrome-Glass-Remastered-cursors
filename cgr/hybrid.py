@@ -972,6 +972,8 @@ _MATERIAL_SPLIT = 1.0       # logical units: coarser than this the colour is the
                          # split keeps what the donor is for (facets, rim, the
                          # crispness of glass) and leaves where the fold runs
                          # and how bright the sheet is to the frame itself.
+_MATERIAL_COVER = (0.5, 1.0)  # share of the donor's silhouette under a mapped
+                         # pixel over which its detail fades in
 
 
 def _material_layer(name, idx, donor, size):
@@ -1095,17 +1097,23 @@ def _material_detail(name, idx, donor, size):
     _iou, qx, qy = _moment_map(tm, dm)
     qx, qy = _chord_align(name, idx, donor, size, qx, qy)
     warped = _sample(_master_rgb(name, donor, size), qx, qy)
+    # Only where the donor has glass. The two silhouettes do not match (IoU
+    # 0.75-0.86 on 5 and 6), and a pixel mapped past the donor's edge read the
+    # master's own background: chains of beads and curls the net drew round the
+    # pen, which landed on 5 and 6 as dark scribbles by the edge (NEXT.md 107).
+    lo, hi = _MATERIAL_COVER
+    cover = np.clip((_sample(dm[..., None], qx, qy)[..., 0] - lo) / (hi - lo), 0.0, 1.0)
     # _mblur, not _gauss: outside the silhouette the master runs 80-100 levels
     # darker, and a plain blur drags that in, so the low-pass reads too dark
     # near the edge and the residual comes out positive there. On Handwriting[4]
     # that alone was +3.61 levels of level masquerading as material, and the
     # frame is all edge - its pencil is thinner than the split radius, so it has
     # no interior for the honest part of the residual to come from (NEXT.md 47).
-    detail = warped - _mblur(warped, tm[..., None],
+    detail = warped - _mblur(warped, (tm * cover)[..., None],
                              _MATERIAL_SPLIT * size / V.LOGICAL)
     detail = detail.mean(2)[..., None]                 # material, not colour
     detail = np.where(detail < 0, detail * _MATERIAL_DARK, detail)
-    keep = _material_keepout(name, idx, size)
+    keep = _material_keepout(name, idx, size) * cover
     detail = detail * (_MATERIAL_GAIN * keep[..., None])
     # The contract, enforced rather than hoped for: what crosses is material,
     # so over the region it is composited onto it must carry no level of its
