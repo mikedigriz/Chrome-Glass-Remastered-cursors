@@ -1439,11 +1439,15 @@ def test_restep_one_edge():
     the chord its outline gives is planted back for this. Read
     here without the stage's own fits: the steepest edge of each section, the
     fold being the run of stations whose edge keeps one sign and carries the
-    most gradient. One station past its end is left for the bilinear splat;
-    beyond that the correction has to be under half a level, and before it the
-    stage has to have done something. Before the cut it read 56 levels at 256
-    and 75 at 512."""
+    most gradient. The edge is looked for past the rim band as well as the
+    stage's protected rim: the band's inner edge is a line of its own, and by
+    the glint on Help's left rim it read steeper than the fold (NEXT.md 109).
+    One station past its end is left for the bilinear splat; beyond that the
+    correction has to be under half a level, and before it the stage has to
+    have done something. Before the cut it read 56 levels at 256 and 75 at
+    512."""
     eps, bad, said = 0.5, [], []
+    deep = max(H._RESTEP_PROTECT, H._BAND_DEPTH + H._BAND_OVER)
     ns = np.arange(-H._RESTEP_REACH, H._RESTEP_REACH + H._RESTEP_PITCH, H._RESTEP_PITCH)
     win = np.abs(ns) <= H._RESTEP_REACH - H._RESTEP_FIT[1] - 0.1
     box = np.ones(max(3, int(round(0.15 / H._RESTEP_PITCH)) | 1))
@@ -1466,7 +1470,7 @@ def test_restep_one_edge():
             edge, got = [], []
             for t in np.linspace(0.0, 1.0, H._RESTEP_STATIONS):
                 sx, sy = (tx + dx * t + ns * vx) * L - 0.5, (ty + dy * t + ns * vy) * L - 0.5
-                ok = win & (H._sample1(dist, sx, sy) >= H._RESTEP_PROTECT)
+                ok = win & (H._sample1(dist, sx, sy) >= deep)
                 g = np.gradient(np.convolve(H._sample1(lum, sx, sy), box / box.sum(), "same"), ns)
                 edge.append(float(g[ok][np.argmax(np.abs(g[ok]))]) if ok.sum() > 3 else np.nan)
                 got.append(float(np.nanmax(H._sample1(out, sx, sy))))
