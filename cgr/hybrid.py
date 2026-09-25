@@ -362,7 +362,7 @@ def _declutter_hue_outliers(name, idx, rgb):
     frame's own dominant hue is such an outlier - desaturate it back toward
     its own luminance, feathered so the correction has no hard edge.
     Genuinely neutral cursors have no dominant hue to compare against and are
-    left untouched."""
+    left untouched here; _neutral_glass caps their chroma instead."""
     got = _hue_outlier_weight(name, idx, rgb, 10.0, 30.0, 0.3, 0.6)
     if got is None:
         return rgb
@@ -371,6 +371,35 @@ def _declutter_hue_outliers(name, idx, rgb):
     # and blurring it would dilute exactly the worst case - a single hallucinated
     # pixel (e.g. AppStarting's tip) - below its own correction strength.
     return lum[..., None] + chroma * (1 - outlier)[..., None]
+
+
+_NEUTRAL_CAP = 8.0   # chroma the finished glass of a grey cursor may keep
+
+
+@functools.lru_cache(maxsize=None)
+def _neutral(name):
+    """Every one of the author's key frames is grey: no dominant hue at all."""
+    return all(_dominant_hue_dir(_orig(_key(name, i))[..., :3], _orig(_key(name, i))[..., 3]) is None
+               for i in range(len(BY_NAME[name]["frames"])))
+
+
+def _neutral_glass(rgb, name):
+    """Grey glass keeps no colour the author did not draw.
+
+    _declutter_hue_outliers has no hue to anchor to on a grey cursor, and the
+    network paints casts there too: a red-brown streak in the dark wedge by
+    the tail notch of Arrow and Hand and a cyan line beside it, 22-29 levels of
+    chroma where the author never passes 6 and the rest of our glass stays
+    under 9 (NEXT.md 111). Capped on the finished colour at every size, not on
+    the 512 master: the linear-light downsample lifts a dark pixel's small
+    chroma back past the cap at 256. Decided per cursor, not per frame: NO is
+    grey on its first frame only, and a per-frame cap would flicker."""
+    if not _neutral(name):
+        return rgb
+    lum = rgb @ _LUMA
+    chroma = rgb - lum[..., None]
+    sat = np.linalg.norm(chroma, axis=-1)
+    return lum[..., None] + chroma * np.minimum(1.0, _NEUTRAL_CAP / np.maximum(sat, 1e-6))[..., None]
 
 
 _ENGRAVED_DETAIL = {"Help"}   # see _declutter_engraved_detail
@@ -5500,6 +5529,7 @@ def frame_image(name, idx, size):
     if orig_sat >= 0.035:
         lift = _SAT_LIFT.get(name, _SAT_LIFT_DEFAULT)
         rgb = _temper(rgb, _sat_match(rgb, alpha, orig_sat * lift), name, "sat")
+    rgb = _neutral_glass(rgb, name)
     # after the saturation anchor on purpose: the sign's colour is measured off
     # the author, not derived from ours, and _sat_match would rescale it
     rgb, alpha = _no_ring(rgb, alpha, name, idx, size)
