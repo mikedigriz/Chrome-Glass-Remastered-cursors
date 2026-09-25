@@ -5089,7 +5089,12 @@ def _rgb_pre_rim(name, idx, size):
 # remap drew doubled lines. The depth target is each station's own edge
 # smoothed along the side, never one common depth: easing a common depth in
 # from the corners bent the band there (DEAD_ENDS.md, 2026-09-19).
-_BAND_CURSORS = _BLADE_CURSORS
+#
+# Hand draws the same pointer and its band swells the same way (NEXT.md 105).
+# Help and Handwriting do not get it: Help's fold runs into the "?" and the
+# stage bends it (fold_curv 0.30 -> 0.98), and Handwriting's outline morphs,
+# which doubles the line by the notch on the frames where the pointer shrinks.
+_BAND_CURSORS = _BLADE_CURSORS | {"Hand"}
 _BAND_DEPTH = 1.75       # LU: deepest a section is read and remapped
 _BAND_DSTEP = 1 / 32.0   # LU between samples along a section
 _BAND_ASTEP = 1 / 16.0   # LU of arc between stations
