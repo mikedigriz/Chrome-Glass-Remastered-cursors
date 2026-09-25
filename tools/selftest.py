@@ -760,6 +760,43 @@ def test_bevel_along():
           "%.2f -> %.2f levels of roughness without the stage, bound %.1f" % (clean, hurt, eps))
 
 
+def test_notch_floor():
+    """The tail notch carries no black arc.
+
+    The master draws the rim's inner line at the notch of the shared pointer as
+    a near-black arc: 22-30 levels on grey at 256 and 512 on Arrow, Hand and
+    Arrow_Down, where the author's darkest pixel is 114 and the same line along
+    the sides stays above 100. It lies at t 0.965-0.98 of the chord, short of
+    where _NOTCH_T0 used to let _notch_declutter start (NEXT.md 110). Read as
+    the darkest pixel on grey within 2.5 LU of the notch vertex, alpha at least
+    half, on Arrow and Hand at 256; the old gate has to fail the same bound."""
+    size, eps = 256, 50.0
+
+    def darkest():
+        out = []
+        for name in ("Arrow", "Hand"):
+            f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
+            _tip, (nx, ny) = H._fold_chord(name, 0)
+            L = size / 32.0
+            ys, xs = np.mgrid[0:size, 0:size] + 0.5
+            near = (np.hypot(xs / L - nx, ys / L - ny) < 2.5) & (f[..., 3] >= 128)
+            al = f[..., 3:4] / 255.0
+            out.append(float((f[..., :3] * al + 128.0 * (1.0 - al)).mean(-1)[near].min()))
+        return min(out)
+
+    clean = darkest()
+    keep = H._NOTCH_T0
+    H._NOTCH_T0 = 0.985
+    repoint()
+    try:
+        hurt = darkest()
+    finally:
+        H._NOTCH_T0 = keep
+        repoint()
+    check("notch floor", hurt < eps <= clean,
+          "%.1f -> %.1f levels at the notch with the old gate, bound %.1f" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -1707,7 +1744,8 @@ def main():
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
-              test_band_even, test_bevel_along, test_point_taps, test_fold_jitter,
+              test_band_even, test_bevel_along, test_notch_floor, test_point_taps,
+              test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
