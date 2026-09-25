@@ -41,7 +41,7 @@
   "tip_wobble": 0.193264
  },
  "Arrow": {
-  "delta_e": 3.28893,
+  "delta_e": 3.289006,
   "density": 0.149332,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -49,7 +49,7 @@
   "fold_curv": 0.05,
   "fold_jumps": 0,
   "fold_notch": 0.740059,
-  "fold_rms": 12.829955,
+  "fold_rms": 12.830062,
   "fold_s": 0.6,
   "fold_s_conv": 1.0,
   "fold_s_max_ratio": 1.0,
@@ -120,8 +120,8 @@
   "tip_profile": 0.995024
  },
  "Hand": {
-  "cadence": 1.027664,
-  "delta_e": 2.646667,
+  "cadence": 1.027652,
+  "delta_e": 2.646608,
   "density": 0.204725,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -132,7 +132,7 @@
   "fold_jitter_stations": 20,
   "fold_jumps": 4,
   "fold_notch": 0.640554,
-  "fold_rms": 15.723279,
+  "fold_rms": 15.723127,
   "fold_s": 0.6,
   "fold_s_conv": 1.5,
   "fold_s_max_ratio": 1.5,
@@ -184,7 +184,7 @@
   "legacy_fold_jag": 55.466667,
   "legacy_fold_luma_step": 4.066667,
   "legacy_fold_wander": 0.84646,
-  "morph_cadence_err": 0.335212,
+  "morph_cadence_err": 0.335113,
   "morph_iou": 0.630137,
   "morph_peak_abs": 6.717185,
   "rim_layers": 0.721612,
@@ -197,7 +197,7 @@
   "tip_profile": 1.7361
  },
  "Help": {
-  "delta_e": 4.121615,
+  "delta_e": 4.121546,
   "density": 0.104541,
   "edge_straight": 0.443086,
   "edge_straight_rms": 0.105511,
