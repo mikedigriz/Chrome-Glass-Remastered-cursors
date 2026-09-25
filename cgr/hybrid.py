@@ -1431,6 +1431,9 @@ def _up_alpha_native(key):
 
 
 _BLADE_CURSORS = {"Arrow", "Arrow_Down", "UpArrow", "AppStarting", "Wait"}
+# Help's pointer is Arrow's since trace.borrow_outline, and so is its blade.
+# Not in _BLADE_CURSORS: the band and point stages read that set too
+_EVEN_BLADE = _BLADE_CURSORS | {"Help"}
 _BLADE_END = 0.4         # logical units redrawn: past the deepest the master stops (0.35..0.42)
 _BLADE_FADE = 0.15       # then handed back to the master over this much
 _BLADE_RING = (0.35, 0.7)  # logical units: where the glass behind the band is read
@@ -1468,7 +1471,7 @@ def _even_blade(a, name, idx):
     Following the master's level per side to win that back (smoothed 2 and 4
     units) brought the staircase back and read worse, 3.28 and 3.68 on Arrow
     against 3.17."""
-    if name not in _BLADE_CURSORS:
+    if name not in _EVEN_BLADE:
         return a
     size = a.shape[0]
     d = _edge_distance_at(name, idx, size)
