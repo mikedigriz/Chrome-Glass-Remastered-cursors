@@ -2502,6 +2502,88 @@ def _bevel_shading(name, idx, size):
     return shade
 
 
+# The author's colour under the bevel, evened along the edge (NEXT.md 104).
+#
+# Stretched past ~64px, his 32px frame turns each step of a diagonal edge's
+# staircase into a blob a logical unit across, and the seven wedges read as
+# dented foil: dark patches along the sides, which on a grey background also
+# bite into the silhouette and make the straight sides look melted. The blobs
+# run along the edge. Across it the stretch is his drawing - the dark rim, the
+# bright stripe, the fold - so the colour is averaged along the level sets of
+# the edge distance (a line integral convolution over _BEVEL_ALONG of arc) and
+# left alone across them. SizeAll's hole is cut by the alpha, not traced, so
+# its circle joins the field. At the points the stretch is kept: there is no
+# arc to average over at a tip, and the rings the tip metrics read sit inside
+# _BEVEL_ALONG_KEEP. 32px stays his frame; the evened colour fades in over
+# _BEVEL_ALONG_SIZES. A least-squares fit of his colour was tried first and is
+# cleaner at 512, but it razors the fold and loses the points (DEAD_ENDS.md,
+# 2026-09-25).
+_BEVEL_ALONG = 1.0              # LU of arc, Gaussian sigma
+_BEVEL_ALONG_SIZES = (32, 96)   # px: his colour at the first, evened from the second
+_BEVEL_ALONG_KEEP = (1.0, 2.5)  # LU from a sharp corner: kept, then evened in full
+_BEVEL_ALONG_STEP = 0.5         # px per integration step
+
+
+def _along_edge(col, name, idx, size):
+    """col averaged along the level sets of the edge distance, inside the glass."""
+    L = size / V.LOGICAL
+    d = _edge_distance_at(name, idx, size)
+    m = _mask(name, idx, size) / 255.0
+    fit = _hole_circle(name, idx) if name in _ROUND_HOLES else None
+    if fit is not None:
+        cx, cy, r = fit
+        yy, xx = np.mgrid[0:size, 0:size]
+        dh = np.hypot(xx + 0.5 - cx * L, yy + 0.5 - cy * L) / L - r
+        d = np.minimum(d, np.maximum(dh, 0.0))
+        m = m * (dh > 0)
+    gy, gx = np.gradient(_smooth1(d, _BEVEL_SMOOTH, size))
+    n = np.hypot(gx, gy) + 1e-12
+    tx, ty = -gy / n, gx / n
+    ys, xs = np.nonzero(m > 0.5)
+    acc = col[ys, xs].copy()
+    wsum = np.ones(len(xs))
+    h = _BEVEL_ALONG_STEP
+    for sgn in (1.0, -1.0):
+        px, py = xs.astype(np.float64), ys.astype(np.float64)
+        dx, dy = tx[ys, xs] * sgn, ty[ys, xs] * sgn
+        alive = np.ones(len(xs), bool)
+        for k in range(1, int(np.ceil(2.5 * _BEVEL_ALONG * L / h)) + 1):
+            px, py = px + h * dx, py + h * dy
+            ntx, nty = _band_bilinear(tx, px, py), _band_bilinear(ty, px, py)
+            # the field's tangent has no sign; keep walking the way we came
+            flip = (ntx * dx + nty * dy) < 0
+            ntx, nty = np.where(flip, -ntx, ntx), np.where(flip, -nty, nty)
+            nn = np.hypot(ntx, nty) + 1e-12
+            dx, dy = ntx / nn, nty / nn
+            alive &= _band_bilinear(m, px, py) > 0.5
+            w = np.exp(-0.5 * (k * h / L / _BEVEL_ALONG) ** 2) * alive
+            acc += _band_bilinear(col, px, py) * w[:, None]
+            wsum += w
+            if not alive.any():
+                break
+    out = col.copy()
+    out[ys, xs] = acc / wsum[:, None]
+    return out
+
+
+def _bevel_colour(orig, name, idx, size):
+    """The author's colour for a _SYNTH_BEVEL cursor at `size`."""
+    col = _resize(orig, size)[0]
+    lo, hi = _BEVEL_ALONG_SIZES
+    t = (np.log2(size) - np.log2(lo)) / (np.log2(hi) - np.log2(lo))
+    w = float(np.clip(1.0 - t, 0.0, 1.0))
+    if w >= 1.0:
+        return col
+    u = (np.arange(size) + 0.5) * V.LOGICAL / size
+    X, Y = np.meshgrid(u, u)
+    r = np.full((size, size), np.inf)
+    for cx, cy in _sharp_corners(name, idx):
+        r = np.minimum(r, np.hypot(X - cx, Y - cy))
+    a, b = _BEVEL_ALONG_KEEP
+    keep = np.maximum(np.clip((b - r) / (b - a), 0.0, 1.0), w)[..., None]
+    return keep * col + (1.0 - keep) * _along_edge(col, name, idx, size)
+
+
 # The paper-plane cursors: a straight fold from the point to the tail notch,
 # on a silhouette the master's own upscale mis-lights right at the point (see
 # DEAD_ENDS.md, "The red tip"). Owner's call, 2026-08-08: relight the point
@@ -4971,8 +5053,8 @@ def _rgb_pre_rim(name, idx, size):
         rgb = _engrave(rgb, name, size)
         rgb = _bead(rgb, name, idx, size)
     if name in _SYNTH_BEVEL:
-        rgb = np.clip(_resize(orig, size)[0] + _bevel_shading(name, idx, size)[..., None],
-                      0, 255)
+        rgb = np.clip(_bevel_colour(orig, name, idx, size)
+                      + _bevel_shading(name, idx, size)[..., None], 0, 255)
     rgb = _temper(rgb, _match_author_level(rgb, name, idx, size), name, "level")
     rgb = _tip_realign(rgb, name, idx, size)
     rgb = _temper(rgb, _tip_relight(rgb, name, idx, size), name, "relight")
