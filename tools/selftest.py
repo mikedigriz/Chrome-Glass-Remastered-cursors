@@ -860,6 +860,43 @@ def test_apex_floor():
           "%.1f -> %.1f levels at Handwriting's point without its relight, bound %.1f" % (clean, hurt, eps))
 
 
+def test_morph_mottle():
+    """Handwriting's morph frames carry no mottle along the fold.
+
+    Inside the material keep-out the frame is the author's 32px art alone, and
+    his morph frames are mottled: at 256 it came out as blobs 2-4 LU across
+    between the crisp frames 2 and 4 (NEXT.md 114). Read as the mean luma
+    difference between pixels 2 LU apart along the chord, inside the band,
+    alpha at least half at both ends, on frame 3 at 256; without the averaging
+    along the chord it has to fail the same bound."""
+    size, eps = 256, 12.0
+
+    def mottle():
+        f = np.asarray(H.frame_image("Handwriting", 3, size), dtype=np.float64)
+        (x0, y0), (x1, y1) = H._fold_chord("Handwriting", 3)
+        n = np.hypot(x1 - x0, y1 - y0)
+        L = size / 32.0
+        o = 2.0 * L / n
+        ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+        la = np.dstack([f[..., :3].mean(-1), f[..., 3]])
+        sh = H._sample(la, xs + (x1 - x0) * o, ys + (y1 - y0) * o)
+        band = (1.0 - H._material_keepout("Handwriting", 3, size)) > 0.5
+        m = band & (la[..., 1] >= 128) & (sh[..., 1] >= 128)
+        return float(np.abs(la[..., 0] - sh[..., 0])[m].mean())
+
+    clean = mottle()
+    keep = H._MATERIAL_ALONG
+    H._MATERIAL_ALONG = 0.0
+    repoint()
+    try:
+        hurt = mottle()
+    finally:
+        H._MATERIAL_ALONG = keep
+        repoint()
+    check("morph mottle", clean <= eps < hurt,
+          "%.1f -> %.1f levels along the fold without the averaging, bound %.1f" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -1808,7 +1845,8 @@ def main():
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
-              test_apex_floor, test_point_taps, test_fold_jitter,
+              test_apex_floor, test_morph_mottle,
+              test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
