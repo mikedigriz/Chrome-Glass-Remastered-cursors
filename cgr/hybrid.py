@@ -1017,6 +1017,19 @@ _MATERIAL_FOLD_KEEP = 2.0   # logical units either side of this frame's own fold
                          # 3.33; at 2.0, both back on the baseline. Wider buys
                          # nothing.
 _MATERIAL_FOLD_FADE = 0.8   # units the keep-out fades back in over
+_MATERIAL_ALONG = 4.0       # logical units of travel along the chord the author's
+                         # own colour is averaged over inside the keep-out band.
+                         # There the frame is his 32px art alone, and on the
+                         # morph frames that art is mottled: its high-pass
+                         # std is 14-16 levels against 7-9 on frames 0-2, and
+                         # at 256 the mottle is blobs 2-4 units across. Along
+                         # the chord, 2 units apart, the luma differs by 16.2
+                         # levels on Handwriting[3] against 8.0-8.6 on frames 1
+                         # and 2; averaged over 4 units it is 9.1. The fold runs
+                         # across this direction, so its section is kept
+                         # (NEXT.md 114). 8 units flattens the step itself:
+                         # fold_step 0.53 -> 0.38.
+_MATERIAL_ALONG_TAPS = 17
 _MATERIAL_DARK = 1.0        # how much of the donor's darkening the frame takes.
                          # Held at 1: keeping the band above and letting only
                          # the bright half through it puts fold_wander at 0.93
@@ -1072,8 +1085,32 @@ def _material_layer(name, idx, donor, size):
     low-pass averaged in the background outside the outline, and nothing
     checked the residual afterwards. `tools/selftest.py` now holds the contract
     to its face on all four frames."""
-    own = _resize(_orig(_key(name, idx)), size)[0]
+    own = _along_keepout(_resize(_orig(_key(name, idx)), size)[0], name, idx, size)
     return np.clip(own + _material_detail(name, idx, donor, size), 0, 255)
+
+
+def _along_keepout(own, name, idx, size):
+    """The author's colour averaged along the fold chord where the keep-out
+    leaves it alone (_MATERIAL_ALONG). Weighted by the frame's own mask, so the
+    background past the outline does not average in; a pixel whose travel runs
+    mostly off the glass is left as it is."""
+    ch = _fold_chord(name, idx)
+    if ch is None or _MATERIAL_ALONG <= 0:
+        return own
+    (x0, y0), (x1, y1) = ch
+    n = float(np.hypot(x1 - x0, y1 - y0))
+    if n < 1e-6:
+        return own
+    dx, dy = (x1 - x0) / n, (y1 - y0) / n
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    m = (_mask(name, idx, size) / 255.0)[..., None]
+    acc, wt = np.zeros_like(own), np.zeros_like(m)
+    for o in np.linspace(-0.5, 0.5, _MATERIAL_ALONG_TAPS) * _MATERIAL_ALONG * s:
+        acc += _sample(own * m, xs + dx * o, ys + dy * o)
+        wt += _sample(m, xs + dx * o, ys + dy * o)
+    band = (1.0 - _material_keepout(name, idx, size))[..., None]         * (wt / _MATERIAL_ALONG_TAPS > 0.5)
+    return own * (1.0 - band) + acc / np.maximum(wt, 1e-6) * band
 
 
 _CHORD_ALIGN_REACH = 6.0    # logical units either side of the chord the donor
