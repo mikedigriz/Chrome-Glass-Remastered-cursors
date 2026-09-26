@@ -2690,7 +2690,8 @@ def _bevel_colour(orig, name, idx, size):
 # fighting paint that was already right, and 40 per cent of the point's
 # contrast is what that costs. Left out. The knob to try next is
 # `_TEMPER_PER_CURSOR` on "relight" rather than the whole stage at full
-# strength - see NEXT.md 23.9.
+# strength - see NEXT.md 23.9. Handwriting got exactly that, and only the
+# relight (NEXT.md 113): its master does blacken the point after all.
 _WEDGE_TIPS = {"Arrow", "Arrow_Down", "Hand", "UpArrow", "Wait", "AppStarting"}
 # Who gets `_fold_restep`. Deliberately not `_WEDGE_TIPS` itself: that set also
 # gates `_notch_declutter`, `_temper` and `_match_author_level`, and widening it
@@ -2848,6 +2849,14 @@ _TROUGH_PARAMS = {
     "UpArrow":     dict(diff=18.0, edge=0.12, taper=5.0),
     "Wait":        dict(diff=18.0, edge=0.12, taper=5.0),
     "AppStarting": dict(diff=18.0, edge=0.12, taper=5.0),
+    # Handwriting's opening frames are Hand's pointer, and its master draws the
+    # same black rim at the point that Hand's does: two near-black lines along
+    # both sides, 47-60 levels on grey at 256 where the author's darkest is 100
+    # and Hand's relit point 85 (NEXT.md 113). Hand's step, at Hand's strength
+    # (_TEMPER_PER_CURSOR), and only on the frames drawn from the master: the
+    # morph frames (_MATERIAL_BASIS) carry no black rim, and there the step
+    # widened the fold 6.25 times against the author.
+    "Handwriting": dict(diff=85.0, edge=0.12, taper=5.0),
 }
 
 
@@ -2944,7 +2953,7 @@ def _tip_relight(rgb, name, idx, size):
     more vertices, and lighting the true distance-to-outline field on them
     facets visibly (see DEAD_ENDS.md for the render this produced): the chord
     is two points and carries none of that."""
-    if name not in _TROUGH_PARAMS:
+    if name not in _TROUGH_PARAMS or (name, idx) in _MATERIAL_BASIS:
         return rgb
     p = _TROUGH_PARAMS[name]
     ch = _fold_chord(name, idx)
@@ -4216,8 +4225,12 @@ if os.environ.get("CGR_TEMPER"):
         _TEMPER_K[_s.strip()] = float(_v)
 
 
-_TEMPER_PER_CURSOR = {}
-# Empty, and the entry that was here is worth keeping as a warning. `relight`
+_TEMPER_PER_CURSOR = {("Handwriting", "relight"): _LEGACY_TEMPER}
+# Handwriting is not a wedge tip for the other stages, so its relight strength
+# is named here: Hand's, for Hand's black-rimmed point (_TROUGH_PARAMS). At full
+# strength the point dissolves into a flat wash, the way the entry below did.
+#
+# The entry that was here before is worth keeping as a warning. `relight`
 # was put to full strength on the numbers - it read closer to the author's apex
 # on three wedges of four and took two other failures off the gate - and
 # Arrow_Down, the one cursor the numbers said lost by it, got a half-strength
@@ -4575,11 +4588,14 @@ def _temper(before, after, name, stage):
     """Blend a correction's output back toward its input by `_TEMPER_K[stage]`,
     but only for the six wedge tips the isolation above was measured against -
     every other cursor (NO, Help, SizeAll, ...) keeps the full correction, it
-    was never part of the `58a28b72` comparison and regressed when included.
+    was never part of the `58a28b72` comparison and regressed when included -
+    unless _TEMPER_PER_CURSOR names it.
     """
-    if name not in _WEDGE_TIPS:
-        return after
-    k = _TEMPER_PER_CURSOR.get((name, stage), _TEMPER_K[stage])
+    k = _TEMPER_PER_CURSOR.get((name, stage))
+    if k is None:
+        if name not in _WEDGE_TIPS:
+            return after
+        k = _TEMPER_K[stage]
     return before * (1.0 - k) + after * k
 
 
