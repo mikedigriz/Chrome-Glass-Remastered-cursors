@@ -826,6 +826,40 @@ def test_neutral_glass():
           "%.1f -> %.1f levels of chroma without the cap, bound %.1f" % (clean, hurt, eps))
 
 
+def test_apex_floor():
+    """Handwriting's point carries no black rim.
+
+    Its master draws the point the way Hand's does, two near-black lines along
+    both sides: 47-60 levels on grey at 256, where the author's darkest is 100
+    and Hand's relit point 85 (NEXT.md 113). Read as the darkest pixel on grey
+    within 3 LU of the chord's point, alpha at least half, on frames 0 and 1 at
+    256; without Handwriting's relight it has to fail the same bound."""
+    size, eps = 256, 75.0
+
+    def darkest():
+        out = []
+        for idx in (0, 1):
+            f = np.asarray(H.frame_image("Handwriting", idx, size), dtype=np.float64)
+            (tx, ty), _notch = H._fold_chord("Handwriting", idx)
+            L = size / 32.0
+            ys, xs = np.mgrid[0:size, 0:size] + 0.5
+            near = (np.hypot(xs / L - tx, ys / L - ty) < 3.0) & (f[..., 3] >= 128)
+            al = f[..., 3:4] / 255.0
+            out.append(float((f[..., :3] * al + 128.0 * (1.0 - al)).mean(-1)[near].min()))
+        return min(out)
+
+    clean = darkest()
+    keep = H._TROUGH_PARAMS.pop("Handwriting")
+    repoint()
+    try:
+        hurt = darkest()
+    finally:
+        H._TROUGH_PARAMS["Handwriting"] = keep
+        repoint()
+    check("apex floor", hurt < eps <= clean,
+          "%.1f -> %.1f levels at Handwriting's point without its relight, bound %.1f" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -1774,7 +1808,7 @@ def main():
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
-              test_point_taps, test_fold_jitter,
+              test_apex_floor, test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_facet_light_contract,
