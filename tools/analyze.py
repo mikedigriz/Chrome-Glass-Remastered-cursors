@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import foldfit as FF  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
 from cgr import lightanim as LA  # noqa: E402
+from cgr import build as B  # noqa: E402
 
 LADDER = [32, 48, 64, 96, 128, 256, 384, 512]
 LADDER_FULL = LADDER
@@ -488,9 +489,19 @@ def interp_uniformity(name):
     vis, gho = d[:, 0], d[:, 1]
     o = _deltas([frame(name, i, JITTER_SIZE) for i in range(nframes(name))],
                 name in H.INTERP)[:, 0]
+    # The same pace at the sizes the .ani ships. The loop is paced per size, and
+    # read at 256 alone the gate passed a cycle whose one step at 48 carried 2.7
+    # times the mean change (NEXT.md 115).
+    win = {}
+    if name in H.INTERP:
+        for s in B.ANI_SIZES_WIN:
+            w = _deltas(H.anim_frames(name, s, True)[0], True)[:, 0]
+            win[s] = float(w.max() / max(w.mean(), 1e-9))
     return {
         "n": len(frames),
         "visible_peak_over_mean": float(vis.max() / max(vis.mean(), 1e-9)),
+        "visible_peak_over_mean_win": max(win.values()) if win else None,
+        "visible_peak_over_mean_by_size": win,
         "ghost_rgb": float(gho.max()),
         "visible_mean": float(vis.mean()),
         # Total motion over the cycle, not per step: the remaster runs 27 frames
@@ -2644,6 +2655,9 @@ def gate(rep, base=None):
                 pm = it["visible_peak_over_mean"]
                 if pm > T["liveliness_max"]:
                     fail(name, "cadence", pm, ">", T["liveliness_max"])
+                pw = it.get("visible_peak_over_mean_win")
+                if pw is not None and pw > T["liveliness_max"]:
+                    fail(name, "cadence_win", pw, ">", T["liveliness_max"])
                 want = it["cycle_motion_keys"] * T["liveliness_min"]
                 if it["cycle_motion"] < want:
                     fail(name, "sheen_damped", it["cycle_motion"], "<", round(want, 2))
@@ -2753,6 +2767,7 @@ def _flat(e):
         "delta_e": de["mean"] if de else None,
         "ghost_rgb": it["ghost_rgb"] if it else None,
         "cadence": it["visible_peak_over_mean"] if it else None,
+        "cadence_win": it.get("visible_peak_over_mean_win") if it else None,
         # None the moment the reading is not trusted: a number kept next to its
         # own "not enough data" note is a number something will compare against
         "fold_jitter": fj.get("p95") if fj and fj.get("why") is None else None,
@@ -2812,6 +2827,7 @@ def show(rep, base=None):
             ("dE", "delta_e", 6, ".2f"),
             ("sheen", "tip_sheen", 7, ".2f"), ("wob", "tip_wobble", 6, ".2f"),
             ("ghost", "ghost_rgb", 7, ".2f"), ("cad", "cadence", 6, ".2f"),
+            ("cadW", "cadence_win", 6, ".2f"),
             ("jit95", "fold_jitter", 7, ".2f"), ("iou", "morph_iou", 6, ".3f"),
             ("tsm", "temporal_fold", 6, ".2f"), ("rim", "rim_layers", 6, ".2f"),
             ("straight", "edge_straight", 9, ".3f"), ("mirr", "mirror_asym", 6, ".1f")]
