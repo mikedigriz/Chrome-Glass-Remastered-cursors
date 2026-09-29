@@ -897,6 +897,52 @@ def test_morph_mottle():
           "%.1f -> %.1f levels along the fold without the averaging, bound %.1f" % (clean, hurt, eps))
 
 
+def test_rim_valley():
+    """No valley behind the blade on Arrow's right wing.
+
+    The master draws the author's dark rim as a hairline under the blade, and
+    on the lower edge from the wing tip to the notch it read as a light line
+    with a grey shadow behind it (NEXT.md 116). Read with analyze's rim
+    sections at 256 on the stations of that edge between a fifth and four
+    fifths of the way to the notch: the deepest interior dip 0.1..1.6 LU in,
+    by prominence, averaged. Without the fill it has to fail the same bound."""
+    size, eps = 256, 2.0
+    wing, notch = np.array([29.0, 13.98]), np.array([19.5, 19.0])
+    u = notch - wing
+    ln = float(np.hypot(*u))
+    u = u / ln
+    us = np.arange(0.0, A._RIM_DEPTH + 1e-9, A._RIM_STEP)
+    lo, hi = np.searchsorted(us, 0.1), np.searchsorted(us, 1.6)
+
+    def valley():
+        st = A._outline_stations("Arrow", 0)
+        f = np.asarray(H.frame_image("Arrow", 0, size), dtype=np.float64)
+        prof = A._rim_profiles(f, H._mask("Arrow", 0, size), st, size)
+        got = []
+        for (p, _n), pr in zip(st, prof):
+            q = np.asarray(p) - wing
+            s = float(q @ u) / ln
+            if np.isnan(pr[0]) or not 0.2 <= s <= 0.8                     or abs(float(q[0] * u[1] - q[1] * u[0])) >= 1.5:
+                continue
+            got.append(max([A._prominence(pr, k) for k in range(lo, hi)
+                            if pr[k] <= pr[k - 1] and pr[k] < pr[k + 1]],
+                           default=0.0))
+        return float(np.mean(got))
+
+    clean = valley()
+    keep = H._VALLEY_CURSORS
+    H._VALLEY_CURSORS = set()
+    repoint()
+    try:
+        hurt = valley()
+    finally:
+        H._VALLEY_CURSORS = keep
+        repoint()
+    check("rim valley", clean <= eps < hurt,
+          "%.1f -> %.1f levels of dip behind the blade without the fill, bound %.1f"
+          % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -1875,7 +1921,7 @@ def main():
               test_fold_discontinuity, test_fold_notch,
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
-              test_apex_floor, test_morph_mottle,
+              test_apex_floor, test_morph_mottle, test_rim_valley,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
