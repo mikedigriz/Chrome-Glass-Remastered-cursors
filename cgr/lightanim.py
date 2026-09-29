@@ -253,6 +253,12 @@ _PACE_FINE = 216     # phase samples the pace curve is measured on, 8 per output
                      # anim_frames does to the old path, one level lower down.
 _PACE_DECIM = 4      # the pace is one scalar per phase; measure it on a
                      # decimated field, not on 216 full-size ones
+_PACE_GRID = 64      # ...but on no grid coarser than this many pixels across.
+                     # Decimated by four, the .ani sizes are paced on 8..24
+                     # samples, the glass that sets the pace is a handful of
+                     # them, and the curve follows where they happen to land:
+                     # one step of AppStarting at 48 carried 2.7 times the
+                     # mean change, the sweep jumped (NEXT.md 115)
 _GHOST_ALPHA = 10.0  # alpha under which the light must not touch the colour.
                      # Nothing there is visible, and RGB that moves under an
                      # alpha of zero is what ghost_rgb exists to catch
@@ -332,7 +338,7 @@ def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
     all (peak/mean 1.39 -> 1.57). Rendered at a decimated size - the pace is one
     scalar per phase, and 216 frames of it are needed. `point` maps a grid size
     to _point_weight on it, so the pace is measured on the frames that ship."""
-    d = _PACE_DECIM
+    d = max(1, min(_PACE_DECIM, lin.shape[0] // _PACE_GRID))
     lin_s, vis_s, seen_s = lin[::d, ::d], vis[::d, ::d], seen[::d, ::d]
     raw_s = raw[:, ::d, ::d] if raw.shape[1] == lin.shape[0] else raw
     a_s = anchor[:, ::d, ::d] if anchor.shape[1] == lin.shape[0] else anchor
