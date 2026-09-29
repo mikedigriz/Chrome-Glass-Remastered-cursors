@@ -1446,6 +1446,36 @@ def test_canonical_phase():
           "; ".join(bad) or "all three loops agree with their own phase table")
 
 
+def test_small_pace():
+    """The loop is paced evenly at the sizes the .ani ships, not only at 256.
+
+    The pace was measured on the field decimated by four whatever the size, so
+    AppStarting at 48 was paced on a 12-pixel grid and one step of its cycle
+    carried 2.7 times the mean change - the sweep jumped (NEXT.md 115). Read
+    the way the gate reads cadence, peak over mean of the solid zone's step,
+    at 48; on the old grid it has to fail the same bound."""
+    name, size = "AppStarting", 48
+    bound = A.THRESHOLDS["liveliness_max"]
+
+    def cadence():
+        LA._phase_cache.clear()
+        frames, _ = LA.anim_frames_lighting(name, size)
+        d = A._deltas(frames, True)[:, 0]
+        return float(d.max() / d.mean())
+
+    clean = cadence()
+    keep = LA._PACE_GRID
+    LA._PACE_GRID = size // LA._PACE_DECIM
+    try:
+        hurt = cadence()
+    finally:
+        LA._PACE_GRID = keep
+        LA._phase_cache.clear()
+    check("pace at the .ani sizes", clean <= bound < hurt,
+          "%s at %d: %.3f -> %.3f on the old grid, bound %.2f"
+          % (name, size, clean, hurt, bound))
+
+
 def test_facet_light_contract():
     """Facet light may change RGB only inside its guarded fold support.
 
@@ -1849,7 +1879,8 @@ def main():
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
-              test_canonical_phase, test_facet_light_contract,
+              test_canonical_phase, test_small_pace,
+              test_facet_light_contract,
               test_restep_support, test_restep_one_edge,
               test_morph_steps_visible, test_no_ring_support,
               test_hole_glass, test_product_manifest,
