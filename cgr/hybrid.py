@@ -5525,6 +5525,86 @@ def _even_band(im, name, idx, size):
     return _hide_ghost(_compose(out[..., :3], out[..., 3]), name, size)
 
 
+
+# The valley behind the blade (NEXT.md 116).
+#
+# The network draws the author's one-pixel dark rim as a hairline 0.3-0.8 LU in
+# from the traced edge, and leaves the translucent blade outside it. On any
+# ground that reads as a light line with a grey shadow behind it: on the right
+# wing of Arrow, Arrow_Down, UpArrow and Hand the lower edge doubles from the
+# wing tip to the notch and a dark smudge runs inside the upper edge by the
+# tip (owner report, 2026-09-30). No stage draws it - it is in the raw master -
+# and the stages that clear it (_rim_transfer, _edge_shadow_declutter,
+# _notch_declutter, _edge_comb) leave 13-29 levels of it: they lift towards
+# local levels the valley drags down. His own profile only ever rises from the
+# edge inward (0-4 levels of dip on every station).
+#
+# So each pixel of the rim band is lifted to the lower of the brightest glass
+# outside it and the brightest inside it, along its own edge normal - the
+# valley is filled, the blade and the glass keep their levels. Only lifted,
+# never darkened. Held off the apex, where the band's inner line is the inner
+# tip's separator (filling a dip there took inner_tip 0.83 -> 0.25, DEAD_ENDS
+# R_FILL), off the fold (_fold_keepout), and off the points, where
+# _point_converge owns the band: at 1.5 LU Arrow_Down's tip_nest went
+# 8.4 -> 10.2. Wait and AppStarting are left out: their dark rim is his own
+# drawing at the edge, and filling it moved their fold readings (Wait
+# fold_s_conv 1.0 -> 1.5, fold_jumps 1 -> 2). Below 128 the valley is under a
+# pixel and the stage changes nothing that could be seen.
+_VALLEY_CURSORS = {"Arrow", "Arrow_Down", "UpArrow", "Hand"}
+_VALLEY_MIN_SIZE = 128
+_VALLEY_BAND = (0.15, 1.6)   # LU from the traced edge the fill may touch
+_VALLEY_OUT = 1.0            # LU outward the blade's level is looked for
+_VALLEY_IN = 1.2             # LU inward the glass's level is looked for
+_VALLEY_STEP = 0.1           # LU between samples along the normal
+_VALLEY_ALPHA = 0.25         # of peak alpha: glass that can serve as a level
+_VALLEY_CAP = 3.0            # levels of dip left alone, then lifted in full
+_VALLEY_RAMP = 12.0          # over this many more
+_VALLEY_APEX = (13.0, 2.0)   # LU from the apex held off, and the ramp back in
+_VALLEY_POINT = (2.5, 1.0)   # LU from every point held off, and the ramp
+
+
+def _rim_valley(im, name, idx, size):
+    """Fill the valley the master's hairline leaves between blade and glass."""
+    if name not in _VALLEY_CURSORS or size < _VALLEY_MIN_SIZE:
+        return im
+    a = np.asarray(im, dtype=np.float64)
+    L = size / V.LOGICAL
+    d = _edge_distance_at(name, idx, size)
+    gy, gx = np.gradient(d)
+    g = np.hypot(gx, gy)
+    nx, ny = gx / np.maximum(g, 1e-9), gy / np.maximum(g, 1e-9)   # inward
+    lo, hi = _VALLEY_BAND
+    w = np.clip(np.minimum(d - lo, hi - d) / 0.1, 0.0, 1.0) * (g > 1e-6)
+    w = w * _fold_keepout(name, idx, size)
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    ch = _fold_chord(name, idx)
+    if ch is not None:
+        r0, ramp = _VALLEY_APEX
+        w = w * np.clip((np.hypot(xs - ch[0][0], ys - ch[0][1]) - r0) / ramp, 0.0, 1.0)
+    r0, ramp = _VALLEY_POINT
+    for cx, cy in _sharp_corners(name, _geom(name, idx)):
+        w = w * np.clip((np.hypot(xs - cx, ys - cy) - r0) / ramp, 0.0, 1.0)
+    if w.max() < 1e-6:
+        return im
+    lum = a[..., :3].mean(-1)
+    al = a[..., 3]
+    level = np.where(al >= _VALLEY_ALPHA * al.max(), lum, -1.0)
+    py, px = np.mgrid[0:size, 0:size].astype(np.float64)
+    out = np.full((size, size), -1.0)
+    for t in np.arange(_VALLEY_STEP, _VALLEY_OUT + 1e-9, _VALLEY_STEP):
+        o = t * L
+        got = _sample1(level, px - nx * o, py - ny * o)
+        out = np.where(d >= t, np.maximum(out, got), out)
+    inn = np.full((size, size), -1.0)
+    for t in np.arange(_VALLEY_STEP, _VALLEY_IN + 1e-9, _VALLEY_STEP):
+        o = t * L
+        inn = np.maximum(inn, _sample1(level, px + nx * o, py + ny * o))
+    target = np.minimum(out, inn)
+    gap = target - lum
+    lift = np.clip((gap - _VALLEY_CAP) / _VALLEY_RAMP, 0.0, 1.0) * w * (target > 0)
+    lift = _smooth1(lift, 0.1, size)
+    return _compose(a[..., :3] + (gap * lift)[..., None], al)
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -5592,7 +5672,7 @@ def frame_image(name, idx, size):
     im = _hide_ghost(_compose(rgb, alpha), name, size)
     if name in _BAND_CURSORS and (name, idx) not in _MATERIAL_BASIS:
         im = _even_band(im, name, idx, size)
-    return im
+    return _rim_valley(im, name, idx, size)
 
 
 def _premult(im):
