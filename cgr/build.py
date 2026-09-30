@@ -712,6 +712,16 @@ def _gif_frame(rgba, bg=(248, 248, 250)):
 # hundred pixels; q=90 is indistinguishable and roughly a tenth the bytes.
 _WEBP = dict(lossless=False, quality=90, method=6)
 
+# GIF counts delay in centiseconds, and browsers (and ffmpeg) play 0 or 1 of
+# them as 10: the 17 ms a frame the cursors run at went out as 1 cs, so the
+# per-cursor gifs looped in 2.7 s instead of 0.45. 20 ms is the nearest delay
+# they keep.
+_GIF_MIN_MS = 20
+
+
+def _gif_ms(ms):
+    return max(int(ms), _GIF_MIN_MS)
+
 
 def _encode_anim_job(job):
     """One webp + one gif, from already-rendered frames. Runs in a worker
@@ -753,7 +763,7 @@ def build_animations(root=None):
         rgba = [_pad(f, disp + 32) for f in frames]
         jobs.append((os.path.join(assets, name + ".webp"),
                     os.path.join(assets, name + ".gif"),
-                    [np.asarray(f) for f in rgba], durs, durs))
+                    [np.asarray(f) for f in rgba], durs, [_gif_ms(d) for d in durs]))
     # Combined strip at 60 fps, and the heaviest asset in the repo: 27 frames of
     # the full width, re-fetched on every README view. 128 px cells made a 712 px
     # sheet that every README then stretched to its ~880 px content column, so it
@@ -778,13 +788,15 @@ def build_animations(root=None):
         strip.append(canvas)
     jobs.append((os.path.join(assets, "animations.webp"),
                 os.path.join(assets, "animations.gif"),
-                [np.asarray(f) for f in strip], 17, 20))
-    # The strip's webp runs at 17ms/frame and its gif at 20 - that mismatch
-    # was already in the sequential version (never made the two agree) and is
-    # kept exactly, not "fixed" here; _encode_anim_job takes the two durations
-    # separately so it cannot silently unify them.
+                [np.asarray(f) for f in strip], 17, _gif_ms(17)))
     with cf.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 1, len(jobs))) as ex:
         list(ex.map(_encode_anim_job, jobs))
+    for job in jobs:
+        with Image.open(job[1]) as g:
+            for i in range(g.n_frames):
+                g.seek(i)
+                assert g.info["duration"] >= _GIF_MIN_MS, \
+                    f"{_rel(job[1])} frame {i}: {g.info['duration']} ms, browsers play it as 100"
     return assets
 
 
