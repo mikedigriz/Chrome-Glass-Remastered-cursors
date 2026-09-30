@@ -1105,6 +1105,49 @@ def test_author_rim():
           "bound %.1f" % (clean, hurt, eps))
 
 
+def test_author_rim_light():
+    """The rim _author_rim darkens is a tone the light cycle carries.
+
+    lightanim takes the leaving light as a share of the glass, and read off the
+    darkened rim the same loss is a larger share of it: by AppStarting's wing
+    tip at 64 the light sat on _DIM_FLOOR for ten frames running and jumped
+    (NEXT.md 119). Read within 3 LU of the points, on pixels that swing by more
+    than 20 levels over the cycle, as the frames each spends within 3% of that
+    swing of its own darkest, past three: summed over Wait and AppStarting at
+    64. With the share read off the darkened frame it has to fail."""
+    eps = 90
+
+    def at_floor(name, size=64):
+        LA._phase_cache.clear()
+        fr = np.stack([np.asarray(f, dtype=np.float64)
+                       for f in LA.anim_frames_lighting(name, size)[0]])
+        c = fr[..., :3].mean(-1) * fr[..., 3] / 255 + 128 * (1 - fr[..., 3] / 255)
+        rng = c.max(0) - c.min(0)
+        L = size / 32.0
+        ys, xs = np.mgrid[0:size, 0:size] + 0.5
+        near = np.zeros((size, size), bool)
+        idx = LA.canonical_index(name)
+        for cx, cy in H._sharp_corners(name, H._geom(name, idx)):
+            near |= np.hypot(xs / L - cx, ys / L - cy) < 3.0
+        n = ((c - c.min(0)) < 0.03 * rng).sum(0)[near & (rng > 20)]
+        return int(np.maximum(n - 3, 0).sum())
+
+    def read():
+        return sum(at_floor(name) for name in ("Wait", "AppStarting"))
+
+    clean = read()
+    keep = H.frame_light_base
+    H.frame_light_base = H.frame_image
+    try:
+        hurt = read()
+    finally:
+        H.frame_light_base = keep
+        LA._phase_cache.clear()
+    check("author rim under the light", clean <= eps < hurt,
+          "%d -> %d frames on the floor by the points with the share read off "
+          "the darkened rim, bound %d" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -2085,6 +2128,7 @@ def main():
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
               test_apex_floor, test_morph_mottle, test_rim_valley,
               test_valley_ridge, test_valley_along, test_author_rim,
+              test_author_rim_light,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
