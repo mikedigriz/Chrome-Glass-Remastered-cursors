@@ -1055,6 +1055,51 @@ def test_valley_along():
           "tap along it, bound %.2f" % (clean, hurt, eps))
 
 
+def test_author_rim():
+    """Arrow's upper edge by the apex as dark as his at the small rungs.
+
+    His 32px art draws a logical unit of near-black round the silhouette, and
+    the stages after _match_author_level lifted it again on Arrow's upper edge
+    from the apex: 16-26 levels paler than his at 32, up to 40 at 48 and 64
+    (NEXT.md 119). Read per outline station as the band's mean over its first
+    logical unit composited on grey, against his frame read the same way, on
+    the stations of that edge from a tenth to two fifths of the way to the
+    wing tip: how much paler than his, on average, the worse of 32 and 48.
+    Without the stage it has to fail."""
+    name, eps = "Arrow", 10.0
+    apex, wing = np.array([3.08, 2.95]), np.array([29.0, 13.98])
+    pts, nrm = H._rim_inward(name, 0)
+    u = wing - apex
+    ln = float(np.hypot(*u))
+    u = u / ln
+    q = pts - apex
+    s = (q @ u) / ln
+    sel = (s >= 0.1) & (s <= 0.4) & (np.abs(q[:, 0] * u[1] - q[:, 1] * u[0]) < 1.5)
+    his = np.asarray(H.original(name, 0), dtype=np.float64)
+    want = H._rim_level(his[..., :3], his[..., 3] / 255.0, pts, nrm, 32)[sel]
+
+    def paler():
+        worst = -np.inf
+        for size in (32, 48):
+            f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
+            got = H._rim_level(f[..., :3], f[..., 3] / 255.0, pts, nrm, size)[sel]
+            worst = max(worst, float((got - want).mean()))
+        return worst
+
+    clean = paler()
+    keep = H._AUTHOR_RIM_CURSORS
+    H._AUTHOR_RIM_CURSORS = set()
+    repoint()
+    try:
+        hurt = paler()
+    finally:
+        H._AUTHOR_RIM_CURSORS = keep
+        repoint()
+    check("author rim", clean <= eps < hurt,
+          "%.1f -> %.1f levels paler than his by the apex without the stage, "
+          "bound %.1f" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -2034,7 +2079,7 @@ def main():
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
               test_apex_floor, test_morph_mottle, test_rim_valley,
-              test_valley_ridge, test_valley_along,
+              test_valley_ridge, test_valley_along, test_author_rim,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
