@@ -3258,7 +3258,7 @@ _FOLD_KEEPOUT = 0.8      # logical units either side of the chord the edge-shado
 _FOLD_KEEPOUT_RAMP = 0.3 # filter is held off, and the units it ramps back in over
 
 
-def _fold_keepout(name, idx, size):
+def _fold_keepout(name, idx, size, ramp=None):
     """Weight that holds `_edge_shadow_declutter` off the fold itself.
 
     The band it clears runs 0.7..1.9 units in from the silhouette, and where the
@@ -3288,7 +3288,8 @@ def _fold_keepout(name, idx, size):
     ux, uy = dx / n, dy / n
     ys, xs = np.mgrid[0:size, 0:size]
     s = ((xs - x0 * L) * (-uy) + (ys - y0 * L) * ux) / L      # logical units
-    return np.clip((np.abs(s) - _FOLD_KEEPOUT) / _FOLD_KEEPOUT_RAMP, 0.0, 1.0)
+    ramp = _FOLD_KEEPOUT_RAMP if ramp is None else ramp
+    return np.clip((np.abs(s) - _FOLD_KEEPOUT) / ramp, 0.0, 1.0)
 
 
 def _edge_shadow_declutter(rgb, name, idx, size):
@@ -5550,6 +5551,18 @@ def _even_band(im, name, idx, size):
 # drawing at the edge, and filling it moved their fold readings (Wait
 # fold_s_conv 1.0 -> 1.5, fold_jumps 1 -> 2). Below 128 the valley is under a
 # pixel and the stage changes nothing that could be seen.
+#
+# Three things the first version got wrong (NEXT.md 117). The inward reach
+# crossed the ridge where two edges' bands meet and took the other edge's
+# blade for this edge's glass: Arrow_Down's blue core 2.6-3.6 LU above its
+# lower point came out in two pale stripes, up to 32 levels. An inward sample
+# now counts only while the distance is still climbing. The lift was blurred
+# by 0.1 LU - nothing below 480, a pixel of radius at 512, where the hairline
+# is two pixels wide: it filled half the valley there, and spread onto the
+# blade beside it, where the gap is negative, darkening it by up to 27 levels.
+# The fill level is smoothed instead, which at 512 also keeps the master's
+# pixel texture out of it, and the gap is never negative. And the fill came
+# back in over 0.3 LU off the fold, so the hook at the notch ended in a cut.
 _VALLEY_CURSORS = {"Arrow", "Arrow_Down", "UpArrow", "Hand"}
 _VALLEY_MIN_SIZE = 128
 _VALLEY_BAND = (0.15, 1.6)   # LU from the traced edge the fill may touch
@@ -5561,6 +5574,9 @@ _VALLEY_CAP = 3.0            # levels of dip left alone, then lifted in full
 _VALLEY_RAMP = 12.0          # over this many more
 _VALLEY_APEX = (13.0, 2.0)   # LU from the apex held off, and the ramp back in
 _VALLEY_POINT = (2.5, 1.0)   # LU from every point held off, and the ramp
+_VALLEY_CLIMB = 0.5          # of a step the distance must still climb inward
+_VALLEY_FOLD_RAMP = 1.0      # LU the fill comes back in over off the fold
+_VALLEY_LEVEL_SMOOTH = 0.1   # LU the fill level is smoothed across
 
 
 def _rim_valley(im, name, idx, size):
@@ -5575,7 +5591,7 @@ def _rim_valley(im, name, idx, size):
     nx, ny = gx / np.maximum(g, 1e-9), gy / np.maximum(g, 1e-9)   # inward
     lo, hi = _VALLEY_BAND
     w = np.clip(np.minimum(d - lo, hi - d) / 0.1, 0.0, 1.0) * (g > 1e-6)
-    w = w * _fold_keepout(name, idx, size)
+    w = w * _fold_keepout(name, idx, size, _VALLEY_FOLD_RAMP)
     ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
     ch = _fold_chord(name, idx)
     if ch is not None:
@@ -5596,13 +5612,22 @@ def _rim_valley(im, name, idx, size):
         got = _sample1(level, px - nx * o, py - ny * o)
         out = np.where(d >= t, np.maximum(out, got), out)
     inn = np.full((size, size), -1.0)
+    climbing = np.ones((size, size), dtype=bool)
+    below = d
     for t in np.arange(_VALLEY_STEP, _VALLEY_IN + 1e-9, _VALLEY_STEP):
         o = t * L
-        inn = np.maximum(inn, _sample1(level, px + nx * o, py + ny * o))
+        here = _sample1(d, px + nx * o, py + ny * o)
+        climbing &= here >= below + _VALLEY_CLIMB * _VALLEY_STEP
+        below = here
+        inn = np.where(climbing,
+                       np.maximum(inn, _sample1(level, px + nx * o, py + ny * o)), inn)
     target = np.minimum(out, inn)
-    gap = target - lum
+    m = (target > 0).astype(np.float64)
+    smooth = (_smooth1(target * m, _VALLEY_LEVEL_SMOOTH, size)
+              / np.maximum(_smooth1(m, _VALLEY_LEVEL_SMOOTH, size), 1e-9))
+    target = np.where(m > 0, smooth, target)
+    gap = np.maximum(target - lum, 0.0)
     lift = np.clip((gap - _VALLEY_CAP) / _VALLEY_RAMP, 0.0, 1.0) * w * (target > 0)
-    lift = _smooth1(lift, 0.1, size)
     return _compose(a[..., :3] + (gap * lift)[..., None], al)
 
 @functools.lru_cache(maxsize=None)
