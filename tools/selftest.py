@@ -1055,6 +1055,51 @@ def test_valley_along():
           "tap along it, bound %.2f" % (clean, hurt, eps))
 
 
+def test_point_along():
+    """The hairline by the wing tip reads as a line, not as dots.
+
+    _rim_valley is held off the points, and in their last 2-3 LU the master's
+    hairline, a pixel wide on a slanted edge, came out a dark pixel per step of
+    the staircase at 256 and 384 (NEXT.md 120). Along the upper edge 1-3 LU
+    from the wing tip the darkest composite on grey over 0.05-0.45 LU in is read
+    in half-pixel steps, as its spread about a 4 px running mean, the worse of
+    Arrow and Arrow_Down at 256. Without the stage it has to fail."""
+    eps, size = 5.0, 256
+    tip, apex = np.array([29.0, 13.98]), np.array([3.08, 2.95])
+    u = (apex - tip) / np.hypot(*(apex - tip))
+    n = np.array([u[1], -u[0]])                        # inward off the upper edge
+    L = size / 32.0
+    ts = np.arange(1.0, 3.0, 0.5 / L)
+    ds = np.arange(0.05, 0.46, 0.05)
+    xs = (tip[0] + u[0] * ts[:, None] + n[0] * ds[None]) * L - 0.5
+    ys = (tip[1] + u[1] * ts[:, None] + n[1] * ds[None]) * L - 0.5
+
+    def dots():
+        worst = 0.0
+        for name in ("Arrow", "Arrow_Down"):
+            f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
+            al = f[..., 3] / 255.0
+            grey = f[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
+            line = H._sample1(grey, xs, ys).min(1)
+            run = np.convolve(np.pad(line, 4, mode="edge"), np.ones(8) / 8,
+                              mode="valid")[:len(line)]
+            worst = max(worst, float(np.std(line - run)))
+        return worst
+
+    clean = dots()
+    real = H._point_along
+    H._point_along = lambda im, *_a: im
+    repoint()
+    try:
+        hurt = dots()
+    finally:
+        H._point_along = real
+        repoint()
+    check("point along", clean <= eps < hurt,
+          "%.2f -> %.2f levels of dots on the hairline by the wing tip without "
+          "the stage, bound %.2f" % (clean, hurt, eps))
+
+
 def test_author_rim():
     """The upper edge by the apex as dark as his at the small rungs.
 
@@ -2127,8 +2172,8 @@ def main():
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
               test_apex_floor, test_morph_mottle, test_rim_valley,
-              test_valley_ridge, test_valley_along, test_author_rim,
-              test_author_rim_light,
+              test_valley_ridge, test_valley_along, test_point_along,
+              test_author_rim, test_author_rim_light,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
