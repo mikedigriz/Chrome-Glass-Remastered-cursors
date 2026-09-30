@@ -5563,6 +5563,14 @@ def _even_band(im, name, idx, size):
 # The fill level is smoothed instead, which at 512 also keeps the master's
 # pixel texture out of it, and the gap is never negative. And the fill came
 # back in over 0.3 LU off the fold, so the hook at the notch ended in a cut.
+#
+# And the lift went straight into the colour (NEXT.md 118). Along a slanted
+# edge the blade's alpha steps with the pixel staircase and the master makes
+# up for it in the colour, so a lift blind to alpha printed the staircase back
+# as a checker on the filled band: 2.5 px apart on Hand's upper edge at 384.
+# The lift is now taken on the composite (times alpha), smoothed along the
+# edge over a couple of pixels and divided back; what the ground sees of it
+# never exceeds what its neighbours along the edge got.
 _VALLEY_CURSORS = {"Arrow", "Arrow_Down", "UpArrow", "Hand"}
 _VALLEY_MIN_SIZE = 128
 _VALLEY_BAND = (0.15, 1.6)   # LU from the traced edge the fill may touch
@@ -5577,6 +5585,7 @@ _VALLEY_POINT = (2.5, 1.0)   # LU from every point held off, and the ramp
 _VALLEY_CLIMB = 0.5          # of a step the distance must still climb inward
 _VALLEY_FOLD_RAMP = 1.0      # LU the fill comes back in over off the fold
 _VALLEY_LEVEL_SMOOTH = 0.1   # LU the fill level is smoothed across
+_VALLEY_ALONG = ((-2, 1), (-1, 4), (0, 6), (1, 4), (2, 1))   # px along the edge, weight
 
 
 def _rim_valley(im, name, idx, size):
@@ -5628,7 +5637,12 @@ def _rim_valley(im, name, idx, size):
     target = np.where(m > 0, smooth, target)
     gap = np.maximum(target - lum, 0.0)
     lift = np.clip((gap - _VALLEY_CAP) / _VALLEY_RAMP, 0.0, 1.0) * w * (target > 0)
-    return _compose(a[..., :3] + (gap * lift)[..., None], al)
+    ga = al / 255.0
+    seen = gap * lift * ga
+    along = sum(wt * (seen if k == 0 else _sample1(seen, px - ny * k, py + nx * k))
+                for k, wt in _VALLEY_ALONG) / sum(wt for _k, wt in _VALLEY_ALONG)
+    delta = np.where(al >= 2, along / np.maximum(ga, 1e-3), 0.0)
+    return _compose(a[..., :3] + delta[..., None], al)
 
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
