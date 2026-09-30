@@ -5664,7 +5664,14 @@ def _rim_valley(im, name, idx, size):
 # lifted, and the shape across the band stays what the stages made of it.
 # Full at 64 and below, half at 96, nothing from 128, where the valley and the
 # blade are the large design's own.
-_AUTHOR_RIM_CURSORS = {"Arrow", "Arrow_Down", "UpArrow"}
+#
+# Wait, AppStarting and Hand lose the same edge the same way (+6..+17 over
+# their cycles at 32-96, against his nine keyframes). Their canonical render is
+# corrected against his keyframe of the same index and the light cycle is laid
+# over it, so the whole cycle comes down with it (+4..+9); the phases where the
+# sheen crosses that edge stay the palest, and the pace does not move (cadence
+# at the .ani sizes within 0.01).
+_AUTHOR_RIM_CURSORS = set(_WEDGE_TIPS)
 _AUTHOR_RIM_SIZES = (64, 128)    # in full up to, and gone by
 _AUTHOR_RIM_BAND = 1.0           # LU from the edge its level is read over
 _AUTHOR_RIM_REACH = 0.3          # LU past the band the darkening fades out over
