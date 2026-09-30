@@ -5671,6 +5671,14 @@ def _rim_valley(im, name, idx, size):
 # over it, so the whole cycle comes down with it (+4..+9); the phases where the
 # sheen crosses that edge stay the palest, and the pace does not move (cadence
 # at the .ani sizes within 0.01).
+#
+# The darkening scales the pixel, and never below _AUTHOR_RIM_FLOOR of what it
+# came in with. Taken off as levels divided by alpha, it drove the translucent
+# blade by the points (alpha 0.1-0.4) to black: 2-6 pixels a rung on Arrow and
+# AppStarting, and on AppStarting's cycle the light then sat on the floor for
+# three frames and jumped (41, 41, 41, 69 on grey at 64 by the wing tip). Those
+# pixels carry almost nothing of the band's mean, so the match to his rim moves
+# by under a level.
 _AUTHOR_RIM_CURSORS = set(_WEDGE_TIPS)
 _AUTHOR_RIM_SIZES = (64, 128)    # in full up to, and gone by
 _AUTHOR_RIM_BAND = 1.0           # LU from the edge its level is read over
@@ -5680,7 +5688,8 @@ _AUTHOR_RIM_CAP = 40.0           # most a station is darkened by
 _AUTHOR_RIM_ARC = 1.0            # LU of arc either side the excess is averaged over
 _AUTHOR_RIM_BLEND = 0.35         # LU of arc the stations are blended over
 _AUTHOR_RIM_POINT = (0.5, 1.0)   # LU from every point held off, and the ramp
-_AUTHOR_RIM_ALPHA = (0.04, 0.15)  # alpha it comes in over; the upper is the divide's floor
+_AUTHOR_RIM_ALPHA = (0.04, 0.15)  # alpha it comes in over
+_AUTHOR_RIM_FLOOR = 0.5          # least share of its own luma a pixel keeps
 _AUTHOR_RIM_PASSES = 2
 
 
@@ -5742,13 +5751,17 @@ def _author_rim(im, name, idx, size):
     wts /= np.maximum(wts.sum(2, keepdims=True), 1e-9)
     w = max(1, int(round(_AUTHOR_RIM_ARC / _RIM_XFER_STATION)))
     kern = np.ones(2 * w + 1) / (2.0 * w + 1.0)
+    lum0 = rgb.mean(-1)
     for _ in range(_AUTHOR_RIM_PASSES):
         over = _rim_level(rgb, al, pts, nrm, size) - want - _AUTHOR_RIM_TOL
         over = np.convolve(np.concatenate([over[-w:], over, over[:w]]), kern, mode="valid")
         over = np.clip(over, 0.0, _AUTHOR_RIM_CAP) * k
         field = np.einsum("yxs,s->yx", wts, over) * wd
-        rgb = np.clip(rgb - (field / np.maximum(al, hi))[..., None], 0, 255)
+        lum = np.maximum(rgb.mean(-1), 1e-3)
+        scale = 1.0 - field / np.maximum(al, 1e-3) / lum
+        rgb = rgb * np.clip(scale, _AUTHOR_RIM_FLOOR * lum0 / lum, 1.0)[..., None]
     return _compose(rgb, a[..., 3])
+
 
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
@@ -5756,6 +5769,23 @@ def frame_image(name, idx, size):
     from the sharpened AI master (_master, native up to 512px) inside a
     vector-crisp silhouette; smaller sizes downsample the already-sharpened
     master, so the crispness carries down without a second sharpen pass."""
+    return _author_rim(_frame_chain(name, idx, size), name, idx, size)
+
+
+@functools.lru_cache(maxsize=None)
+def frame_light_base(name, idx, size):
+    """frame_image without _author_rim: what lightanim takes the leaving light
+    as a share of. The stage is a tone on the rim, not less glass for the light
+    to leave, and read off the darkened rim the same loss is a larger share of
+    it and lands on _DIM_FLOOR for frames at a time (NEXT.md 119)."""
+    if name not in _AUTHOR_RIM_CURSORS or size >= _AUTHOR_RIM_SIZES[1]:
+        return frame_image(name, idx, size)
+    return _frame_chain(name, idx, size)
+
+
+def _frame_chain(name, idx, size):
+    """frame_image up to _author_rim. Not cached: frame_image.__wrapped__ must
+    still run every stage."""
     rgb = _rim_transfer(_rgb_pre_rim(name, idx, size), name, idx, size)
     rgb = _fold_transfer(rgb, name, idx, size)
     rgb = _facet_split(rgb, name, idx, size)
@@ -5817,7 +5847,9 @@ def frame_image(name, idx, size):
     im = _hide_ghost(_compose(rgb, alpha), name, size)
     if name in _BAND_CURSORS and (name, idx) not in _MATERIAL_BASIS:
         im = _even_band(im, name, idx, size)
-    return _rim_valley(_author_rim(im, name, idx, size), name, idx, size)
+    # _rim_valley from _VALLEY_MIN_SIZE up, _author_rim below it: the order
+    # between them is free
+    return _rim_valley(im, name, idx, size)
 
 
 def _premult(im):

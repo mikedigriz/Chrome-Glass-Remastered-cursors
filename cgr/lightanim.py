@@ -328,7 +328,7 @@ def _field_at(raw, phases, k=HARMONICS, point=None):
 
 
 def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
-                  point=None):
+                  point=None, plain=None):
     """out_n phases spaced by equal change of the picture, not by equal time.
 
     Measured on the rendered colour and not on the field itself: the light model
@@ -337,7 +337,8 @@ def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
     sees. Pacing on the field made the sweep hurry worse than not pacing it at
     all (peak/mean 1.39 -> 1.57). Rendered at a decimated size - the pace is one
     scalar per phase, and 216 frames of it are needed. `point` maps a grid size
-    to _point_weight on it, so the pace is measured on the frames that ship."""
+    to _point_weight on it, so the pace is measured on the frames that ship.
+    `plain` is _plain_lin, as _lit takes it."""
     d = max(1, min(_PACE_DECIM, lin.shape[0] // _PACE_GRID))
     lin_s, vis_s, seen_s = lin[::d, ::d], vis[::d, ::d], seen[::d, ::d]
     raw_s = raw[:, ::d, ::d] if raw.shape[1] == lin.shape[0] else raw
@@ -346,12 +347,13 @@ def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
     f = _field_at(raw_s, ph, k, None if point is None else point(raw_s.shape[1])) - a_s
     if f.shape[1] != lin_s.shape[0]:                 # a 32px field under a render
         return np.arange(out_n) / out_n
-    ref_s = _dim_ref(lin_s, alpha[::d, ::d])
+    plain_s = lin_s if plain is None else plain[::d, ::d]
+    ref_s = _dim_ref(plain_s, alpha[::d, ::d])
     pt_s = None if point is None else point(lin_s.shape[0])
     # float, not the uint8 linear_to_srgb hands back: a step of -3 levels read
     # as 253 turns the pace curve into noise, and the pacing into nothing
     shot = [V.linear_to_srgb(_lit(lin_s, f[i] * _LIGHT_GAIN * vis_s[..., None],
-                                  ref_s, pt_s)).astype(np.float64)
+                                  ref_s, pt_s, plain_s)).astype(np.float64)
             for i in range(_PACE_FINE)]
     step = np.array([float(np.abs(shot[(i + 1) % _PACE_FINE][seen_s]
                                   - shot[i][seen_s]).mean()) for i in range(_PACE_FINE)])
@@ -413,12 +415,13 @@ def _point_dim(lin, x, f, point):
     return f + w * (f_pow - f)
 
 
-def _lit(lin, r, ref=None, point=None):
+def _lit(lin, r, ref=None, point=None, plain=None):
     """One frame's linear colour: the canonical glass under a light residual.
 
     `ref` is _dim_ref of the same frame; None divides by each pixel's own
     luminance, which is what put the dark rim on _DIM_FLOOR in blots. `point`
-    is _point_weight on lin's grid, for _point_dim."""
+    is _point_weight on lin's grid, for _point_dim. `plain` is the glass the
+    loss is a share of, when that is not lin itself (_plain_lin)."""
     if MODE == "mul":
         return (lin + _EPS) * np.exp(np.clip(r, -_GAIN_CAP, _GAIN_CAP)) - _EPS
     if MODE == "split":
@@ -433,10 +436,19 @@ def _lit(lin, r, ref=None, point=None):
         x = np.minimum(dy, 0.0) / np.maximum(y, 1e-4)
         f = np.clip(1.0 + x, _DIM_FLOOR, 1.0)
         if point is not None:
-            f = _point_dim(lin, x, f, point)
+            f = _point_dim(lin if plain is None else plain, x, f, point)
         add = np.clip(r, 0.0, None)
         return lin * f[..., None] + add * _gamut_scale(lin * f[..., None], add)[..., None]
     return lin + r * _gamut_scale(lin, r)[..., None]
+
+
+def _plain_lin(name, size, idx):
+    """Linear colour of hybrid.frame_light_base: the canonical glass before the
+    small rungs' rim was darkened toward his. The loss is taken as a share of
+    this, so the darkening is a tone the whole cycle carries rather than less
+    light for it to lose."""
+    base = np.asarray(H.frame_light_base(name, idx, size), dtype=np.float64)
+    return V.srgb_to_linear(np.clip(base[..., :3], 0, 255).astype(np.uint8))
 
 
 def canonical_frame(name, size, idx=None):
@@ -687,7 +699,8 @@ def paced_phases(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     if key not in _phase_cache:
         _idx, _b, lin, alpha, raw, _n, vis, seen, anchor = _setup(name, size, k, idx)
         _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n, k,
-                                          functools.partial(_point_weight, name, idx))
+                                          functools.partial(_point_weight, name, idx),
+                                          _plain_lin(name, size, idx))
     return _phase_cache[key]
 
 
@@ -706,7 +719,8 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     else:
         phases = _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor,
                                                    alpha, out_n, k,
-                                                   functools.partial(_point_weight, name, idx))
+                                                   functools.partial(_point_weight, name, idx),
+                                                   _plain_lin(name, size, idx))
     field = _field_at(raw, phases, k, _point_weight(name, idx, raw.shape[1])) - anchor
     facet = None
     coef_anchor = coef_phase = None
@@ -716,7 +730,8 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             _geometry, coefficients, _grid = facet
             coef_anchor = periodic_at(coefficients, [idx / n], k)[0]
             coef_phase = periodic_at(coefficients, phases, k)
-    ref = _dim_ref(lin, alpha)
+    plain = _plain_lin(name, size, idx)
+    ref = _dim_ref(plain, alpha)
     point = _point_weight(name, idx, size)
     frames = []
     for t in range(out_n):
@@ -726,7 +741,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             r = np.dstack([H._smooth1(H._resample_signed(field[t, ..., c], size),
                                       _LIGHT_UNIT, size) for c in range(3)]) * _LIGHT_GAIN
         r = r * vis[..., None]
-        frame_lin = _lit(lin, r, ref, point)
+        frame_lin = _lit(lin, r, ref, point, plain)
         if facet is not None:
             geometry, _coefficients, grid = facet
             frame_lin = _facet_apply(lin, frame_lin,
