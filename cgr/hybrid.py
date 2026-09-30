@@ -5644,6 +5644,105 @@ def _rim_valley(im, name, idx, size):
     delta = np.where(al >= 2, along / np.maximum(ga, 1e-3), 0.0)
     return _compose(a[..., :3] + delta[..., None], al)
 
+
+# The author's rim below 128 (NEXT.md 119).
+#
+# His 32px art draws a full logical unit of near-black round the silhouette,
+# and _match_author_level puts it back at the small rungs (_LEVEL_CAP_NATIVE).
+# Stages after it take part of it away again on Arrow's upper edge by the
+# apex: _tip_relight repaints the point's wedge in the lit facet's light up to
+# the edge, and the rim field borrowed from 512 (_rim_transfer) lifts the band
+# towards the analytic profile, which has no dark outline. At 32 on grey the
+# band there came out 16-26 levels paler than his over the first 8 LU from the
+# apex, at 48-96 up to 40, and the side read pale - dark stroke - pale where he
+# drew it even: on a light desktop the hot spot's own edge washed out.
+#
+# So below 128 the band's level is read per outline station - its mean over
+# the first logical unit, composited on grey - against his 32px frame read the
+# same way, and where ours is paler by more than _AUTHOR_RIM_TOL the band is
+# darkened by the difference, averaged along the arc. Only darkened, never
+# lifted, and the shape across the band stays what the stages made of it.
+# Full at 64 and below, half at 96, nothing from 128, where the valley and the
+# blade are the large design's own.
+_AUTHOR_RIM_CURSORS = {"Arrow", "Arrow_Down", "UpArrow"}
+_AUTHOR_RIM_SIZES = (64, 128)    # in full up to, and gone by
+_AUTHOR_RIM_BAND = 1.0           # LU from the edge its level is read over
+_AUTHOR_RIM_REACH = 0.3          # LU past the band the darkening fades out over
+_AUTHOR_RIM_TOL = 4.0            # levels paler than his left alone
+_AUTHOR_RIM_CAP = 40.0           # most a station is darkened by
+_AUTHOR_RIM_ARC = 1.0            # LU of arc either side the excess is averaged over
+_AUTHOR_RIM_BLEND = 0.35         # LU of arc the stations are blended over
+_AUTHOR_RIM_POINT = (0.5, 1.0)   # LU from every point held off, and the ramp
+_AUTHOR_RIM_ALPHA = (0.04, 0.15)  # alpha it comes in over; the upper is the divide's floor
+_AUTHOR_RIM_PASSES = 2
+
+
+@functools.lru_cache(maxsize=None)
+def _rim_inward(name, idx):
+    """_rim_stations with every normal turned inward, probed once at 256."""
+    got = _rim_stations(name, idx)
+    if got is None:
+        return None
+    pts, nrm = got
+    m = _mask(name, idx, 256).astype(np.float64)
+    probe = [_sample1(m, (pts[:, 0] + s * nrm[:, 0] * 0.5) * 8.0 - 0.5,
+                      (pts[:, 1] + s * nrm[:, 1] * 0.5) * 8.0 - 0.5) for s in (1.0, -1.0)]
+    return pts, nrm * np.where(probe[0] >= probe[1], 1.0, -1.0)[:, None]
+
+
+def _rim_level(rgb, al, pts, nrm, size):
+    """Mean composite luma over each station's first _AUTHOR_RIM_BAND LU."""
+    L = size / V.LOGICAL
+    comp = rgb.mean(-1) * al + _RIM_XFER_BG * (1.0 - al)
+    u = np.arange(0.05, _AUTHOR_RIM_BAND, 0.1)
+    return _sample1(comp, (pts[:, 0:1] + nrm[:, 0:1] * u) * L - 0.5,
+                    (pts[:, 1:2] + nrm[:, 1:2] * u) * L - 0.5).mean(1)
+
+
+def _author_rim(im, name, idx, size):
+    """Darken the rim band below 128 where it came out paler than his."""
+    full, gone = _AUTHOR_RIM_SIZES
+    k = float(np.clip((gone - size) / (gone - full), 0.0, 1.0))
+    if name not in _AUTHOR_RIM_CURSORS or k <= 0.0:
+        return im
+    got = _rim_inward(name, idx)
+    if got is None:
+        return im
+    pts, nrm = got
+    a = np.asarray(im, dtype=np.float64)
+    rgb, al = a[..., :3].copy(), a[..., 3] / 255.0
+    his = np.asarray(original(name, idx), dtype=np.float64)
+    want = _rim_level(his[..., :3], his[..., 3] / 255.0, pts, nrm, 32)
+    L = size / V.LOGICAL
+    d = _edge_distance_at(name, idx, size)
+    ys, xs = np.mgrid[0:size, 0:size]
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
+    lo, hi = _AUTHOR_RIM_ALPHA
+    wd = (np.clip((_AUTHOR_RIM_BAND + _AUTHOR_RIM_REACH - d) / _AUTHOR_RIM_REACH, 0.0, 1.0)
+          * np.clip((al - lo) / (hi - lo), 0.0, 1.0))
+    r0, ramp = _AUTHOR_RIM_POINT
+    for cx, cy in _sharp_corners(name, _geom(name, idx)):
+        wd = wd * np.clip((np.hypot(px - cx, py - cy) - r0) / ramp, 0.0, 1.0)
+    # Per pixel, the stations beside it blended by arc offset, as _rim_native
+    # reads its sections back.
+    wts = np.zeros((size, size, len(pts)))
+    for r in range(0, size, 32):
+        sl = slice(r, r + 32)
+        dx = px[sl, :, None] - pts[None, None, :, 0]
+        dy = py[sl, :, None] - pts[None, None, :, 1]
+        arc2 = np.maximum(dx * dx + dy * dy - (d[sl] ** 2)[..., None], 0.0)
+        wts[sl] = np.exp(-arc2 / (2.0 * _AUTHOR_RIM_BLEND ** 2))
+    wts /= np.maximum(wts.sum(2, keepdims=True), 1e-9)
+    w = max(1, int(round(_AUTHOR_RIM_ARC / _RIM_XFER_STATION)))
+    kern = np.ones(2 * w + 1) / (2.0 * w + 1.0)
+    for _ in range(_AUTHOR_RIM_PASSES):
+        over = _rim_level(rgb, al, pts, nrm, size) - want - _AUTHOR_RIM_TOL
+        over = np.convolve(np.concatenate([over[-w:], over, over[:w]]), kern, mode="valid")
+        over = np.clip(over, 0.0, _AUTHOR_RIM_CAP) * k
+        field = np.einsum("yxs,s->yx", wts, over) * wd
+        rgb = np.clip(rgb - (field / np.maximum(al, hi))[..., None], 0, 255)
+    return _compose(rgb, a[..., 3])
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
@@ -5711,7 +5810,7 @@ def frame_image(name, idx, size):
     im = _hide_ghost(_compose(rgb, alpha), name, size)
     if name in _BAND_CURSORS and (name, idx) not in _MATERIAL_BASIS:
         im = _even_band(im, name, idx, size)
-    return _rim_valley(im, name, idx, size)
+    return _rim_valley(_author_rim(im, name, idx, size), name, idx, size)
 
 
 def _premult(im):
