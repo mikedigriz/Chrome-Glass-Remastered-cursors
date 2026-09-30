@@ -42,7 +42,7 @@
   "tip_wobble": 0.193264
  },
  "Arrow": {
-  "delta_e": 3.314989,
+  "delta_e": 3.316389,
   "density": 0.149332,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -67,13 +67,13 @@
   "rim_layers_orig": 0.045267,
   "rim_layers_per_station": 0.438849,
   "scale_drift": 0.002714,
-  "tip_convergence": 1.1,
+  "tip_convergence": 2.2,
   "tip_extreme_contrast": 0.139715,
   "tip_nest": 3.66792,
   "tip_profile": 0.668742
  },
  "Arrow_Down": {
-  "delta_e": 3.170423,
+  "delta_e": 3.169704,
   "density": 0.149332,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -98,10 +98,10 @@
   "rim_layers_orig": 0.111111,
   "rim_layers_per_station": 0.589928,
   "scale_drift": 0.009373,
-  "tip_convergence": 0.8,
+  "tip_convergence": 1.7,
   "tip_extreme_contrast": 0.193126,
   "tip_nest": 8.367351,
-  "tip_profile": 1.636846
+  "tip_profile": 1.616803
  },
  "Cross": {
   "delta_e": 3.717837,
@@ -121,9 +121,9 @@
   "tip_profile": 0.995024
  },
  "Hand": {
-  "cadence": 1.024274,
+  "cadence": 1.019823,
   "cadence_win": 1.027399,
-  "delta_e": 2.801365,
+  "delta_e": 2.798787,
   "density": 0.204725,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -133,16 +133,16 @@
   "fold_jitter_coverage": 1.0,
   "fold_jitter_stations": 20,
   "fold_jumps": 4,
-  "fold_notch": 0.633571,
-  "fold_rms": 15.190674,
+  "fold_notch": 0.632716,
+  "fold_rms": 15.191102,
   "fold_s": 0.6,
   "fold_s_conv": 1.5,
   "fold_s_max_ratio": 1.5,
   "fold_s_min_ratio": 1.0,
-  "fold_step": 0.577159,
+  "fold_step": 0.577119,
   "fold_unident": 0.65,
   "fold_unres": 0.0,
-  "ghost_rgb": 0.047369,
+  "ghost_rgb": 0.04732,
   "inner_tip": 0.333333,
   "legacy_fold_gap": 0.0,
   "legacy_fold_jag": 61.2,
@@ -150,17 +150,17 @@
   "legacy_fold_wander": 0.043225,
   "legacy_jitter_coverage": 1.0,
   "legacy_jitter_rows": 1,
-  "rim_layers": 0.381295,
+  "rim_layers": 0.377698,
   "rim_layers_orig": 0.045267,
-  "rim_layers_per_station": 0.633094,
+  "rim_layers_per_station": 0.629496,
   "scale_drift": 0.00883,
-  "temporal_fold": 1.106653,
-  "tip_convergence": 1.3,
+  "temporal_fold": 1.104563,
+  "tip_convergence": 1.5,
   "tip_extreme_contrast": 0.174394,
   "tip_nest": 2.822626,
   "tip_profile": 1.70499,
-  "tip_sheen": 27.012827,
-  "tip_wobble": 0.324013
+  "tip_sheen": 27.659163,
+  "tip_wobble": 0.325126
  },
  "Handwriting": {
   "cadence": 1.488746,
@@ -377,7 +377,7 @@
   "tip_profile": 0.942774
  },
  "UpArrow": {
-  "delta_e": 3.70394,
+  "delta_e": 3.70213,
   "density": 0.149332,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -398,7 +398,7 @@
   "rim_layers_orig": 0.045267,
   "rim_layers_per_station": 0.251799,
   "scale_drift": 0.009373,
-  "tip_convergence": 0.8,
+  "tip_convergence": 2.0,
   "tip_extreme_contrast": 0.161292,
   "tip_nest": 15.923888,
   "tip_profile": 1.278434
