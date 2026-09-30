@@ -5645,6 +5645,86 @@ def _rim_valley(im, name, idx, size):
     return _compose(a[..., :3] + delta[..., None], al)
 
 
+# The hairline by the points (NEXT.md 120).
+#
+# _rim_valley is held off the points (_VALLEY_POINT), and in their last 2-3 LU
+# the master's hairline stays: a pixel wide on a slanted edge, so at 256 and
+# 384 it reads as a dotted line, a dark pixel per step of the staircase. At
+# 512 it is a line. Filling it there costs the points (at 1.5 LU tip_nest on
+# Arrow_Down 8.4 -> 10.2); evened along the edge instead, the line stays and
+# the steps go. Each pixel near a point takes the premultiplied mean of its
+# neighbours along the edge, with _VALLEY_ALONG's kernel, and a neighbour
+# counts as far as its normal agrees with the pixel's: at the point the two
+# sides' normals part, and the other side is not averaged in. Only the wing
+# tip, the point on the lit facet: its glass is 209-222 at 256, the bottom
+# point's 128-157, and the dark pixels read as dots against the light alone.
+# Evened at the bottom point too, the dots there went 0.9-3.1 -> 0.9-2.2 and
+# its contrast with them (tip_extreme_contrast on Arrow 0.140 -> 0.119).
+_POINT_ALONG_ZONE = (0.3, 0.3, 3.0, 1.0)   # LU from a point it starts, its ramp,
+                                           # LU it reaches, and the fade past it
+_POINT_ALONG_DEPTH = (0.4, 0.2)            # LU from the edge in full, and the fade
+_POINT_ALONG_AGREE = (0.8, 0.95)           # cosine of the two normals: not counted
+                                           # below, in full above
+_POINT_ALONG_LIT = 0.5                     # LU off the fold toward the light a point
+                                           # must lie
+
+
+def _point_along(im, name, idx, size):
+    """Even the hairline by the points along the edge."""
+    if name not in _VALLEY_CURSORS or size < _VALLEY_MIN_SIZE:
+        return im
+    a = np.asarray(im, dtype=np.float64)
+    L = size / V.LOGICAL
+    d = _edge_distance_at(name, idx, size)
+    gy, gx = np.gradient(d)
+    g = np.hypot(gx, gy)
+    nx, ny = gx / np.maximum(g, 1e-9), gy / np.maximum(g, 1e-9)
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    r_in, ramp_in, r_out, ramp_out = _POINT_ALONG_ZONE
+    zone = np.zeros((size, size))
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return im
+    (ax, ay), (bx, by) = ch
+    un = np.hypot(bx - ax, by - ay)
+    ux, uy = (bx - ax) / un, (by - ay) / un
+    for cx, cy in _sharp_corners(name, _geom(name, idx)):
+        # the point on the lit facet's side of the fold only. The apex is on the
+        # fold: _rim_valley leaves it alone (_VALLEY_APEX), its line is the inner
+        # tip's separator, and evened it cost the hot spot's contrast
+        ox, oy = cx - ax, cy - ay
+        t = ox * ux + oy * uy
+        if (ox - t * ux) * _BEVEL_LIGHT[0] + (oy - t * uy) * _BEVEL_LIGHT[1] < _POINT_ALONG_LIT:
+            continue
+        r = np.hypot(xs - cx, ys - cy)
+        zone = np.maximum(zone, np.clip((r - r_in) / ramp_in, 0.0, 1.0)
+                          * np.clip((r_out + ramp_out - r) / ramp_out, 0.0, 1.0))
+    full, fade = _POINT_ALONG_DEPTH
+    w = zone * np.clip((full + fade - d) / fade, 0.0, 1.0) * (g > 1e-6) * (d > 0)
+    if w.max() < 1e-6:
+        return im
+    al = a[..., 3] / 255.0
+    pre = a[..., :3] * al[..., None]
+    nrm = np.dstack([nx, ny])
+    py, px = np.mgrid[0:size, 0:size].astype(np.float64)
+    lo, hi = _POINT_ALONG_AGREE
+    acc = np.zeros_like(pre)
+    wsum = np.zeros((size, size))
+    for k, wt in _VALLEY_ALONG:
+        if k == 0:
+            acc += pre * wt
+            wsum += wt
+            continue
+        sx, sy = px - ny * k, py + nx * k
+        s_n = _sample(nrm, sx, sy)
+        ok = wt * np.clip((s_n[..., 0] * nx + s_n[..., 1] * ny - lo) / (hi - lo), 0.0, 1.0)
+        acc += _sample(pre, sx, sy) * ok[..., None]
+        wsum += ok
+    pre = pre + (acc / wsum[..., None] - pre) * w[..., None]
+    rgb = np.where(al[..., None] >= 2 / 255, pre / np.maximum(al, 1e-3)[..., None], a[..., :3])
+    return _compose(np.clip(rgb, 0, 255), a[..., 3])
+
+
 # The author's rim below 128 (NEXT.md 119).
 #
 # His 32px art draws a full logical unit of near-black round the silhouette,
@@ -5847,9 +5927,9 @@ def _frame_chain(name, idx, size):
     im = _hide_ghost(_compose(rgb, alpha), name, size)
     if name in _BAND_CURSORS and (name, idx) not in _MATERIAL_BASIS:
         im = _even_band(im, name, idx, size)
-    # _rim_valley from _VALLEY_MIN_SIZE up, _author_rim below it: the order
-    # between them is free
-    return _rim_valley(im, name, idx, size)
+    # _rim_valley and _point_along from _VALLEY_MIN_SIZE up, _author_rim below
+    # it: the order between them is free
+    return _point_along(_rim_valley(im, name, idx, size), name, idx, size)
 
 
 def _premult(im):
