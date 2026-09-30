@@ -996,6 +996,65 @@ def test_valley_ridge():
           "sample counted, bound %.1f" % (clean, hurt, eps))
 
 
+def test_valley_along():
+    """The valley fill prints no staircase on the band.
+
+    Along a slanted edge the blade's alpha steps with the pixels and the
+    master makes up for it in the colour, so a lift added blind to alpha came
+    out as a checker on the filled band, 2.5 px apart on Hand's upper edge at
+    384 (NEXT.md 118). The stage's input is caught and composited on grey;
+    lines 0.3 and 0.5 LU in from that edge, 17.5-21 LU across, are read as the
+    spread about a 4 px running mean, the worse of the two. With a single tap
+    along the edge it has to fail."""
+    name, idx, size, eps = "Hand", 2, 384, 1.2
+    got = {}
+    real = H._rim_valley
+
+    def grab(im, n, i, s):
+        got["im"] = im
+        return real(im, n, i, s)
+
+    H._rim_valley = grab
+    try:
+        H.frame_image.__wrapped__(name, idx, size)
+    finally:
+        H._rim_valley = real
+    L = size / 32.0
+    a, b = np.array([3.08, 2.95]), np.array([29.0, 13.98])
+    u = (b - a) / np.hypot(*(b - a))
+    n = np.array([-u[1], u[0]])                        # inward
+    s = np.arange((17.5 - a[0]) / u[0], (21.0 - a[0]) / u[0], 0.5 / L)
+    P = a[None, :] + s[:, None] * u[None, :]
+    mask = H._mask(name, idx, size).astype(np.float64) / 255.0
+    t = np.arange(-2.0, 2.0, 0.02)
+    edge = [t[np.argmax(H._sample1(mask, (p[0] + t * n[0]) * L - 0.5,
+                                   (p[1] + t * n[1]) * L - 0.5) > 0.5)] for p in P]
+    edge = np.polyval(np.polyfit(s, edge, 2), s)
+
+    def texture():
+        f = np.asarray(real(got["im"], name, idx, size), dtype=np.float64)
+        al = f[..., 3] / 255.0
+        grey = f[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
+        worst = 0.0
+        for o in (0.3, 0.5):
+            v = H._sample1(grey, (P[:, 0] + (edge + o) * n[0]) * L - 0.5,
+                           (P[:, 1] + (edge + o) * n[1]) * L - 0.5)
+            dv = (v - np.convolve(v, np.ones(8) / 8, mode="same"))[8:-8]
+            worst = max(worst, float(dv.std()))
+        return worst
+
+    clean = texture()
+    keep = H._VALLEY_ALONG
+    H._VALLEY_ALONG = ((0, 1),)
+    try:
+        hurt = texture()
+    finally:
+        H._VALLEY_ALONG = keep
+    check("valley along", clean <= eps < hurt,
+          "%.2f -> %.2f levels of staircase on Hand's upper edge with a single "
+          "tap along it, bound %.2f" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -1975,7 +2034,7 @@ def main():
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
               test_apex_floor, test_morph_mottle, test_rim_valley,
-              test_valley_ridge,
+              test_valley_ridge, test_valley_along,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
