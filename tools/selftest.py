@@ -905,42 +905,95 @@ def test_rim_valley():
     with a grey shadow behind it (NEXT.md 116). Read with analyze's rim
     sections at 256 on the stations of that edge between a fifth and four
     fifths of the way to the notch: the deepest interior dip 0.1..1.6 LU in,
-    by prominence, averaged. Without the fill it has to fail the same bound."""
-    size, eps = 256, 2.0
-    wing, notch = np.array([29.0, 13.98]), np.array([19.5, 19.0])
-    u = notch - wing
-    ln = float(np.hypot(*u))
-    u = u / ln
+    by prominence, averaged. And at 512 on the upper edge from 0.65 to 0.88 of
+    the way from the apex to the wing tip, where a blurred lift filled half of
+    it (8.6 levels, NEXT.md 117). Without the fill both have to fail."""
+    apex, wing = np.array([0.0, 0.0]), np.array([29.0, 13.98])
+    notch = np.array([19.5, 19.0])
+    reads = ((256, wing, notch, 0.2, 0.8, 2.0), (512, apex, wing, 0.65, 0.88, 4.0))
     us = np.arange(0.0, A._RIM_DEPTH + 1e-9, A._RIM_STEP)
     lo, hi = np.searchsorted(us, 0.1), np.searchsorted(us, 1.6)
 
-    def valley():
+    def valley(size, a, b, s0, s1, _eps):
+        u = b - a
+        ln = float(np.hypot(*u))
+        u = u / ln
         st = A._outline_stations("Arrow", 0)
         f = np.asarray(H.frame_image("Arrow", 0, size), dtype=np.float64)
         prof = A._rim_profiles(f, H._mask("Arrow", 0, size), st, size)
         got = []
         for (p, _n), pr in zip(st, prof):
-            q = np.asarray(p) - wing
+            q = np.asarray(p) - a
             s = float(q @ u) / ln
-            if np.isnan(pr[0]) or not 0.2 <= s <= 0.8                     or abs(float(q[0] * u[1] - q[1] * u[0])) >= 1.5:
+            if (np.isnan(pr[0]) or not s0 <= s <= s1
+                    or abs(float(q[0] * u[1] - q[1] * u[0])) >= 1.5):
                 continue
             got.append(max([A._prominence(pr, k) for k in range(lo, hi)
                             if pr[k] <= pr[k - 1] and pr[k] < pr[k + 1]],
                            default=0.0))
         return float(np.mean(got))
 
-    clean = valley()
+    clean = [valley(*r) for r in reads]
     keep = H._VALLEY_CURSORS
     H._VALLEY_CURSORS = set()
     repoint()
     try:
-        hurt = valley()
+        hurt = [valley(*r) for r in reads]
     finally:
         H._VALLEY_CURSORS = keep
         repoint()
-    check("rim valley", clean <= eps < hurt,
-          "%.1f -> %.1f levels of dip behind the blade without the fill, bound %.1f"
-          % (clean, hurt, eps))
+    ok = all(c <= r[-1] < h for c, h, r in zip(clean, hurt, reads))
+    check("rim valley", ok,
+          "%.1f -> %.1f at 256 below the wing, %.1f -> %.1f at 512 above it, "
+          "levels of dip without the fill, bounds %.1f, %.1f"
+          % (clean[0], hurt[0], clean[1], hurt[1], reads[0][-1], reads[1][-1]))
+
+
+def test_valley_ridge():
+    """The valley fill stops at the ridge between two edges.
+
+    Near a point both edges' bands meet, and an inward reach of 1.2 LU carried
+    a pixel across the ridge to the other edge's blade, which it took for its
+    own glass: Arrow_Down's blue core 2.6-3.6 LU above its lower point came out
+    in two pale stripes, up to 32 levels (NEXT.md 117). The stage's input is
+    caught at 256 and its lift read there, 2.5-4.5 LU from that point and
+    deeper than the hairline's valley (0.9 LU and more in, where the fill lifts
+    nothing of its own). With every inward sample counted it has to fail."""
+    name, size, eps = "Arrow_Down", 256, 3.0
+    got = {}
+    real = H._rim_valley
+
+    def grab(im, n, i, s):
+        got["im"] = im
+        return real(im, n, i, s)
+
+    H._rim_valley = grab
+    try:
+        H.frame_image.__wrapped__(name, 0, size)
+    finally:
+        H._rim_valley = real
+    L = size / 32.0
+    cx, cy = max(H._sharp_corners(name, H._geom(name, 0)), key=lambda c: c[1])
+    ys, xs = np.mgrid[0:size, 0:size] + 0.5
+    r = np.hypot(xs / L - cx, ys / L - cy)
+    zone = ((H._mask(name, 0, size) >= 128) & (r >= 2.5) & (r <= 4.5)
+            & (H._edge_distance_at(name, 0, size) >= 0.9))
+    base = np.asarray(got["im"], dtype=np.float64)[..., :3].mean(-1)
+
+    def lift():
+        out = np.asarray(real(got["im"], name, 0, size), dtype=np.float64)
+        return float((out[..., :3].mean(-1) - base)[zone].max())
+
+    clean = lift()
+    keep = H._VALLEY_CLIMB
+    H._VALLEY_CLIMB = -np.inf
+    try:
+        hurt = lift()
+    finally:
+        H._VALLEY_CLIMB = keep
+    check("valley ridge", clean <= eps < hurt,
+          "%.1f -> %.1f levels lifted above the lower point with every inward "
+          "sample counted, bound %.1f" % (clean, hurt, eps))
 
 
 def test_point_taps():
@@ -1922,6 +1975,7 @@ def main():
               test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
               test_apex_floor, test_morph_mottle, test_rim_valley,
+              test_valley_ridge,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
