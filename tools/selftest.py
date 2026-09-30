@@ -1056,34 +1056,39 @@ def test_valley_along():
 
 
 def test_author_rim():
-    """Arrow's upper edge by the apex as dark as his at the small rungs.
+    """The upper edge by the apex as dark as his at the small rungs.
 
     His 32px art draws a logical unit of near-black round the silhouette, and
-    the stages after _match_author_level lifted it again on Arrow's upper edge
-    from the apex: 16-26 levels paler than his at 32, up to 40 at 48 and 64
-    (NEXT.md 119). Read per outline station as the band's mean over its first
-    logical unit composited on grey, against his frame read the same way, on
-    the stations of that edge from a tenth to two fifths of the way to the
-    wing tip: how much paler than his, on average, the worse of 32 and 48.
-    Without the stage it has to fail."""
-    name, eps = "Arrow", 10.0
+    the stages after _match_author_level lifted it again on the upper edge
+    from the apex: on Arrow 16-26 levels paler than his at 32, up to 40 at 48
+    and 64, on Wait's canonical render 13-21 (NEXT.md 119). Read per outline
+    station as the band's mean over its first logical unit composited on grey,
+    against his frame read the same way, on the stations of that edge from a
+    tenth to two fifths of the way to the wing tip: how much paler than his,
+    on average, the worst of Arrow and Wait at 32 and 48. Without the stage it
+    has to fail."""
+    eps = 10.0
     apex, wing = np.array([3.08, 2.95]), np.array([29.0, 13.98])
-    pts, nrm = H._rim_inward(name, 0)
     u = wing - apex
     ln = float(np.hypot(*u))
     u = u / ln
-    q = pts - apex
-    s = (q @ u) / ln
-    sel = (s >= 0.1) & (s <= 0.4) & (np.abs(q[:, 0] * u[1] - q[:, 1] * u[0]) < 1.5)
-    his = np.asarray(H.original(name, 0), dtype=np.float64)
-    want = H._rim_level(his[..., :3], his[..., 3] / 255.0, pts, nrm, 32)[sel]
+    reads = []
+    for name, idx in (("Arrow", 0), ("Wait", LA.canonical_index("Wait"))):
+        pts, nrm = H._rim_inward(name, idx)
+        q = pts - apex
+        s = (q @ u) / ln
+        sel = (s >= 0.1) & (s <= 0.4) & (np.abs(q[:, 0] * u[1] - q[:, 1] * u[0]) < 1.5)
+        his = np.asarray(H.original(name, idx), dtype=np.float64)
+        want = H._rim_level(his[..., :3], his[..., 3] / 255.0, pts, nrm, 32)[sel]
+        reads.append((name, idx, pts, nrm, sel, want))
 
     def paler():
         worst = -np.inf
-        for size in (32, 48):
-            f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
-            got = H._rim_level(f[..., :3], f[..., 3] / 255.0, pts, nrm, size)[sel]
-            worst = max(worst, float((got - want).mean()))
+        for name, idx, pts, nrm, sel, want in reads:
+            for size in (32, 48):
+                f = np.asarray(H.frame_image(name, idx, size), dtype=np.float64)
+                got = H._rim_level(f[..., :3], f[..., 3] / 255.0, pts, nrm, size)[sel]
+                worst = max(worst, float((got - want).mean()))
         return worst
 
     clean = paler()
