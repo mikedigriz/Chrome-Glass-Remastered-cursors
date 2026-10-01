@@ -1235,35 +1235,52 @@ def test_author_rim():
           "bound %.1f" % (clean, hurt, eps))
 
 
+def _under_keys(name, size, points=False):
+    """The shipped frames against the render keys: for each key, the frame
+    nearest its phase minus the key itself, composited on grey, on glass whose
+    alpha the key shares; with `points`, within 3 LU of the points only. The
+    differences of all keys, one array."""
+    n = len(H.BY_NAME[name]["frames"])
+    keys = [np.asarray(H.frame_image(name, j, size), dtype=np.float64) for j in range(n)]
+    idx = LA.canonical_index(name)
+    a0 = keys[idx][..., 3]
+    mask = a0 > 0.5 * a0.max()
+    if points:
+        L = size / 32.0
+        ys, xs = np.mgrid[0:size, 0:size] + 0.5
+        near = np.zeros((size, size), bool)
+        for cx, cy in H._sharp_corners(name, H._geom(name, idx)):
+            near |= np.hypot(xs / L - cx, ys / L - cy) < 3.0
+        mask &= near
+    grey = lambda a: a[..., :3].mean(-1) * a[..., 3] / 255 + 128 * (1 - a[..., 3] / 255)
+    LA._phase_cache.clear()
+    fr = [np.asarray(f, dtype=np.float64) for f in LA.anim_frames_lighting(name, size)[0]]
+    ph = np.asarray(LA.paced_phases(name, size))
+    got = []
+    for j in range(n):
+        gap = np.abs((ph - j / n + 0.5) % 1.0 - 0.5)
+        e = grey(fr[int(np.argmin(gap))]) - grey(keys[j])
+        got.append(e[mask & (np.abs(keys[j][..., 3] - a0) < 3)])
+    return np.concatenate(got)
+
+
 def test_author_rim_light():
     """The rim _author_rim darkens is a tone the light cycle carries.
 
     lightanim takes the leaving light as a share of the glass, and read off the
     darkened rim the same loss is a larger share of it: by AppStarting's wing
     tip at 64 the light sat on _DIM_FLOOR for ten frames running and jumped
-    (NEXT.md 119). Read within 3 LU of the points, on pixels that swing by more
-    than 20 levels over the cycle, as the frames each spends within 3% of that
-    swing of its own darkest, past three: summed over Wait and AppStarting at
-    64. With the share read off the darkened frame it has to fail."""
-    eps = 90
-
-    def at_floor(name, size=64):
-        LA._phase_cache.clear()
-        fr = np.stack([np.asarray(f, dtype=np.float64)
-                       for f in LA.anim_frames_lighting(name, size)[0]])
-        c = fr[..., :3].mean(-1) * fr[..., 3] / 255 + 128 * (1 - fr[..., 3] / 255)
-        rng = c.max(0) - c.min(0)
-        L = size / 32.0
-        ys, xs = np.mgrid[0:size, 0:size] + 0.5
-        near = np.zeros((size, size), bool)
-        idx = LA.canonical_index(name)
-        for cx, cy in H._sharp_corners(name, H._geom(name, idx)):
-            near |= np.hypot(xs / L - cx, ys / L - cy) < 3.0
-        n = ((c - c.min(0)) < 0.03 * rng).sum(0)[near & (rng > 20)]
-        return int(np.maximum(n - 3, 0).sum())
+    (NEXT.md 119). Within 3 LU of the points of Wait and AppStarting at 64,
+    against the render keys (_under_keys): the levels by which the frames go
+    more than 20 under them, summed. The frames each pixel spent by its own
+    darkest were counted first; the light's power form has a smooth minimum
+    they dwell at anyway (NEXT.md 121). With the share read off the darkened
+    frame it has to fail."""
+    eps = 80.0
 
     def read():
-        return sum(at_floor(name) for name in ("Wait", "AppStarting"))
+        return sum(float(np.maximum(-_under_keys(name, 64, True) - 20.0, 0.0).sum())
+                   for name in ("Wait", "AppStarting"))
 
     clean = read()
     keep = H.frame_light_base
@@ -1274,8 +1291,39 @@ def test_author_rim_light():
         H.frame_light_base = keep
         LA._phase_cache.clear()
     check("author rim under the light", clean <= eps < hurt,
-          "%d -> %d frames on the floor by the points with the share read off "
-          "the darkened rim, bound %d" % (clean, hurt, eps))
+          "%.1f -> %.1f levels past 20 under the keys by the points with the "
+          "share read off the darkened rim, bound %.1f" % (clean, hurt, eps))
+
+
+def test_light_under_keys():
+    """The leaving light goes no deeper than the render keys by much.
+
+    The light leaving a surface was gained linearly, 1 + x, and where the blur
+    lost little that doubled a loss already as deep as the keys': by Hand's
+    notch, on the lower left edge and at the wing tip the light sat on
+    _DIM_FLOOR for four keys running, a dark stroke 40-64 levels under them
+    (NEXT.md 121). Hand at 64 against the render keys (_under_keys): the
+    pixels more than 40 levels darker, summed over the keys. With the linear
+    form it has to fail."""
+    eps = 30
+    real = LA._lit
+
+    def linear(lin, r, ref=None):
+        dy = r[..., 0] * 0.2126 + r[..., 1] * 0.7152 + r[..., 2] * 0.0722
+        f = np.clip(1.0 + np.minimum(dy, 0.0) / np.maximum(ref, 1e-4), LA._DIM_FLOOR, 1.0)
+        add = np.clip(r, 0.0, None)
+        return lin * f[..., None] + add * LA._gamut_scale(lin * f[..., None], add)[..., None]
+
+    clean = int((_under_keys("Hand", 64) < -40).sum())
+    LA._lit = linear
+    try:
+        hurt = int((_under_keys("Hand", 64) < -40).sum())
+    finally:
+        LA._lit = real
+        LA._phase_cache.clear()
+    check("light under keys", clean <= eps < hurt,
+          "%d -> %d pixels of Hand at 64 over 40 levels under the render keys "
+          "with the linear form, bound %d" % (clean, hurt, eps))
 
 
 def test_point_taps():
@@ -2259,7 +2307,7 @@ def main():
               test_apex_floor, test_morph_mottle, test_rim_valley,
               test_valley_ridge, test_valley_along, test_point_along,
               test_point_along_alpha,
-              test_author_rim, test_author_rim_light,
+              test_author_rim, test_author_rim_light, test_light_under_keys,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
