@@ -42,7 +42,7 @@
   "tip_wobble": 0.193264
  },
  "Arrow": {
-  "delta_e": 3.316389,
+  "delta_e": 3.31549,
   "density": 0.149332,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -73,7 +73,7 @@
   "tip_profile": 0.668742
  },
  "Arrow_Down": {
-  "delta_e": 3.169704,
+  "delta_e": 3.171228,
   "density": 0.149332,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -121,9 +121,9 @@
   "tip_profile": 0.995024
  },
  "Hand": {
-  "cadence": 1.019823,
+  "cadence": 1.019797,
   "cadence_win": 1.027399,
-  "delta_e": 2.798787,
+  "delta_e": 2.802601,
   "density": 0.204725,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
@@ -133,16 +133,16 @@
   "fold_jitter_coverage": 1.0,
   "fold_jitter_stations": 20,
   "fold_jumps": 4,
-  "fold_notch": 0.632716,
-  "fold_rms": 15.191102,
+  "fold_notch": 0.63275,
+  "fold_rms": 15.190498,
   "fold_s": 0.6,
   "fold_s_conv": 1.5,
   "fold_s_max_ratio": 1.5,
   "fold_s_min_ratio": 1.0,
-  "fold_step": 0.577119,
+  "fold_step": 0.577153,
   "fold_unident": 0.65,
   "fold_unres": 0.0,
-  "ghost_rgb": 0.04732,
+  "ghost_rgb": 0.047244,
   "inner_tip": 0.333333,
   "legacy_fold_gap": 0.0,
   "legacy_fold_jag": 61.2,
@@ -154,13 +154,13 @@
   "rim_layers_orig": 0.045267,
   "rim_layers_per_station": 0.629496,
   "scale_drift": 0.00883,
-  "temporal_fold": 1.104563,
+  "temporal_fold": 1.104941,
   "tip_convergence": 1.5,
   "tip_extreme_contrast": 0.174394,
   "tip_nest": 2.822626,
   "tip_profile": 1.70499,
-  "tip_sheen": 27.659163,
-  "tip_wobble": 0.325126
+  "tip_sheen": 27.37723,
+  "tip_wobble": 0.325096
  },
  "Handwriting": {
   "cadence": 1.488746,
@@ -377,7 +377,7 @@
   "tip_profile": 0.942774
  },
  "UpArrow": {
-  "delta_e": 3.70213,
+  "delta_e": 3.704346,
   "density": 0.149332,
   "edge_straight": 0.317345,
   "edge_straight_rms": 0.106126,
