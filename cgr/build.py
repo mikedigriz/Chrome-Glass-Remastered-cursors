@@ -233,9 +233,28 @@ def _warm_frames():
           % (len(jobs), len(sizes), workers, time.time() - t0))
 
 
-def _scale_hot(name, size):
+def _hot_point(name):
+    """The hotspot as a point in logical units.
+
+    His hotspot is a pixel at 32, the square [h, h + 1), and which point of it
+    the click means depends on the shape: an arrow's apex sits on its top-left
+    corner, a centred cursor's centre - the middle of the canvas - on its
+    bottom-right one. Scaled as a top-left corner throughout, the hotspots of
+    Cross, IBeam and the size arrows drifted up and left of their centre by a
+    logical unit from 48 up, 7 px at 256."""
     hx, hy = hotspot(name)
-    return round(hx * size / 32), round(hy * size / 32)
+    c = 32 / 2
+    if hx < c <= hx + 1 and hy < c <= hy + 1:
+        return float(hx + 1), float(hy + 1)
+    return float(hx), float(hy)
+
+
+def _scale_hot(name, size):
+    """The pixel at `size` that holds _hot_point, taken inside his own pixel
+    where the point lies on its edge."""
+    hot = hotspot(name)
+    return tuple(int(np.floor(np.clip(p, h + 1e-6, h + 1 - 1e-6) * size / 32))
+                 for p, h in zip(_hot_point(name), hot))
 
 
 # ----------------------------------------------------------------------------- Windows
@@ -599,7 +618,7 @@ def build_mac(packages):
         for sc in MAC_SCALES:
             data, nframes = _cape_strip(name, animated, sc)
             reps.append(data)
-        hx, hy = hotspot(name)
+        hx, hy = _hot_point(name)
         cursors[ident] = {
             "FrameCount": nframes,
             "FrameDuration": 1.0 / 60.0,
@@ -1049,7 +1068,7 @@ def check_packages(win, lin, aliases, cape):
     cape_data = _read_cape(cape)
     for ident, name, animated in MAC_CURSORS:
         rec = cape_data[ident]
-        hx, hy = hotspot(name)
+        hx, hy = _hot_point(name)
         assert (rec["HotSpotX"], rec["HotSpotY"]) == (float(hx), float(hy)), \
             f"{name} cape hotspot mismatch"
         for sc in MAC_SCALES:
