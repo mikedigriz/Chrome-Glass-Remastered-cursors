@@ -56,7 +56,7 @@ The hex names are not decoration. Firefox, Chromium/Electron, Java and older GTK
 
 The unpacked theme is about 64 MB. Inside the tarball and the .deb the aliases are symlinks rather than copies, which saves roughly 85% of the payload.
 
-The .deb registers the theme with `update-alternatives` at priority 20 - deliberately below a deliberate pick by the user - and unregisters it on removal. The `PKGBUILD` committed here carries the previous tag and `sha256sums=SKIP` so a plain clone still builds; the copy attached to each release is pinned to that release and carries the real checksum.
+The .deb registers its `cursor.theme`, which inherits this theme, as `x-cursor-theme` in `update-alternatives` at priority 20, under Adwaita's 90: the theme becomes a choice in `sudo update-alternatives --config x-cursor-theme` rather than taking over, and removal unregisters it. Up to 1.1.0 it registered `index.theme`, whose `Inherits=Adwaita` made that pick resolve to Adwaita; an upgrade moves such a pick over. The `PKGBUILD` committed here carries the previous tag and `sha256sums=SKIP` so a plain clone still builds; the copy attached to each release is pinned to that release and carries the real checksum.
 
 For a single session or a single application, set `XCURSOR_THEME="Chrome Glass Remastered"` before it starts.
 
