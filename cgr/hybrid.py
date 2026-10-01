@@ -5652,11 +5652,16 @@ def _rim_valley(im, name, idx, size):
 # 384 it reads as a dotted line, a dark pixel per step of the staircase. At
 # 512 it is a line. Filling it there costs the points (at 1.5 LU tip_nest on
 # Arrow_Down 8.4 -> 10.2); evened along the edge instead, the line stays and
-# the steps go. Each pixel near a point takes the premultiplied mean of its
-# neighbours along the edge, with _VALLEY_ALONG's kernel, and a neighbour
-# counts as far as its normal agrees with the pixel's: at the point the two
-# sides' normals part, and the other side is not averaged in. Only the wing
-# tip, the point on the lit facet: its glass is 209-222 at 256, the bottom
+# the steps go. Each pixel near a point takes the mean colour of its
+# neighbours along the edge, weighted by their alpha, with _VALLEY_ALONG's
+# kernel, and keeps its own alpha. A neighbour counts as far as its normal
+# agrees with the pixel's: at the point the two sides' normals part, and the
+# other side is not averaged in. The first version took the premultiplied mean
+# at the pixel's own alpha. The blade's alpha steps with the staircase and the
+# master makes up for it in the colour, so that printed the steps back as dots
+# on the lower edge on light grounds, and the clear samples past the point
+# darkened its last pixels at 128 into a knot (on white 211 -> 185). Only the
+# wing tip, the point on the lit facet: its glass is 209-222 at 256, the bottom
 # point's 128-157, and the dark pixels read as dots against the light alone.
 # Evened at the bottom point too, the dots there went 0.9-3.1 -> 0.9-2.2 and
 # its contrast with them (tip_extreme_contrast on Arrow 0.140 -> 0.119).
@@ -5713,15 +5718,15 @@ def _point_along(im, name, idx, size):
     for k, wt in _VALLEY_ALONG:
         if k == 0:
             acc += pre * wt
-            wsum += wt
+            wsum += al * wt
             continue
         sx, sy = px - ny * k, py + nx * k
         s_n = _sample(nrm, sx, sy)
         ok = wt * np.clip((s_n[..., 0] * nx + s_n[..., 1] * ny - lo) / (hi - lo), 0.0, 1.0)
         acc += _sample(pre, sx, sy) * ok[..., None]
-        wsum += ok
-    pre = pre + (acc / wsum[..., None] - pre) * w[..., None]
-    rgb = np.where(al[..., None] >= 2 / 255, pre / np.maximum(al, 1e-3)[..., None], a[..., :3])
+        wsum += _sample(al[..., None], sx, sy)[..., 0] * ok
+    w = w * (wsum > 1e-3)
+    rgb = a[..., :3] + (acc / np.maximum(wsum, 1e-6)[..., None] - a[..., :3]) * w[..., None]
     return _compose(np.clip(rgb, 0, 255), a[..., 3])
 
 
