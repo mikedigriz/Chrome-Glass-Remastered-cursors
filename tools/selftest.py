@@ -1100,6 +1100,91 @@ def test_point_along():
           "the stage, bound %.2f" % (clean, hurt, eps))
 
 
+def test_point_along_alpha():
+    """Evening the hairline counts each neighbour by its alpha.
+
+    The blade's alpha steps with the staircase and the master makes up for it
+    in the colour. The first version took the premultiplied mean at the pixel's
+    own alpha: the steps came back as dots on the lower edge by the wing tip on
+    light grounds, and the clear samples past the point darkened its last
+    pixels at 128 into a knot (NEXT.md 120). Read as two numbers, each the
+    worst of Arrow, UpArrow and Arrow_Down: on 200 at 256, the 90th percentile
+    of how far a pixel of the lower edge's blade (0.03-0.3 LU in, 0.8-3 LU from
+    the tip) stands off the mean of its neighbours along the edge; and on white
+    at 128, how much darker than without the stage the darkest pixel within 0.8
+    LU of the tip is. The hurt is the first version: the stage handed the
+    premultiplied colour as opaque and divided back by the pixel's alpha."""
+    eps_dots, eps_knot = 4.0, 12.0
+    tip, lower = np.array([29.0, 13.98]), np.array([-0.466, -0.885])
+    names = ("Arrow", "UpArrow", "Arrow_Down")
+
+    def frames(size):
+        return {n: np.asarray(H.frame_image(n, 0, size), dtype=np.float64) for n in names}
+
+    def dots(fr):
+        size = 256
+        L = size / 32.0
+        ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+        py, px = np.mgrid[0:size, 0:size].astype(np.float64)
+        r = np.hypot(xs - tip[0], ys - tip[1])
+        worst = 0.0
+        for name, f in fr.items():
+            d = H._edge_distance_at(name, 0, size)
+            gy, gx = np.gradient(d)
+            g = np.maximum(np.hypot(gx, gy), 1e-9)
+            nx, ny = gx / g, gy / g
+            band = ((d > 0.03) & (d < 0.3) & (r > 0.8) & (r < 3.0)
+                    & (nx * lower[0] + ny * lower[1] > 0.95))
+            al = f[..., 3] / 255.0
+            c = f[..., :3].mean(-1) * al + 200.0 * (1.0 - al)
+            near = sum(H._sample1(c, px - ny * k, py + nx * k) for k in (-2, -1, 1, 2)) / 4
+            worst = max(worst, float(np.percentile(np.abs(c - near)[band], 90)))
+        return worst
+
+    def knot(fr, base):
+        size = 128
+        L = size / 32.0
+        ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+        near = np.hypot(xs - tip[0], ys - tip[1]) < 0.8
+        worst = 0.0
+        for name in names:
+            got = []
+            for f in (fr[name], base[name]):
+                al = f[..., 3] / 255.0
+                c = f[..., :3].mean(-1) * al + 255.0 * (1.0 - al)
+                got.append(float(c[near & (al > 0.1)].min()))
+            worst = max(worst, got[1] - got[0])
+        return worst
+
+    real = H._point_along
+
+    def premult(im, *args):
+        a = np.asarray(im, dtype=np.float64)
+        al = a[..., 3:4] / 255.0
+        opaque = H._compose(a[..., :3] * al, np.full(a.shape[:2], 255.0))
+        got = np.asarray(real(opaque, *args), dtype=np.float64)[..., :3]
+        rgb = np.where(al >= 2 / 255, got / np.maximum(al, 1e-3), a[..., :3])
+        return H._compose(rgb, a[..., 3])
+
+    clean = (dots(frames(256)), frames(128))
+    try:
+        H._point_along = lambda im, *_a: im
+        repoint()
+        base = frames(128)
+        H._point_along = premult
+        repoint()
+        hurt = (dots(frames(256)), knot(frames(128), base))
+    finally:
+        H._point_along = real
+        repoint()
+    clean = (clean[0], knot(clean[1], base))
+    check("point along alpha",
+          clean[0] <= eps_dots < hurt[0] and clean[1] <= eps_knot < hurt[1],
+          "%.2f -> %.2f levels of dots on the lower edge and %.1f -> %.1f darker "
+          "at the tip at 128 with the first version, bounds %.1f and %.1f"
+          % (clean[0], hurt[0], clean[1], hurt[1], eps_dots, eps_knot))
+
+
 def test_author_rim():
     """The upper edge by the apex as dark as his at the small rungs.
 
@@ -2173,6 +2258,7 @@ def main():
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
               test_apex_floor, test_morph_mottle, test_rim_valley,
               test_valley_ridge, test_valley_along, test_point_along,
+              test_point_along_alpha,
               test_author_rim, test_author_rim_light,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
