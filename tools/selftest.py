@@ -1308,7 +1308,9 @@ def test_light_under_keys():
     eps = 30
     real = LA._lit
 
-    def linear(lin, r, ref=None):
+    def linear(lin, r, ref=None, share=None):
+        if share is not None:
+            r = np.where(r > 0, r * share[..., None], r)
         dy = r[..., 0] * 0.2126 + r[..., 1] * 0.7152 + r[..., 2] * 0.0722
         f = np.clip(1.0 + np.minimum(dy, 0.0) / np.maximum(ref, 1e-4), LA._DIM_FLOOR, 1.0)
         add = np.clip(r, 0.0, None)
