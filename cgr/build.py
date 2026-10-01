@@ -395,6 +395,15 @@ def _xcursor(images):
     return header + bytes(toc) + b"".join(images)
 
 
+def _theme_files():
+    """index.theme names the theme and falls back to Adwaita for the names it
+    lacks; cursor.theme, which inherits this theme, is the one a system makes
+    its default with."""
+    return {"index.theme": "[Icon Theme]\nName=%s\nComment=Chrome Glass remaster - "
+                           "original pixels, crisp at 32-512px\nInherits=Adwaita\n" % THEME,
+            "cursor.theme": "[Icon Theme]\nName=%s\nInherits=%s\n" % (THEME, THEME)}
+
+
 def build_linux(dist):
     out = os.path.join(dist, "linux", THEME)
     cur = os.path.join(out, "cursors")
@@ -425,11 +434,8 @@ def build_linux(dist):
         for alias in names[1:]:
             shutil.copyfile(real, os.path.join(cur, alias))
         aliases[names[0]] = names[1:]
-    open(os.path.join(out, "index.theme"), "w", newline="\n").write(
-        "[Icon Theme]\nName=%s\nComment=Chrome Glass remaster - original pixels, "
-        "crisp at 32-512px\nInherits=Adwaita\n" % THEME)
-    open(os.path.join(out, "cursor.theme"), "w", newline="\n").write(
-        "[Icon Theme]\nName=%s\nInherits=%s\n" % (THEME, THEME))
+    for fn, text in _theme_files().items():
+        open(os.path.join(out, fn), "w", newline="\n").write(text)
     return out, aliases
 
 
@@ -502,6 +508,49 @@ def _deb_changelog(mtime):
     return buf.getvalue()
 
 
+def _deb_scripts():
+    """(postinst, prerm) of the .deb."""
+    # The alternative is the system's "default" cursor theme, of which
+    # libXcursor reads one key: Inherits. cursor.theme inherits this theme;
+    # index.theme inherits Adwaita for the names it lacks, and registered in
+    # its place up to 1.1.0 the pick resolved to Adwaita outright. Priority 20
+    # leaves auto mode to Adwaita's 90 (xcursor-themes ships 30): the entry
+    # makes the theme a choice in `update-alternatives --config
+    # x-cursor-theme`, and a manual pick is never overridden.
+    theme_dir = "/usr/share/icons/%s" % THEME
+    sh_vars = "old='%s/index.theme'\nnew='%s/cursor.theme'\n" % (theme_dir, theme_dir)
+    postinst = (
+        "#!/bin/sh\nset -e\n" + sh_vars +
+        "if command -v update-alternatives >/dev/null 2>&1; then\n"
+        # /usr/share/icons/default is normally provided by another package;
+        # on a bare system it does not exist and update-alternatives refuses
+        # to create the link, which under `set -e` fails the whole install.
+        "    mkdir -p /usr/share/icons/default\n"
+        "    update-alternatives --install /usr/share/icons/default/index.theme "
+        "x-cursor-theme \"$new\" 20\n"
+        # An upgrade keeps the old registration (prerm drops it on removal
+        # only). A manual pick of it moves to the new one.
+        "    if update-alternatives --list x-cursor-theme 2>/dev/null"
+        " | grep -qxF \"$old\"; then\n"
+        "        q=$(update-alternatives --query x-cursor-theme)\n"
+        "        update-alternatives --remove x-cursor-theme \"$old\"\n"
+        "        if printf '%s\\n' \"$q\" | grep -qx 'Status: manual' &&\n"
+        "           printf '%s\\n' \"$q\" | grep -qxF \"Value: $old\"; then\n"
+        "            update-alternatives --set x-cursor-theme \"$new\"\n"
+        "        fi\n"
+        "    fi\n"
+        "fi\n"
+        "exit 0\n")
+    prerm = (
+        "#!/bin/sh\nset -e\n" + sh_vars +
+        'if [ "$1" = remove ] || [ "$1" = deconfigure ]; then\n'
+        "    if command -v update-alternatives >/dev/null 2>&1; then\n"
+        "        update-alternatives --remove x-cursor-theme \"$new\"\n"
+        "    fi\nfi\n"
+        "exit 0\n")
+    return postinst, prerm
+
+
 def build_deb(linux_dir, aliases, packages):
     os.makedirs(packages, exist_ok=True)
     mtime = int(time.time())
@@ -523,28 +572,7 @@ def build_deb(linux_dir, aliases, packages):
                f"Homepage: {HOMEPAGE}\n"
                f"Description: {THEME} cursor theme\n"
                f" Chrome Glass remaster: original pixels, crisp edges, 32-512px.\n")
-    # Without the alternatives entry the theme installs but never becomes the
-    # system X cursor theme, so the user has to go hunting for it in a settings
-    # panel - the single most common "the deb did nothing" report for cursor
-    # packages. Priority 20 stays below a user's deliberate pick.
-    index = "/usr/share/icons/%s/index.theme" % THEME
-    postinst = (
-        "#!/bin/sh\nset -e\n"
-        "if command -v update-alternatives >/dev/null 2>&1; then\n"
-        # /usr/share/icons/default is normally provided by another package;
-        # on a bare system it does not exist and update-alternatives refuses
-        # to create the link, which under `set -e` fails the whole install.
-        "    mkdir -p /usr/share/icons/default\n"
-        "    update-alternatives --install /usr/share/icons/default/index.theme "
-        "x-cursor-theme '%s' 20\nfi\n"
-        "exit 0\n" % index)
-    prerm = (
-        "#!/bin/sh\nset -e\n"
-        'if [ "$1" = remove ] || [ "$1" = deconfigure ]; then\n'
-        "    if command -v update-alternatives >/dev/null 2>&1; then\n"
-        "        update-alternatives --remove x-cursor-theme '%s'\n"
-        "    fi\nfi\n"
-        "exit 0\n" % index)
+    postinst, prerm = _deb_scripts()
     ctl = _tar_gz([("control", control.encode(), 0o644, None),
                    ("md5sums", ("\n".join(md5) + "\n").encode(), 0o644, None),
                    ("postinst", postinst.encode(), 0o755, None),
