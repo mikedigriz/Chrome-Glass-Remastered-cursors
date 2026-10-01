@@ -2293,6 +2293,60 @@ def test_package_roundtrip_catches_corruption():
           "a wrong packed hotspot must not compare equal to the canonical one")
 
 
+def test_hotspot_centre():
+    """A centred cursor's hotspot stays on its centre at every size.
+
+    His hotspot is a pixel at 32, and scaled as if the click meant its top-left
+    corner, Cross, IBeam and the size arrows sat a logical unit up and left of
+    their centre from 48 up, 7 px at 256. For each cursor whose hotspot pixel
+    touches the canvas centre, at every size shipped anywhere: how far the
+    hotspot pixel's centre is from the canvas centre, in pixels, the worst.
+    Half a pixel is all an even size allows. Scaled as a corner it has to
+    fail."""
+    eps = 0.5 + 1e-9
+    names = [n for n in B.STATIC if B._hot_point(n) == (16.0, 16.0)]
+    sizes = sorted(set(B.LINUX_SIZES) | set(B.ANI_SIZES) | set(B.SIZES))
+
+    def worst(scale):
+        return max(abs(h + 0.5 - s / 2) for n in names for s in sizes for h in scale(n, s))
+
+    corner = lambda n, s: tuple(round(h * s / 32) for h in B.hotspot(n))
+    clean, hurt = worst(B._scale_hot), worst(corner)
+    check("hotspot centre", len(names) >= 7 and clean <= eps < hurt,
+          "%.1f -> %.1f px off the centre of %d cursors scaled as a corner, bound %.1f"
+          % (clean, hurt, len(names), eps))
+
+
+def test_deb_alternative():
+    """The .deb registers the theme file that inherits this theme.
+
+    The x-cursor-theme alternative becomes the system's default theme, and
+    libXcursor reads only its Inherits. index.theme inherits Adwaita for the
+    names this theme lacks, and registered in its place the pick resolved to
+    Adwaita outright. Read off the postinst: the file it installs as the
+    alternative, and that file's Inherits. Registering index.theme has to fail."""
+    postinst, prerm = B._deb_scripts()
+    files = B._theme_files()
+
+    def inherits(fn):
+        lines = files.get(fn, "").splitlines()
+        return [ln.split("=", 1)[1] for ln in lines if ln.startswith("Inherits=")]
+
+    def reg(script):
+        var = {ln.split("=", 1)[0]: ln.split("=", 1)[1].strip("'")
+               for ln in script.splitlines() if ln[:4] in ("old=", "new=")}
+        return var.get("new", ""), var
+
+    new, var = reg(postinst)
+    ok = ("--install /usr/share/icons/default/index.theme x-cursor-theme \"$new\"" in postinst
+          and "--remove x-cursor-theme \"$new\"" in prerm and reg(prerm)[0] == new)
+    clean = inherits(os.path.basename(new))
+    hurt = inherits(os.path.basename(var.get("old", "")))
+    check("deb alternative", ok and clean == [B.THEME] and hurt != [B.THEME],
+          "registers %s inheriting %s; index.theme would inherit %s"
+          % (os.path.basename(new), clean, hurt))
+
+
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
@@ -2317,6 +2371,7 @@ def main():
               test_morph_steps_visible, test_no_ring_support,
               test_hole_glass, test_product_manifest,
               test_package_roundtrip_catches_corruption,
+              test_hotspot_centre, test_deb_alternative,
               test_rim_layers, test_edge_straight, test_mirror_asym,
               test_straighten_runs, test_outline_borrow, test_material_basis,
               test_material_dc,
