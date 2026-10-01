@@ -1328,6 +1328,41 @@ def test_light_under_keys():
           "with the linear form, bound %d" % (clean, hurt, eps))
 
 
+def test_point_light_gain():
+    """The light arrives on the points at gain 1 below 128.
+
+    _LIGHT_GAIN makes the sweep livelier than his, and on the tip it doubled
+    the light he lets onto it: through a third of the cycle Hand's bottom point
+    at 32 sat 25-35 levels over his and faded out before its end (NEXT.md 123).
+    Hand at 32 against the render keys (_under_keys), within 3 LU of the
+    points: the mean of the levels by which the frames go more than 10 over
+    them. At full gain by the points it has to fail."""
+    eps = 1.0
+    real = LA._add_share
+
+    def full_gain(lin, alpha, point=None):
+        s = real(lin, alpha, point)
+        if s is None or point is None:
+            return s
+        k = float(np.clip((H._AUTHOR_RIM_SIZES[1] - lin.shape[0])
+                          / (H._AUTHOR_RIM_SIZES[1] - H._AUTHOR_RIM_SIZES[0]), 0.0, 1.0))
+        return s / (1.0 - k * point * (1.0 - 1.0 / LA._LIGHT_GAIN))
+
+    def read():
+        return float(np.maximum(_under_keys("Hand", 32, True) - 10.0, 0.0).mean())
+
+    clean = read()
+    LA._add_share = full_gain
+    try:
+        hurt = read()
+    finally:
+        LA._add_share = real
+        LA._phase_cache.clear()
+    check("point light gain", clean <= eps < hurt,
+          "%.2f -> %.2f levels past 10 over the keys by Hand's points at 32 "
+          "at full gain, bound %.2f" % (clean, hurt, eps))
+
+
 def test_point_taps():
     """_point_converge reads each pixel's whole arc near a point.
 
@@ -2363,7 +2398,7 @@ def main():
               test_apex_floor, test_morph_mottle, test_rim_valley,
               test_valley_ridge, test_valley_along, test_point_along,
               test_point_along_alpha,
-              test_author_rim, test_author_rim_light, test_light_under_keys,
+              test_author_rim, test_author_rim_light, test_light_under_keys, test_point_light_gain,
               test_point_taps, test_fold_jitter,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
