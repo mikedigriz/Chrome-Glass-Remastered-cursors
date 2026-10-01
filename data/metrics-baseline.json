@@ -1,7 +1,7 @@
 {
  "AppStarting": {
   "cadence": 1.030333,
-  "cadence_win": 1.015702,
+  "cadence_win": 1.01612,
   "delta_e": 4.955782,
   "density": 0.148981,
   "edge_straight": 0.317345,
@@ -122,7 +122,7 @@
  },
  "Hand": {
   "cadence": 1.026076,
-  "cadence_win": 1.031557,
+  "cadence_win": 1.023227,
   "delta_e": 2.802601,
   "density": 0.204725,
   "edge_straight": 0.317345,
@@ -405,7 +405,7 @@
  },
  "Wait": {
   "cadence": 1.031543,
-  "cadence_win": 1.02072,
+  "cadence_win": 1.02331,
   "delta_e": 4.207822,
   "density": 0.148981,
   "edge_straight": 0.317345,
