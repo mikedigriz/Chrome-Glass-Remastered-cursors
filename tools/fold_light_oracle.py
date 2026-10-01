@@ -84,10 +84,9 @@ def build_frames(name, size, verbose=False):
 
     ship_frames, candidate_frames, diag = [], [], []
     ref = LA._dim_ref(lin, alpha)
-    point = LA._point_weight(name, idx, lin.shape[0])
     for t in range(out_n):
         r = field_light[t] * LA._LIGHT_GAIN * vis[..., None]
-        ship_lin = LA._lit(lin, r, ref, point)
+        ship_lin = LA._lit(lin, r, ref)
 
         delta_coef = coef_phase[t] - coef_anchor                      # (stations,3,4)
         candidate_lin = LA._facet_apply(lin, ship_lin, delta_coef, geom, grid)
