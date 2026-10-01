@@ -115,7 +115,8 @@ _ADD_SHARE = 0.5     # power of a dark pixel's luminance against its
                      # 0.375-0.5 on AppStarting, and falls slowly to 0.625 on
                      # Hand; at 1 it grows again (Wait at 32 2.61 -> 2.97)
 _SHARE_POINT = (3.0, 4.5)  # logical units from a point where _add_share
-                           # is off, and past which it is in full: the
+                           # is off and the light arrives at gain 1, and past
+                           # which the share and the gain are in full: the
                            # sides up to AppStarting's bottom point at 64
                            # are lit 2.4-3.9 LU from it
 _POINT_UNIT = (1.0, 1.75)  # logical units round each sharp convex corner of the
@@ -422,16 +423,26 @@ def _add_share(lin, alpha, point=None):
     large design's own (NEXT.md 122). Not by the points (`point`, _point_weight
     at _SHARE_POINT): the band of light crosses the sides he drew bright up to
     the tip, and with the share the bottom point of AppStarting at 64 stayed
-    44 levels under the keys."""
+    44 levels under the keys.
+
+    By the points the light arrives at gain 1, not _LIGHT_GAIN, on the same
+    sizes:
+    the gain is a sweep livelier than his, and on the tip it doubled the light
+    he lets onto it, so that through a third of the cycle Hand's bottom point
+    at 32 sat 25-35 levels over his and the keys' and faded out before its end.
+    Mean error against the keys within 3 LU of the points at 32: Hand 2.06 ->
+    1.20, Wait 1.56 -> 0.76, AppStarting 2.19 -> 1.21. At 256 it took the
+    sheen in the tip's disc from his: Wait 11.1 -> 9.2 against his 10.7,
+    AppStarting 14.1 -> 11.8 against 14.7."""
     full, gone = H._AUTHOR_RIM_SIZES
     k = float(np.clip((gone - lin.shape[0]) / (gone - full), 0.0, 1.0))
     if k <= 0.0:
         return None
     y, yn = _neigh_lum(lin, alpha)
     s = np.clip(y / np.maximum(yn, 1e-6), 0.0, 1.0) ** _ADD_SHARE
-    if point is not None:
-        k = k * (1.0 - point)
-    return 1.0 - k * (1.0 - s)
+    if point is None:
+        return 1.0 - k * (1.0 - s)
+    return (1.0 - k * (1.0 - point) * (1.0 - s)) * (1.0 - k * point * (1.0 - 1.0 / _LIGHT_GAIN))
 
 
 def _lit(lin, r, ref=None, share=None):
