@@ -108,6 +108,16 @@ _DIM_SHARE = 0.75    # how far a dark pixel's share of the leaving light is take
                      # outright) is clean but lighter than the render's own keys
                      # at their phases, 0.75 is the least error against them, and
                      # at 0.5 and under the blots are still there by eye
+_ADD_SHARE = 0.5     # power of a dark pixel's luminance against its
+                     # neighbourhood's that it takes the arriving light by,
+                     # see _add_share. The error against the render keys at
+                     # their phases, 32-96, is least at 0.25-0.5 on Wait and
+                     # 0.375-0.5 on AppStarting, and falls slowly to 0.625 on
+                     # Hand; at 1 it grows again (Wait at 32 2.61 -> 2.97)
+_SHARE_POINT = (3.0, 4.5)  # logical units from a point where _add_share
+                           # is off, and past which it is in full: the
+                           # sides up to AppStarting's bottom point at 64
+                           # are lit 2.4-3.9 LU from it
 _POINT_UNIT = (1.0, 1.75)  # logical units round each sharp convex corner of the
                      # outline inside which _field_at acts in full,
                      # and past which it is gone. The points are where the rim
@@ -283,12 +293,14 @@ def periodic_at(field, phases, k=HARMONICS):
 _point_cache = {}
 
 
-def _point_weight(name, idx, n):
-    """(n, n): 1 within _POINT_UNIT[0] logical units of a sharp convex corner
-    of the canonical outline, 0 past _POINT_UNIT[1], on an n-pixel grid."""
-    key = (name, idx, n)
+def _point_weight(name, idx, n, unit=None):
+    """(n, n): 1 within unit[0] logical units of a sharp convex corner of the
+    canonical outline, 0 past unit[1], on an n-pixel grid; unit _POINT_UNIT
+    by default."""
+    unit = _POINT_UNIT if unit is None else unit
+    key = (name, idx, n, unit)
     if key not in _point_cache:
-        r0, r1 = _POINT_UNIT
+        r0, r1 = unit
         L = n / float(V.LOGICAL)
         ys, xs = np.mgrid[0:n, 0:n] + 0.5
         w = np.zeros((n, n))
@@ -323,7 +335,7 @@ def _field_at(raw, phases, k=HARMONICS, point=None):
 
 
 def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
-                  point=None, plain=None):
+                  point=None, plain=None, share=None):
     """out_n phases spaced by equal change of the picture, not by equal time.
 
     Measured on the rendered colour and not on the field itself: the light model
@@ -333,7 +345,8 @@ def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
     all (peak/mean 1.39 -> 1.57). Rendered at a decimated size - the pace is one
     scalar per phase, and 216 frames of it are needed. `point` maps a grid size
     to _point_weight on it, so the pace is measured on the frames that ship.
-    `plain` is _plain_lin, as _dim_ref takes it."""
+    `plain` is _plain_lin, as _dim_ref takes it, and `share` _add_share at the
+    full size."""
     d = max(1, min(_PACE_DECIM, lin.shape[0] // _PACE_GRID))
     lin_s, vis_s, seen_s = lin[::d, ::d], vis[::d, ::d], seen[::d, ::d]
     raw_s = raw[:, ::d, ::d] if raw.shape[1] == lin.shape[0] else raw
@@ -344,10 +357,11 @@ def _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n=OUT_N, k=HARMONICS,
         return np.arange(out_n) / out_n
     plain_s = lin_s if plain is None else plain[::d, ::d]
     ref_s = _dim_ref(plain_s, alpha[::d, ::d])
+    share_s = None if share is None else share[::d, ::d]
     # float, not the uint8 linear_to_srgb hands back: a step of -3 levels read
     # as 253 turns the pace curve into noise, and the pacing into nothing
     shot = [V.linear_to_srgb(_lit(lin_s, f[i] * _LIGHT_GAIN * vis_s[..., None],
-                                  ref_s)).astype(np.float64)
+                                  ref_s, share_s)).astype(np.float64)
             for i in range(_PACE_FINE)]
     step = np.array([float(np.abs(shot[(i + 1) % _PACE_FINE][seen_s]
                                   - shot[i][seen_s]).mean()) for i in range(_PACE_FINE)])
@@ -380,19 +394,52 @@ def _dim_ref(lin, alpha):
     neighbourhood (the alpha-weighted mean over _MASTER_UNIT, the same unit the
     loss was blurred over); below that, _DIM_SHARE of the way toward the
     neighbourhood's, geometrically."""
+    y, yn = _neigh_lum(lin, alpha)
+    return np.where(y < yn, np.maximum(y, 1e-6) ** (1.0 - _DIM_SHARE) * yn ** _DIM_SHARE, y)
+
+
+def _neigh_lum(lin, alpha):
+    """Luminance, and its alpha-weighted mean over _MASTER_UNIT."""
     size = lin.shape[0]
     y = lin[..., 0] * 0.2126 + lin[..., 1] * 0.7152 + lin[..., 2] * 0.0722
     w = np.clip(alpha / 255.0, 0.0, 1.0)
     yn = (H._smooth1(y * w, _MASTER_UNIT, size)
           / np.maximum(H._smooth1(w, _MASTER_UNIT, size), 1e-6))
-    return np.where(y < yn, np.maximum(y, 1e-6) ** (1.0 - _DIM_SHARE) * yn ** _DIM_SHARE, y)
+    return y, yn
 
 
-def _lit(lin, r, ref=None):
+def _add_share(lin, alpha, point=None):
+    """What _lit scales the arriving light by, per pixel; None from 128.
+
+    The field is blurred, and it lays the glass's sweep on the dark rim beside
+    it in full: through the cycle at 32-96 the rim he drew dark rose up to
+    twice as far as his and the render keys' did, and warm (on the dark
+    stations of Wait's rim at 32, R 13 levels over his across the keys). A
+    pixel darker than its neighbourhood takes (y / yn) ** _ADD_SHARE of the
+    light arriving there, in full to 64 and gone by 128 as _author_rim. Over
+    the whole cursor at 256 it cost the gate on cycle motion, 0.94 -> 0.76 on
+    AppStarting: there the sweep over the dark facets is the motion, and the
+    large design's own (NEXT.md 122). Not by the points (`point`, _point_weight
+    at _SHARE_POINT): the band of light crosses the sides he drew bright up to
+    the tip, and with the share the bottom point of AppStarting at 64 stayed
+    44 levels under the keys."""
+    full, gone = H._AUTHOR_RIM_SIZES
+    k = float(np.clip((gone - lin.shape[0]) / (gone - full), 0.0, 1.0))
+    if k <= 0.0:
+        return None
+    y, yn = _neigh_lum(lin, alpha)
+    s = np.clip(y / np.maximum(yn, 1e-6), 0.0, 1.0) ** _ADD_SHARE
+    if point is not None:
+        k = k * (1.0 - point)
+    return 1.0 - k * (1.0 - s)
+
+
+def _lit(lin, r, ref=None, share=None):
     """One frame's linear colour: the canonical glass under a light residual.
 
     `ref` is _dim_ref of the same frame; None divides by each pixel's own
-    luminance, which is what put the dark rim on _DIM_FLOOR in blots.
+    luminance, which is what put the dark rim on _DIM_FLOOR in blots. `share`
+    is _add_share, what the arriving light is scaled by.
 
     The leaving light is taken as a power of the ratio, (1 + x/G)^G with G the
     _LIGHT_GAIN already in `x`: the same as the linear 1 + x to first order,
@@ -420,6 +467,8 @@ def _lit(lin, r, ref=None):
         G = _LIGHT_GAIN
         f = np.clip(np.clip(1.0 + x / G, 0.0, 1.0) ** G, _DIM_FLOOR, 1.0)
         add = np.clip(r, 0.0, None)
+        if share is not None:
+            add = add * share[..., None]
         return lin * f[..., None] + add * _gamut_scale(lin * f[..., None], add)[..., None]
     return lin + r * _gamut_scale(lin, r)[..., None]
 
@@ -680,9 +729,11 @@ def paced_phases(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     key = (name, size, out_n, k, idx)
     if key not in _phase_cache:
         _idx, _b, lin, alpha, raw, _n, vis, seen, anchor = _setup(name, size, k, idx)
+        plain = _plain_lin(name, size, idx)
+        share = _add_share(plain, alpha, _point_weight(name, idx, size, _SHARE_POINT))
         _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor, alpha, out_n, k,
                                           functools.partial(_point_weight, name, idx),
-                                          _plain_lin(name, size, idx))
+                                          plain, share)
     return _phase_cache[key]
 
 
@@ -695,6 +746,8 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
     detail is already in the master underneath it."""
     idx = canonical_index(name) if idx is None else idx
     _i, base, lin, alpha, raw, n, vis, seen, anchor = _setup(name, size, k, idx)
+    plain = _plain_lin(name, size, idx)
+    share = _add_share(plain, alpha, _point_weight(name, idx, size, _SHARE_POINT))
     key = (name, size, out_n, k, idx)
     if key in _phase_cache:
         phases = _phase_cache[key]
@@ -702,7 +755,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
         phases = _phase_cache[key] = _paced_phases(raw, lin, vis, seen, anchor,
                                                    alpha, out_n, k,
                                                    functools.partial(_point_weight, name, idx),
-                                                   _plain_lin(name, size, idx))
+                                                   plain, share)
     field = _field_at(raw, phases, k, _point_weight(name, idx, raw.shape[1])) - anchor
     facet = None
     coef_anchor = coef_phase = None
@@ -712,7 +765,6 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             _geometry, coefficients, _grid = facet
             coef_anchor = periodic_at(coefficients, [idx / n], k)[0]
             coef_phase = periodic_at(coefficients, phases, k)
-    plain = _plain_lin(name, size, idx)
     ref = _dim_ref(plain, alpha)
     frames = []
     for t in range(out_n):
@@ -722,7 +774,7 @@ def anim_frames_lighting(name, size, out_n=OUT_N, k=HARMONICS, idx=None):
             r = np.dstack([H._smooth1(H._resample_signed(field[t, ..., c], size),
                                       _LIGHT_UNIT, size) for c in range(3)]) * _LIGHT_GAIN
         r = r * vis[..., None]
-        frame_lin = _lit(lin, r, ref)
+        frame_lin = _lit(lin, r, ref, share)
         if facet is not None:
             geometry, _coefficients, grid = facet
             frame_lin = _facet_apply(lin, frame_lin,

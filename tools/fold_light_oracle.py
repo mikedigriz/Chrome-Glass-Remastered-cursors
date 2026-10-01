@@ -84,9 +84,10 @@ def build_frames(name, size, verbose=False):
 
     ship_frames, candidate_frames, diag = [], [], []
     ref = LA._dim_ref(lin, alpha)
+    share = LA._add_share(lin, alpha, LA._point_weight(name, idx, lin.shape[0], LA._SHARE_POINT))
     for t in range(out_n):
         r = field_light[t] * LA._LIGHT_GAIN * vis[..., None]
-        ship_lin = LA._lit(lin, r, ref)
+        ship_lin = LA._lit(lin, r, ref, share)
 
         delta_coef = coef_phase[t] - coef_anchor                      # (stations,3,4)
         candidate_lin = LA._facet_apply(lin, ship_lin, delta_coef, geom, grid)
