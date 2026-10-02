@@ -5670,6 +5670,10 @@ _POINT_ALONG_ZONE = (0.3, 0.3, 3.0, 1.0)   # LU from a point it starts, its ramp
 _POINT_ALONG_DEPTH = (0.4, 0.2)            # LU from the edge in full, and the fade
 _POINT_ALONG_AGREE = (0.8, 0.95)           # cosine of the two normals: not counted
                                            # below, in full above
+_POINT_ALONG_BACK = (4, 2.0)               # smoothings along the edge and gain of
+                                           # the darkness the mean puts back: one
+                                           # unsmoothed step brought the dots back
+                                           # (point along 5.9-7.1), this 4.3
 _POINT_ALONG_LIT = 0.5                     # LU off the fold toward the light a point
                                            # must lie
 
@@ -5709,24 +5713,42 @@ def _point_along(im, name, idx, size):
     if w.max() < 1e-6:
         return im
     al = a[..., 3] / 255.0
-    pre = a[..., :3] * al[..., None]
     nrm = np.dstack([nx, ny])
     py, px = np.mgrid[0:size, 0:size].astype(np.float64)
     lo, hi = _POINT_ALONG_AGREE
-    acc = np.zeros_like(pre)
-    wsum = np.zeros((size, size))
+    taps = []
     for k, wt in _VALLEY_ALONG:
         if k == 0:
-            acc += pre * wt
-            wsum += al * wt
+            taps.append((None, None, wt))
             continue
         sx, sy = px - ny * k, py + nx * k
         s_n = _sample(nrm, sx, sy)
         ok = wt * np.clip((s_n[..., 0] * nx + s_n[..., 1] * ny - lo) / (hi - lo), 0.0, 1.0)
-        acc += _sample(pre, sx, sy) * ok[..., None]
-        wsum += _sample(al[..., None], sx, sy)[..., 0] * ok
+        taps.append((sx, sy, ok))
+
+    def mean_along(c):
+        pre = c * al[..., None]
+        acc = np.zeros_like(pre)
+        wsum = np.zeros((size, size))
+        for sx, sy, ok in taps:
+            if sx is None:
+                acc += pre * ok
+                wsum += al * ok
+            else:
+                acc += _sample(pre, sx, sy) * np.asarray(ok)[..., None]
+                wsum += _sample(al[..., None], sx, sy)[..., 0] * ok
+        return acc / np.maximum(wsum, 1e-6)[..., None], wsum
+
+    c, wsum = mean_along(a[..., :3])
+    # the mean weighted by alpha takes darkness off the translucent hairline
+    # (5-18% by the wing tip on a light ground at 128-256); put back what the
+    # window lost, smoothed along the edge so the dots do not come back with it
+    back = c - mean_along(c)[0]
+    for _ in range(_POINT_ALONG_BACK[0]):
+        back = mean_along(back)[0]
+    c = c + _POINT_ALONG_BACK[1] * back
     w = w * (wsum > 1e-3)
-    rgb = a[..., :3] + (acc / np.maximum(wsum, 1e-6)[..., None] - a[..., :3]) * w[..., None]
+    rgb = a[..., :3] + (c - a[..., :3]) * w[..., None]
     return _compose(np.clip(rgb, 0, 255), a[..., 3])
 
 
