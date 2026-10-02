@@ -3631,6 +3631,14 @@ _RIM_XFER_DEPTH = 1.0      # logical units inward a section is read over. Wider
                            # Arrow's fold_jag went 53.9 -> 55.6 for a rim gain
                            # this window gets anyway.
 _RIM_XFER_STEP = 0.125     # ...and the spacing of its samples
+_RIM_XFER_DETAIL = 3       # samples across depth the master's own lines are
+                           # kept under (_rim_coarse): its dark hairline and the
+                           # lit line inside it, the chrome 1.1.0 had and the
+                           # analytic section took off (docs/dev/IDEAL.md). At
+                           # 5 the valley behind Arrow's blade came back past
+                           # selftest's bound (4.3 > 4.0 at 512)
+_RIM_XFER_DETAIL_FOR = {"Help": 1}   # Help's fold fit reads them as a second
+                           # fold (fold_unident 0.737 -> 0.895)
 _RIM_XFER_STATION = 0.25   # logical units of arc between sections
 _RIM_XFER_ARC = 1.0        # half-width of the mean that runs along the arc.
                            # Without it each ray prints its own correction and
@@ -3716,6 +3724,19 @@ def _sample1(field, x, y):
     return _sample(field[..., None], x, y)[..., 0]
 
 
+def _rim_coarse(mr, inside, name):
+    """The section's rise without its lines: a mean across depth over
+    _RIM_XFER_DETAIL samples. What finer than that the master drew - the dark
+    hairline and the lit line inside it - is the chrome, not a path to fix."""
+    w = _RIM_XFER_DETAIL_FOR.get(name, _RIM_XFER_DETAIL)
+    if w <= 1:
+        return mr
+    pad = np.pad(mr, ((0, 0), (w // 2, w // 2)), mode="edge")
+    k = np.ones(w) / w
+    out = np.apply_along_axis(lambda c: np.convolve(c, k, mode="valid"), 1, pad)
+    return out * inside
+
+
 def _rim_native(rgb, name, idx, size):
     """Rewrite how the glass rises off its edge, keeping everything else, with
     every section read at this size. _rim_transfer is the way in."""
@@ -3773,7 +3794,7 @@ def _rim_native(rgb, name, idx, size):
     k = np.divide(br[:, 0], mr[:, 0], out=np.ones(len(br)),
                   where=np.abs(mr[:, 0]) > 1e-6)
     br = br / np.clip(np.abs(k), 0.2, 5.0)[:, None]
-    corr = br - mr
+    corr = br - _rim_coarse(mr, inside, name)
     corr[~keep] = 0.0
     w = max(1, int(round(_RIM_XFER_ARC / _RIM_XFER_STATION)))
     pad = np.concatenate([corr[-w:], corr, corr[:w]], 0)          # the arc closes
