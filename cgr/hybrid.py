@@ -3158,6 +3158,14 @@ def _tip_relight(rgb, name, idx, size):
 
 
 _EDGE_SHADOW_CURSORS = _WEDGE_TIPS | {"Help"} | {"Handwriting", "NO"}
+_EDGE_SHADOW_SHARE = {"Handwriting": 0.7}   # of the lift taken. Lifted in full,
+                           # Handwriting lost the thin dark line inside its
+                           # rim that release 1.1.0 kept and reads as chrome:
+                           # crisp X 0.77 -> 0.87 of 1.1.0 at 256 at 0.7,
+                           # along-edge A 0.62 -> 0.67 (docs/dev/IDEAL.md).
+                           # Below 0.7 the line reaches the fold fit's window
+                           # (fold_step 0.51 -> 0.45 at 0.6, 0.36 at 0.5); NO
+                           # at half goes past A's ceiling (1.08)
 # Handwriting and NO were dropped from this set after the first gate run, on
 # two readings: Handwriting's morph_iou_min fell below its ratchet (0.437 ->
 # 0.385) and NO's fold_luma_step nearly doubled (68 -> 90). Added back
@@ -3336,7 +3344,7 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     lit = np.stack([_closed(rgb[..., c]) for c in range(3)], axis=-1)
     lum, lit_lum = rgb.mean(-1), lit.mean(-1)
     dip = np.clip((lit_lum - lum - _EDGE_SHADOW_DIP_CAP) / 20.0, 0.0, 1.0)
-    lift = _smooth1(dip * w, 0.2, size)
+    lift = _smooth1(dip * w, 0.2, size) * _EDGE_SHADOW_SHARE.get(name, 1.0)
     return rgb * (1.0 - lift[..., None]) + lit * lift[..., None]
 
 
@@ -5295,6 +5303,14 @@ _BAND_LINE_CAP = 10.0    # ...up to this weight
 _BAND_TRUST = 0.35 * 255  # alpha below which the straight colour is not trusted
 _BAND_CONS = 1.0         # LU of arc the section-mean balance is smoothed over
 _BAND_LUM = np.array([0.2126, 0.7152, 0.0722])
+_BAND_CUBIC = {"Handwriting"}   # read with _band_cubic, the rest bilinear.
+                           # Help's fold fit takes the sharper rim for a second
+                           # fold (fold_unident 0.737 -> 0.842); on
+                           # _VALLEY_CURSORS the valley behind the blade comes
+                           # back (selftest rim valley 4.4 > 4.0, valley ridge
+                           # 4.0 > 3.0); AppStarting and Wait are already as
+                           # sharp as 1.1.0 and pay in A (0.72 -> 0.77,
+                           # 0.77 -> 0.82, past the ceiling)
 
 
 def _band_bilinear(img, x, y):
@@ -5307,6 +5323,32 @@ def _band_bilinear(img, x, y):
         fx, fy = fx[..., None], fy[..., None]
     return (img[y0, x0] * (1 - fx) * (1 - fy) + img[y0, x0 + 1] * fx * (1 - fy)
             + img[y0 + 1, x0] * (1 - fx) * fy + img[y0 + 1, x0 + 1] * fx * fy)
+
+
+def _band_cubic(img, x, y):
+    """Catmull-Rom at (x, y). The sections are read off the pixels and laid
+    back onto them, and bilinear at a half-pixel offset is a [0.5 0.5] blur:
+    twice over it took a quarter of the rim's sharpness across the edge with
+    no averaging at all (Handwriting crisp X 10.65 -> 9.58 at 256, IDEAL.md)."""
+    h, w = img.shape[:2]
+    x = np.clip(x, 0, w - 1.001)
+    y = np.clip(y, 0, h - 1.001)
+    x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+
+    def taps(t):
+        t2, t3 = t * t, t * t * t
+        return ((-t3 + 2 * t2 - t) / 2, (3 * t3 - 5 * t2 + 2) / 2,
+                (-3 * t3 + 4 * t2 + t) / 2, (t3 - t2) / 2)
+
+    wx, wy = taps(x - x0), taps(y - y0)
+    if img.ndim == 3:
+        wx, wy = [v[..., None] for v in wx], [v[..., None] for v in wy]
+    out = 0.0
+    for j in range(4):
+        yi = np.clip(y0 - 1 + j, 0, h - 1)
+        row = sum(img[yi, np.clip(x0 - 1 + i, 0, w - 1)] * wx[i] for i in range(4))
+        out = out + row * wy[j]
+    return out
 
 
 @functools.lru_cache(maxsize=None)
@@ -5457,7 +5499,8 @@ def _band_target(rgba, name, idx, size):
     X = (x[None] + t * nx[None]) * k - 0.5
     Y = (y[None] + t * ny[None]) * k - 0.5
     pm = np.dstack([rgba[..., :3] * rgba[..., 3:4] / 255.0, rgba[..., 3]])
-    S = _band_bilinear(pm, X, Y)                              # (ND, NS, 4) premultiplied
+    read = _band_cubic if name in _BAND_CUBIC else _band_bilinear
+    S = np.maximum(read(pm, X, Y), 0.0)                       # (ND, NS, 4) premultiplied
     rgb = S[..., :3] / np.maximum(S[..., 3:4], 1e-3) * 255.0
     lum_s = _band_smooth(rgb @ _BAND_LUM, side, 0.25)
     lo, hi = int(_BAND_EDGE[0] / _BAND_DSTEP), int(_BAND_EDGE[1] / _BAND_DSTEP)
