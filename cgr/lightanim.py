@@ -147,7 +147,6 @@ _FACET_REACH = H._RESTEP_REACH
 _FACET_PITCH = H._RESTEP_PITCH
 _FACET_STATIONS = H._RESTEP_STATIONS
 _FACET_FIT = H._RESTEP_FIT
-_FACET_WIDTH = H._RESTEP_WIDTH
 _FACET_SUPPORT = H._RESTEP_SUPPORT
 _FACET_FADE = H._RESTEP_FADE
 _FACET_PROTECT = H._RESTEP_PROTECT
@@ -647,10 +646,11 @@ def _facet_extract_coefficients(geometry):
     return coef
 
 
-def _facet_reconstruct_local(coef_row, ns_grid, centres):
-    """Reconstruct the two local planes through one fixed-width tanh step."""
+def _facet_reconstruct_local(coef_row, ns_grid, centres, size):
+    """Reconstruct the two local planes through one tanh step, _fold_restep's
+    width at `size`."""
     x = ns_grid[None, :] - centres[:, None]
-    phi = 0.5 * (1.0 + np.tanh(x / _FACET_WIDTH))
+    phi = 0.5 * (1.0 + np.tanh(x / H._restep_width(size)))
     a_left, k_left, a_right, k_right = (coef_row[..., i] for i in range(4))
     left = a_left[:, None, :] + k_left[:, None, :] * x[:, :, None]
     right = a_right[:, None, :] + k_right[:, None, :] * x[:, :, None]
@@ -714,7 +714,8 @@ def _facet_model(name, size, idx):
 
 def _facet_apply(lin, ship_lin, delta_coef, geometry, grid):
     """Replace only the guarded fold band of a normally lit frame."""
-    local = _facet_reconstruct_local(delta_coef, geometry["ns"], geometry["c"])
+    local = _facet_reconstruct_local(delta_coef, geometry["ns"], geometry["c"],
+                                     geometry["size"])
     fold_delta = _facet_remap_field(grid, local)
     gamut = _gamut_scale(np.clip(lin, 0.0, 1.0), fold_delta)
     fold_lin = lin + fold_delta * gamut[..., None]

@@ -99,7 +99,7 @@ def build_frames(name, size, verbose=False):
         candidate_frames.append(np.asarray(H._compose(cand_srgb, alpha), dtype=np.float64))
 
         if verbose:
-            local = LA._facet_reconstruct_local(delta_coef, geom["ns"], geom["c"])
+            local = LA._facet_reconstruct_local(delta_coef, geom["ns"], geom["c"], geom["size"])
             fold_delta = LA._facet_remap_field(grid, local)
             diag.append(dict(t=t, phase=float(phases[t]),
                               weight_max=float(grid["weight"].max()),

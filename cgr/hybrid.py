@@ -4281,9 +4281,17 @@ _TEMPER_PER_CURSOR = {("Handwriting", "relight"): _LEGACY_TEMPER}
 # measuring a flat wash as an improvement. See NEXT.md item 22.
 
 
-_RESTEP_WIDTH = 0.60      # logical units of transition to install. The author's
-                          # own, measured 2026-08-21: s = 0.60 at 128, 256 and
-                          # 512 alike, where ours followed the pixel pitch down
+_RESTEP_WIDTH = 0.60      # logical units of transition to install at 32, and
+                          # _RESTEP_PIXEL above it (_restep_width). His,
+                          # measured 2026-08-21: s = 0.60 on his 32px frames
+                          # read at 128, 256 and 512 alike - but that is his grid
+                          # pitch, not a width he drew, and held at 0.60 units
+                          # it smeared the fold over 20 px at 512, where release
+                          # 1.1.0 had the master's crease (NEXT.md 125)
+_RESTEP_PIXEL = 0.75      # hardware pixels of transition from 64 up: his 0.6 of
+                          # his own pixel, kept just over foldfit's resolution
+                          # (2.2 s past one pixel), so the fold is a crease and
+                          # not the master's one-pixel discontinuity
 _RESTEP_SUPPORT = 1.25    # logical units either side of the transition this
                           # stage may touch. Outside it the frame is unchanged,
                           # and tools/selftest.py checks that as a contract -
@@ -4455,6 +4463,12 @@ def _restep_dipole_amp(name, idx, size, ts):
     return np.clip(np.interp(ts, np.array(at)[ok], sm[ok]), 0.0, None)
 
 
+def _restep_width(size):
+    """Transition width at `size`, logical units: _RESTEP_WIDTH at 32,
+    _RESTEP_PIXEL hardware pixels where that is narrower."""
+    return min(_RESTEP_WIDTH, _RESTEP_PIXEL * V.LOGICAL / float(size))
+
+
 def _fold_restep(rgb, name, idx, size):
     """Replace the fold's cross-section transition, and nothing else.
 
@@ -4592,7 +4606,7 @@ def _fold_restep(rgb, name, idx, size):
     for k in good:
         run, nn, yy = runs[k]
         ce, al, kl, ar, kr = par[k]
-        s = 0.5 * (1.0 + np.tanh((nn - ce) / _RESTEP_WIDTH))
+        s = 0.5 * (1.0 + np.tanh((nn - ce) / _restep_width(size)))
         want = (1.0 - s) * (al + kl * (nn - ce)) + s * (ar + kr * (nn - ce))
         if amp is not None:
             want = want + amp[k] * np.interp(nn - ce, dip_x, dip_y,
