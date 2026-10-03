@@ -2838,6 +2838,20 @@ _TIP_RELIGHT_ALONG_FLAT = 0.25  # share of the chord replaced at full weight
 _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
                              # reaches down in total (flat part plus fade),
                              # before it fades back to the AI master
+_TIP_RELIGHT_RIM_KEEP = {"Arrow": (0.9, 1.4, 2.0, 4.0),
+                         "Handwriting": (0.9, 1.4, 3.0, 5.0)}
+                             # LU from the outline the rim band is left to
+                             # the master (full to the first, none past the
+                             # second), from the third LU off the point to the
+                             # fourth: the flat facet erased the rim's dark
+                             # hairline and lit line down both sides. Crisp X
+                             # Arrow 0.83 -> 0.89, 0.89 -> 0.96, Handwriting
+                             # 0.87 -> 0.93, 0.89 -> 0.95 at 256 / 512.
+                             # Handwriting from 3 LU: nearer, its master's
+                             # black lines at the point come back (selftest
+                             # apex floor, NEXT.md 113). Hand pays as much in
+                             # A as it gets in X, Wait and AppStarting are
+                             # crisp already (docs/dev/IDEAL.md)
 
 # Per-cursor fold shape near the point.
 #
@@ -3219,7 +3233,15 @@ def _tip_relight(rgb, name, idx, size):
     else:
         lvl_chroma = (chroma * band_w).sum((0, 1)) / max(float(band_w.sum()), 1e-6)
     new_chroma = chroma * (1.0 - band_w) + lvl_chroma * band_w
-    return np.clip(new_lum[..., None] + new_chroma, 0, 255)
+    out = np.clip(new_lum[..., None] + new_chroma, 0, 255)
+    if name in _TIP_RELIGHT_RIM_KEEP:
+        r0, r1, a0, a1 = _TIP_RELIGHT_RIM_KEEP[name]
+        d = _edge_distance_at(name, idx, size)
+        ap = np.hypot(px - tx, py - ty)
+        keep = (np.clip((r1 - d) / (r1 - r0), 0.0, 1.0)
+                * np.clip((ap - a0) / (a1 - a0), 0.0, 1.0))[..., None]
+        out = out * (1.0 - keep) + rgb * keep
+    return out
 
 
 _EDGE_SHADOW_CURSORS = _WEDGE_TIPS | {"Help"} | {"Handwriting", "NO"}
