@@ -11,12 +11,29 @@ python3 -m cgr.build
 
 This rebuilds `dist/`, `packages/` and the previews, then checks the result against the original (alpha, saturation, timing) and warns if anything drifted.
 
-Two escape hatches:
+Optional: a CUDA GPU makes the build and `tools/analyze.py` several times faster (about 3 min against 10 on 12 cores; the gate 1.5 min). It computes the same pixels as the CPU path - masks, distances and resamples are bit-exact, the fold fits agree to 1e-6 with identical decisions (`python tools/gpu_parity.py`).
+
+```sh
+pip install -r requirements-gpu.txt
+CGR_BACKEND=gpu python3 -m cgr.build
+```
+
+Without `CGR_BACKEND=gpu` nothing imports torch.
+
+The defaults are gentle: render processes run below normal priority, six at most, so the desktop stays usable during a build. More processes do not make it faster - the GPU and the cores are shared, and ten workers measured the same as six.
 
 | Variable | Effect |
 |---|---|
 | `BUILD_SERIAL=1` | render single-core instead of across every core |
 | `ALLOW_METRIC_WARN=1` | ship despite a drift warning |
+| `CGR_BACKEND=gpu` | run the heavy stages on the GPU (default `cpu`) |
+| `CGR_GPU_WORKERS=N` | processes sharing the GPU (default: half the cores, at most 6) |
+| `CGR_GPU_MEM_MB=N` | VRAM cap per process (default 1024) |
+| `CGR_GPU_CHUNK_MB=N` | size of one temporary tensor (default 48) |
+| `CGR_GPU_FIT_MB=N` | the same for the fold width search, which is launch-bound and wants big chunks (default 300) |
+| `CGR_NICE=0` | do not lower the priority of GPU workers (Windows) |
+| `CGR_WEBP_METHOD=N` | webp encoder effort for the README animations: 4 (default, seconds) or 6 (smallest files, about two minutes for the strip) |
+| `CGR_JOB_LOG=1` | print how long each warm-up frame took |
 
 `dist/original/Chrome Glass (2006)/` is the untouched 2006 set rebuilt as a reference to diff against. It is deliberately local only - not packaged, not released.
 

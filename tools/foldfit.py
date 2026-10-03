@@ -62,6 +62,7 @@ geometric. Any station count of zero is a fault in this file until proven
 otherwise.
 """
 import functools
+import os
 
 import numpy as np
 from PIL import Image
@@ -153,8 +154,8 @@ def _robust_line(n, y, pivot):
             break
         k, a = np.polyfit(x[keep], y[keep], 1)
         r = y - (a + k * x)
-        med = float(np.median(r[keep]))
-        mad = float(np.median(np.abs(r[keep] - med)))
+        med = H._median(r[keep])
+        mad = H._median(np.abs(r[keep] - med))
         if mad < 1e-9:
             break
         new = np.abs(r - med) < 3.0 * 1.4826 * mad
@@ -224,8 +225,8 @@ def _mad_scale(r):
     r = np.asarray(r, dtype=np.float64)
     if not len(r):
         return SOFT_L1_FLOOR
-    med = float(np.median(r))
-    mad = float(np.median(np.abs(r - med)))
+    med = H._median(r)
+    mad = H._median(np.abs(r - med))
     return max(SOFT_L1_FLOOR, 1.4826 * mad)
 
 
@@ -372,6 +373,30 @@ def _dipole_of(m):
 
 @functools.lru_cache(maxsize=None)
 def dipole_eligible(name):
+    """_dipole_eligible, shared between the processes of one build run through
+    the run's frame cache directory (CGR_FRAME_CACHE, see hybrid._disk_frame):
+    it is a few seconds a cursor and every worker would take it again."""
+    d = os.environ.get("CGR_FRAME_CACHE")
+    if not d:
+        return _dipole_eligible(name)
+    path = os.path.join(d, "eligible_%s.txt" % name)
+    try:
+        with open(path) as fh:
+            return fh.read().strip() == "1"
+    except OSError:
+        pass
+    got = _dipole_eligible(name)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "w") as fh:
+            fh.write("1" if got else "0")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return got
+
+
+def _dipole_eligible(name):
     """Does this cursor's fold carry the shared dipole at all?
 
     Decided on his art alone and by sign only, so there is nothing to tune and
@@ -387,8 +412,8 @@ def dipole_eligible(name):
     votes = 0
     for idx in range(len(H.BY_NAME[name]["frames"])):
         rows = []
-        for t in np.linspace(T_LO, T_HI, STATIONS):
-            m = measure(name, idx, DIPOLE_SIZE, _author_at, t, joint=False)
+        for m in measure_many(name, idx, DIPOLE_SIZE, _author_at,
+                              np.linspace(T_LO, T_HI, STATIONS), joint=False):
             if m is None:
                 continue
             g = _dipole_of(m)
@@ -406,7 +431,21 @@ DIPOLE_SIZE = 256       # the rung eligibility is decided on. The sign of the
                         # cursor, so one rung is read rather than three
 
 
-def section(name, idx, size, get, t, inset=RIM_INSET):
+def _planes(name, idx, size, get, memo):
+    """The three fields a section is read from. With a `memo` (one measure_many
+    call) they are made once instead of once per station."""
+    if memo is not None and "planes" in memo:
+        return memo["planes"]
+    a = get(name, idx, size)
+    out = (np.ascontiguousarray(a[..., :3].mean(-1)),
+           np.ascontiguousarray(a[..., 3].astype(np.float64)),
+           H._edge_distance_at(name, idx, size))
+    if memo is not None:
+        memo["planes"] = out
+    return out
+
+
+def section(name, idx, size, get, t, inset=RIM_INSET, memo=None):
     """One cross-section at fraction `t` along the chord, or None."""
     ch = H._fold_chord(name, idx)
     if ch is None:
@@ -421,11 +460,11 @@ def section(name, idx, size, get, t, inset=RIM_INSET):
     L = size / V.LOGICAL
     n = np.arange(-REACH, REACH + STEP, STEP)
     sx, sy = (px + n * nx) * L - 0.5, (py + n * ny) * L - 0.5
-    a = get(name, idx, size)
-    lum = H._sample1(np.ascontiguousarray(a[..., :3].mean(-1)), sx, sy)
-    alpha = H._sample1(np.ascontiguousarray(a[..., 3].astype(np.float64)), sx, sy)
+    lum_f, alpha_f, dist_f = _planes(name, idx, size, get, memo)
+    lum = H._sample1(lum_f, sx, sy)
+    alpha = H._sample1(alpha_f, sx, sy)
     # already in logical units - analyze compares it against _FOLD_INSET raw
-    dist = H._sample1(H._edge_distance_at(name, idx, size), sx, sy)
+    dist = H._sample1(dist_f, sx, sy)
     ok = (dist >= inset) & (alpha >= ALPHA_FLOOR) & np.isfinite(lum)
     if ok.sum() < 2 * MIN_SIDE + 3:
         return None
@@ -439,6 +478,42 @@ def section(name, idx, size, get, t, inset=RIM_INSET):
     return n[run], lum[run]
 
 
+def sections(name, idx, size, get, ts, inset=RIM_INSET, memo=None):
+    """section() for several fractions at once: the lookups are one batch (the
+    sampler is per point, so every row is what section() read for that t), the
+    run selection stays per station. A list, None where a section is None."""
+    ch = H._fold_chord(name, idx)
+    if ch is None:
+        return [None] * len(ts)
+    (x0, y0), (x1, y1) = ch
+    dx, dy = x1 - x0, y1 - y0
+    ln = float(np.hypot(dx, dy))
+    if ln < 1e-6:
+        return [None] * len(ts)
+    nx, ny = -dy / ln, dx / ln
+    L = size / V.LOGICAL
+    n = np.arange(-REACH, REACH + STEP, STEP)
+    ts = np.asarray(ts, dtype=np.float64)
+    px, py = x0 + (x1 - x0) * ts[:, None], y0 + (y1 - y0) * ts[:, None]
+    sx, sy = (px + n * nx) * L - 0.5, (py + n * ny) * L - 0.5
+    lum_f, alpha_f, dist_f = _planes(name, idx, size, get, memo)
+    LUM = H._sample1(lum_f, sx, sy)
+    ALPHA = H._sample1(alpha_f, sx, sy)
+    DIST = H._sample1(dist_f, sx, sy)
+    OK = (DIST >= inset) & (ALPHA >= ALPHA_FLOOR) & np.isfinite(LUM)
+    out = []
+    for k in range(len(ts)):
+        ok = OK[k]
+        if ok.sum() < 2 * MIN_SIDE + 3:
+            out.append(None)
+            continue
+        idxs = np.nonzero(ok)[0]
+        runs = np.split(idxs, np.nonzero(np.diff(idxs) > 1)[0] + 1)
+        run = max(runs, key=len)
+        out.append(None if len(run) < 2 * MIN_SIDE + 3 else (n[run], LUM[k][run]))
+    return out
+
+
 def chord_length(name, idx):
     """The chord's own length in logical units, or None."""
     ch = H._fold_chord(name, idx)
@@ -448,14 +523,11 @@ def chord_length(name, idx):
     return float(np.hypot(x1 - x0, y1 - y0))
 
 
-def measure(name, idx, size, get, t, joint=None):
-    """Fit one station, or None if the section cannot carry a fit.
-
-    `joint` overrides the eligibility decision, and exists so that the decision
-    itself can be taken with the two-column fit without recursing. Callers
-    leave it alone.
-    """
-    got = section(name, idx, size, get, t)
+def _prepare(name, idx, size, get, t, joint=None, memo=None, got=False):
+    """Everything about a station that comes before the width search, or None.
+    `got` is the station's section when sections() already read it."""
+    if got is False:
+        got = section(name, idx, size, get, t, memo=memo)
     if got is None:
         return None
     n, raw = got
@@ -481,11 +553,19 @@ def measure(name, idx, size, get, t, joint=None):
     if len(cs) == 0:
         return None
     use_dipole = dipole_eligible(name) if joint is None else joint
+    return dict(t=t, size=size, n=n, raw=raw, y=y, c0=c0, cs=cs,
+                robust_scale=robust_scale, use_dipole=use_dipole,
+                k_lo=k_lo, k_hi=k_hi, bend_lo=bend_lo, bend_hi=bend_hi)
+
+
+def _profile_cpu(p):
+    """The width search of one station: per rung of S_GRID, the best centre."""
+    n, y, cs, robust_scale = p["n"], p["y"], p["cs"], p["robust_scale"]
     profile = []
     for s in S_GRID:
         phi = 0.5 * (1.0 + np.tanh((n[None, :] - cs[:, None]) / s))
         u = 1.0 - phi
-        if use_dipole:
+        if p["use_dipole"]:
             # anchored on the candidate centre - the frame the shape was
             # measured in. Neither its shift nor its width is fitted.
             col = np.interp((n[None, :] - cs[:, None]).ravel(),
@@ -503,8 +583,14 @@ def measure(name, idx, size, get, t, joint=None):
             profile.append((float(score[i]), float(s), float(cs[i]),
                             float(a[i]), float(b[i]), res[i].copy(),
                             float(A[i])))
+    return profile
+
+
+def _finish(p, profile):
+    """The verdict and the read-out, from a station's width profile."""
     if not profile:
         return None
+    n, y, robust_scale = p["n"], p["y"], p["robust_scale"]
     j, s_lo, s_hi, profile_tol, s_identified = _profile_verdict(
         profile, robust_scale, len(n))
     score, s, c, b_lo, b_hi, joint_res, A = profile[j]
@@ -526,17 +612,49 @@ def measure(name, idx, size, get, t, joint=None):
     # Under one hardware pixel of that there is nothing left to measure, and the
     # grid's lowest rung is then a floor, not a reading. Say so instead of
     # quietly storing the number.
-    return dict(t=float(t), c=float(c), s=float(s), c0=c0, A=float(A),
+    return dict(t=float(p["t"]), c=float(c), s=float(s), c0=p["c0"], A=float(A),
                 joint_res=joint_res,
                 joint_rms=float(np.sqrt((joint_res ** 2).mean())),
                 s_identified=s_identified, s_lo=s_lo, s_hi=s_hi,
                 profile_tol=profile_tol, profile_score=score,
                 robust_scale=robust_scale,
-                s_resolved=bool(2.2 * s > V.LOGICAL / float(size)),
+                s_resolved=bool(2.2 * s > V.LOGICAL / float(p["size"])),
                 b_lo=float(b_lo), b_hi=float(b_hi), step=float(b_hi - b_lo),
-                k_lo=k_lo, k_hi=k_hi, bend_lo=bend_lo, bend_hi=bend_hi,
+                k_lo=p["k_lo"], k_hi=p["k_hi"], bend_lo=p["bend_lo"],
+                bend_hi=p["bend_hi"],
                 d=d, w=w, rms=float(np.sqrt((res ** 2).mean())),
-                n=n, y=y, raw=raw, res=res)
+                n=n, y=y, raw=p["raw"], res=res)
+
+
+def measure(name, idx, size, get, t, joint=None):
+    """Fit one station, or None if the section cannot carry a fit.
+
+    `joint` overrides the eligibility decision, and exists so that the decision
+    itself can be taken with the two-column fit without recursing. Callers
+    leave it alone.
+    """
+    p = _prepare(name, idx, size, get, t, joint)
+    return None if p is None else _finish(p, _profile_cpu(p))
+
+
+def measure_many(name, idx, size, get, ts, joint=None):
+    """measure() for several stations at once, in the order of `ts`.
+
+    The width searches of all stations go to the GPU as one batch when the gpu
+    backend is on; the answer is the same as station by station."""
+    memo = {}
+    secs = sections(name, idx, size, get, ts, memo=memo)
+    preps = [_prepare(name, idx, size, get, t, joint, memo, got=sec) for t, sec in zip(ts, secs)]
+    live = [p for p in preps if p is not None]
+    from cgr import gpu
+    if gpu.BACKEND == "gpu" and live:
+        from cgr.gpu import foldfit as GF
+        profiles = GF.profiles(live, S_GRID, LAMBDA, SOFT_L1_PASSES,
+                               DIPOLE, DIPOLE_PITCH, DIPOLE_X0)
+    else:
+        profiles = [_profile_cpu(p) for p in live]
+    it = iter(profiles)
+    return [None if p is None else _finish(p, next(it)) for p in preps]
 
 
 INNER_T = (0.10, 0.45)  # the stretch of chord the inner tip lives on
@@ -606,16 +724,11 @@ def inner_tip(name, idx, size, get, count=INNER_STATIONS):
 
 def track(name, idx, size, get, count=STATIONS):
     """Every station that resolves, from t=0.08 to t=0.92 along the chord."""
-    out = []
-    for t in np.linspace(T_LO, T_HI, count):
-        m = measure(name, idx, size, get, t)
-        if m is not None:
-            out.append(m)
-    return out
+    return [m for m in measure_many(name, idx, size, get, np.linspace(T_LO, T_HI, count))
+            if m is not None]
 
 
 def track_slots(name, idx, size, get, count=STATIONS):
     """The same, but keeping the empty slots, so a curvature can tell a
     neighbour from a station three places away."""
-    return [measure(name, idx, size, get, t)
-            for t in np.linspace(T_LO, T_HI, count)]
+    return measure_many(name, idx, size, get, np.linspace(T_LO, T_HI, count))

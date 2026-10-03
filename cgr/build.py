@@ -182,11 +182,66 @@ _WARM_SIZES = ()
 def _init_worker(sizes):
     global _WARM_SIZES                                  # spawned workers re-import
     _WARM_SIZES = sizes                                 # this module, so seed it here
+    from . import gpu
+    gpu.apply_limits()                                  # below-normal priority, VRAM ceiling
 
 
 def _gen_frame(job):
     name, idx = job
-    return [((name, idx, s), H.frame_image(name, idx, s)) for s in _WARM_SIZES]
+    t0 = time.perf_counter()
+    # the preview tile size is only drawn for the handful of frames it shows
+    make = (lambda n, i, s: G.frame(n, s)) if is_glyph(name) else H.frame_image
+    out = [((name, idx, s), make(name, idx, s)) for s in _WARM_SIZES
+           if s != PREVIEW_CELL or _preview_needs(name, idx)]
+    if os.environ.get("CGR_JOB_LOG"):
+        print("  job %s %d: %.1fs" % (name, idx, time.perf_counter() - t0), file=sys.stderr, flush=True)
+    return out
+
+
+def _gen_anim(job):
+    """One animation at one size: H.anim_frames from keyframes the first stage
+    already rendered (seeded into this worker's frame_image), so the worker does
+    only the light cycle and the pacing."""
+    name, size, interp, key_frames = job
+    inner = H.frame_image
+
+    def seeded(n, i, sz):
+        a = key_frames.get((n, i, sz)) if sz == size else None
+        return Image.fromarray(a, "RGBA") if a is not None else inner(n, i, sz)
+    H.frame_image = seeded
+    try:
+        frames, rates = H.anim_frames(name, size, interp)
+    finally:
+        H.frame_image = inner
+    return (name, size, interp), ([np.asarray(f) for f in frames], rates)
+
+
+def _anim_keys():
+    """(name, size, interp) that the build asks H.anim_frames for."""
+    true_sizes = set(ANI_SIZES_WIN) | {ANI_SIZE, 128, ANIM_STRIP_BOX} | {32 * sc for sc in MAC_SCALES}
+    keys = [(n, s, True) for n in ANIM for s in sorted(true_sizes)]
+    keys += [(n, s, False) for n in ANIM for s in ANI_SIZES]
+    return keys
+
+
+def _strip_job(assets, per):
+    """The combined strip's encode job: the five animations side by side at
+    ANIM_STRIP_BOX, `per` maps name -> its frames at that size."""
+    box, gap = ANIM_STRIP_BOX, 14
+    n = max(len(f) for f in per.values())
+    W = len(ANIM) * (box + gap) + gap
+    strip = []
+    for f in range(n):
+        canvas = Image.new("RGBA", (W, box + 2 * gap), (0, 0, 0, 0))
+        for j, name in enumerate(ANIM):
+            fr = per[name][f % len(per[name])]
+            canvas.alpha_composite(fr, (gap + j * (box + gap), gap))
+        strip.append(canvas)
+    return (os.path.join(assets, "animations.webp"), os.path.join(assets, "animations.gif"),
+            [np.asarray(f) for f in strip], 17, _gif_ms(17))
+
+
+_QUALITY = None              # the gate's measurement thread, once started
 
 
 def _warm_frames():
@@ -200,10 +255,12 @@ def _warm_frames():
     # webp encode below.
     sizes = tuple(sorted(set(LINUX_SIZES) | set(ANI_SIZES) | set(ANI_SIZES_WIN)
                          | {ANI_SIZE, 512, PREVIEW_CELL, ANIM_STRIP_BOX}, reverse=True))
-    jobs = [(name, 0) for name in H.STATIC]
+    # the glyph cursors first: two vector renders per size, the longest jobs there are
+    jobs = [(name, 0) for name in G.NAMES] + [(name, 0) for name in H.STATIC]
     for name in ANIM:
         jobs += [(name, idx) for idx in range(len(H.BY_NAME[name]["frames"]))]
-    workers = min(os.cpu_count() or 1, len(jobs))
+    from . import gpu
+    workers = min(gpu.workers(os.cpu_count() or 1), len(jobs))
     t0 = time.time()
     cache = {}
     # numpy/PIL already thread internally via BLAS; 12 processes each spawning
@@ -229,8 +286,53 @@ def _warm_frames():
         hit = cache.get((name, idx, size))
         return hit if hit is not None else inner(name, idx, size)
     H.frame_image = cached
+    glyph_inner = G.frame
+    def glyph_cached(name, size):
+        hit = cache.get((name, 0, size))
+        return hit if hit is not None else glyph_inner(name, size)
+    G.frame = glyph_cached
     print("  warm-up: %d frames x %d sizes on %d cores in %.1fs"
           % (len(jobs), len(sizes), workers, time.time() - t0))
+    # the quality gate reads rendered frames and the animations, all in the
+    # run's cache now: it measures beside the packaging
+    _warm_anims(cache, workers)
+    global _QUALITY
+    if os.path.exists(_BASELINE):
+        _QUALITY = _quality_start()
+
+
+def _warm_anims(cache, workers):
+    """Second stage: every animation the build asks for, across the cores.
+    windows, linux, the previews and the checks all read H.anim_frames, which is
+    the light cycle over nine rendered keyframes and has no cache of its own."""
+    t0 = time.time()
+    jobs = []
+    for name, size, interp in _anim_keys():
+        n = len(H.BY_NAME[name]["frames"])
+        kf = {(name, i, size): np.asarray(cache[(name, i, size)])
+              for i in range(n) if (name, i, size) in cache}
+        jobs.append((name, size, interp, kf))
+    done = {}
+    prev_env = {v: os.environ.get(v) for v in
+                ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")}
+    os.environ.update({v: "1" for v in prev_env})
+    try:
+        with cf.ProcessPoolExecutor(max_workers=min(workers, len(jobs)), initializer=_init_worker,
+                                    initargs=(_WARM_SIZES,)) as ex:
+            for key, (arrays, rates) in ex.map(_gen_anim, jobs):
+                done[key] = ([Image.fromarray(a, "RGBA") for a in arrays], rates)
+    finally:
+        for v, old in prev_env.items():
+            if old is None:
+                os.environ.pop(v, None)
+            else:
+                os.environ[v] = old
+    inner = H.anim_frames
+    def anim_cached(name, size, interp=True):
+        hit = done.get((name, size, interp))
+        return (list(hit[0]), list(hit[1])) if hit is not None else inner(name, size, interp)
+    H.anim_frames = anim_cached
+    print("  anim warm-up: %d animations on %d cores in %.1fs" % (len(jobs), workers, time.time() - t0))
 
 
 def _hot_point(name):
@@ -700,6 +802,19 @@ def _onbg(im, light=(244, 244, 246), dark=(222, 222, 226)):
     b = b.convert("RGBA"); b.alpha_composite(im); return b
 
 
+_PREVIEW_ORDER = ["Arrow", "Help", "IBeam", "Cross", "SizeAll", "SizeNS", "SizeWE",
+                  "SizeNWSE", "SizeNESW", "UpArrow", "Pin", "Person",
+                  "NO", "Wait", "AppStarting"]
+_PREVIEW_STILL = {"NO": 7}          # the animated tile's frame; 2 for the others
+
+
+def _preview_needs(name, idx):
+    """Is (name, idx) a frame build_preview draws?"""
+    if name not in _PREVIEW_ORDER:
+        return False
+    return idx == (_PREVIEW_STILL.get(name, 2) if name in ANIM else 0)
+
+
 def build_preview(root=None):
     # Hand and Handwriting are skipped here: in the 2006 original they're the
     # same arrow silhouette as Arrow with only a per-frame shimmer, so a single
@@ -709,9 +824,7 @@ def build_preview(root=None):
     # Arrow_Down is left out for the opposite reason: WIN_UNSHIPPED keeps it out
     # of the archive, so putting it in the showcase advertises a cursor nobody
     # who downloads the release actually gets.
-    order = ["Arrow", "Help", "IBeam", "Cross", "SizeAll", "SizeNS", "SizeWE",
-             "SizeNWSE", "SizeNESW", "UpArrow", "Pin", "Person",
-             "NO", "Wait", "AppStarting"]
+    order = _PREVIEW_ORDER
     # 5 columns divides the 15 tiles evenly, and the labels are sized for what
     # a README actually shows: GitHub caps the content column near 880 px, so
     # a 1092 px sheet lands close to 1:1 instead of shrinking the text to mush.
@@ -728,7 +841,7 @@ def build_preview(root=None):
     # smear across the arrow. 7 of its 11 is the last frame where the sign is
     # complete and still fits the cell - past that it outgrows the frame and
     # clips, and it also hides the arrow underneath.
-    still = {"NO": 7}
+    still = _PREVIEW_STILL
     for i, name in enumerate(order):
         if name in ANIM:
             img = H.frame_image(name, still.get(name, 2), cell)
@@ -757,7 +870,13 @@ def _gif_frame(rgba, bg=(248, 248, 250)):
 # 914 KB - a README-only asset heavier than any release artifact, re-fetched on
 # every page view. These are translucent glass gradients viewed at a couple of
 # hundred pixels; q=90 is indistinguishable and roughly a tenth the bytes.
-_WEBP = dict(lossless=False, quality=90, method=6)
+#
+# method is encoder effort, not quality. Measured on the combined strip: method 6
+# takes 117 s on one core for 645 KB, method 4 takes 1.9 s for 680 KB (+5%) at
+# the same error (premultiplied rgb mse 1.65 vs 1.63, alpha exact in both), so
+# the two minutes of one core that used to end every build are not worth 35 KB.
+# CGR_WEBP_METHOD=6 gives the smallest files back, for a release.
+_WEBP = dict(lossless=False, quality=90, method=int(os.environ.get("CGR_WEBP_METHOD", "4")))
 
 # GIF counts delay in centiseconds, and browsers (and ffmpeg) play 0 or 1 of
 # them as 10: the 17 ms a frame the cursors run at went out as 1 cs, so the
@@ -789,7 +908,7 @@ def _encode_anim_job(job):
                duration=gif_duration, loop=0, disposal=2, optimize=True)
 
 
-def build_animations(root=None):
+def build_animations(root=None, defer=False):
     assets = os.path.join(root, "assets") if root else ASSETS
     os.makedirs(assets, exist_ok=True)
     # Only clear what this function rewrites. Wiping the whole directory also
@@ -822,28 +941,28 @@ def build_animations(root=None):
     # baked in here would be one language only, and a fill light enough to read
     # on GitHub's dark theme disappears on the light one. The READMEs name the
     # five in order in their own prose.
-    box, gap = ANIM_STRIP_BOX, 14
-    per = {n: H.anim_frames(n, box)[0] for n in ANIM}
-    n = max(len(f) for f in per.values())
-    W = len(ANIM) * (box + gap) + gap
-    strip = []
-    for f in range(n):
-        canvas = Image.new("RGBA", (W, box + 2 * gap), (0, 0, 0, 0))
-        for j, name in enumerate(ANIM):
-            fr = per[name][f % len(per[name])]
-            canvas.alpha_composite(fr, (gap + j * (box + gap), gap))
-        strip.append(canvas)
-    jobs.append((os.path.join(assets, "animations.webp"),
-                os.path.join(assets, "animations.gif"),
-                [np.asarray(f) for f in strip], 17, _gif_ms(17)))
-    with cf.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 1, len(jobs))) as ex:
-        list(ex.map(_encode_anim_job, jobs))
-    for job in jobs:
-        with Image.open(job[1]) as g:
-            for i in range(g.n_frames):
-                g.seek(i)
-                assert g.info["duration"] >= _GIF_MIN_MS, \
-                    f"{_rel(job[1])} frame {i}: {g.info['duration']} ms, browsers play it as 100"
+    jobs.append(_strip_job(assets, {n: H.anim_frames(n, ANIM_STRIP_BOX)[0] for n in ANIM}))
+    # the strip alone is ~2 min of one core; the encoders run beside the checks
+    # when the caller asks (defer) and only finish() has to wait for them
+    ex = cf.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 1, len(jobs)))
+    futs = [ex.submit(_encode_anim_job, j) for j in reversed(jobs)]   # the strip first
+
+    def finish():
+        try:
+            for f in futs:
+                f.result()
+        finally:
+            ex.shutdown()
+        for job in jobs:
+            with Image.open(job[1]) as g:
+                for i in range(g.n_frames):
+                    g.seek(i)
+                    assert g.info["duration"] >= _GIF_MIN_MS, \
+                        f"{_rel(job[1])} frame {i}: {g.info['duration']} ms, browsers play it as 100"
+
+    if defer:
+        return assets, finish
+    finish()
     return assets
 
 
@@ -1143,6 +1262,21 @@ class _phase:
 
 
 def main(argv=None):
+    # frames the warm-up renders are read back by the quality gate's processes
+    # from this directory, which exists for this run only
+    if "CGR_FRAME_CACHE" in os.environ:
+        return _main(argv)
+    import tempfile
+    cache = tempfile.mkdtemp(prefix="cgr-frames-")
+    os.environ["CGR_FRAME_CACHE"] = cache
+    try:
+        return _main(argv)
+    finally:
+        os.environ.pop("CGR_FRAME_CACHE", None)
+        shutil.rmtree(cache, ignore_errors=True)
+
+
+def _main(argv=None):
     ap = argparse.ArgumentParser(description="Build the cursor theme.")
     ap.add_argument("--out-dir", default=ROOT, metavar="DIR",
                     help="where dist/, packages/ and assets/ (preview.png, "
@@ -1158,6 +1292,10 @@ def main(argv=None):
     if os.environ.get("BUILD_SERIAL") != "1":           # escape hatch: BUILD_SERIAL=1
         with _phase("warm_frames"):
             _warm_frames()                               # renders single-core instead
+    # the webp of the strip is two minutes of one core: it starts as soon as the
+    # frames exist and runs under everything below
+    with _phase("animations"):
+        assets, finish_animations = build_animations(out, defer=True)
     with _phase("windows"):
         win = build_windows(dist)
     with _phase("check_inf"):
@@ -1176,8 +1314,6 @@ def main(argv=None):
         cape = build_mac(packages)
     with _phase("preview"):
         build_preview(out)
-    with _phase("animations"):
-        assets = build_animations(out)
     with _phase("comparison"):
         build_comparison(assets)
     print("macOS   :", _rel(cape))
@@ -1197,19 +1333,50 @@ def main(argv=None):
     if warns and os.environ.get("ALLOW_METRIC_WARN") != "1":
         raise SystemExit(f"check_metrics: {warns} warning(s) out of tolerance "
                           "(set ALLOW_METRIC_WARN=1 to ship anyway)")
-    with _phase("check_quality"):
-        check_quality()
-    perf_path = os.environ.get("BUILD_PERF_JSON")
-    if perf_path:
-        with open(perf_path, "w") as fh:
-            json.dump(_phase._times, fh, indent=1)
+    try:
+        with _phase("check_quality"):
+            check_quality(_QUALITY.join() if _QUALITY else None)
+    finally:
+        with _phase("animations_wait"):
+            finish_animations()
+        perf_path = os.environ.get("BUILD_PERF_JSON")
+        if perf_path:
+            with open(perf_path, "w") as fh:
+                json.dump(_phase._times, fh, indent=1)
 
 
 _BASELINE = os.path.join(DATA, "metrics-baseline.json")
 _KNOWN = os.path.join(DATA, "metrics-known-issues.json")
 
 
-def check_quality():
+class _quality_start:
+    """The measurement half of check_quality, on a thread from the moment the
+    frames exist. It reads nothing the packaging builds - only rendered frames,
+    which the run's frame cache already holds - so it runs beside them instead
+    of after them. join() hands back its numbers or re-raises its failure."""
+
+    def __init__(self):
+        import threading
+        self.rep = self.err = None
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+
+    def _run(self):
+        try:
+            sys.path.insert(0, TOOLS)
+            import analyze as A
+            self.rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
+        except BaseException as e:               # noqa: BLE001 - handed to join()
+            self.err = e
+
+    def join(self):
+        self.t.join()
+        if self.err is not None:
+            raise self.err
+        return self.rep
+
+
+def check_quality(rep=None):
     """The real gate: tools/analyze.py's own thresholds and ratchet.
 
     check_metrics above reads exactly two things - median alpha drift at the
@@ -1228,7 +1395,9 @@ def check_quality():
     its count so the standing gap stays visible instead of silently growing.
 
     Skipped if the baseline is missing rather than treated as a failure - a
-    fresh clone should build - and overridable the same way check_metrics is."""
+    fresh clone should build - and overridable the same way check_metrics is.
+
+    `rep` is the measurement when _quality_start already took it."""
     sys.path.insert(0, TOOLS)
     import analyze as A
     if not os.path.exists(_BASELINE):
@@ -1240,7 +1409,8 @@ def check_quality():
     if os.path.exists(_KNOWN):
         with open(_KNOWN) as fh:
             known = {" ".join(x.split()) for x in json.load(fh)["accepted"]}
-    rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
+    if rep is None:
+        rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
     bad, debt, unmeasured, attention = A.gate(rep, base)
     # The ratchet compares numbers, so a complaint that carries no number -
     # "this could not be measured at all" - lands in `bad` on every run,

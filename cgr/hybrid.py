@@ -26,6 +26,7 @@ import functools, json, os
 import numpy as np
 from PIL import Image, ImageFilter
 
+from . import gpu as GPU
 from . import cursors as C
 from . import vectorlib as V
 from .paths import ART
@@ -88,6 +89,11 @@ def _ai(key):
 def _resize(arr, size, filt=Image.LANCZOS):
     """Premultiplied Lanczos resize of an RGBA float array -> (rgb, a), done
     in linear light so translucent edges don't come out dark/soft."""
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        got = stages.resize_rgba(arr, size, filt)
+        if got is not None:
+            return got
     a = arr[..., 3] / 255.0
     rgb_lin = V.srgb_to_linear(np.clip(arr[..., :3], 0, 255).astype(np.uint8))
     premult = rgb_lin * a[..., None]
@@ -154,6 +160,11 @@ def _mask_geom(name, idx, size):
     white = (255, 255, 255, 255)
     prims = [{kind: geom, "fill": white}
              for kind, geom in _mask_prims(name, idx)]
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        a = stages.mask_alpha(prims, size)
+        if a is not None:
+            return a.astype(np.float64)
     img = V.render(prims, size)
     return np.asarray(img, dtype=np.float64)[..., 3]
 
@@ -467,6 +478,17 @@ def _sharp_corners(name, idx):
                 continue
             out.append((float(p[0]), float(p[1])))
     return tuple(out)
+
+
+def _close_u8(a, k):
+    """Grey closing (MaxFilter(k) then MinFilter(k)) of uint8 planes (..., H, W)."""
+    if GPU.BACKEND == "gpu":
+        from .gpu import ops
+        return ops.close_u8(a, k)
+    flat = a.reshape(-1, *a.shape[-2:])
+    out = [np.asarray(Image.fromarray(p).filter(ImageFilter.MaxFilter(k))
+                      .filter(ImageFilter.MinFilter(k))) for p in flat]
+    return np.stack(out).reshape(a.shape)
 
 
 def _sample(rgb, sx, sy):
@@ -1370,9 +1392,7 @@ def _ai_dropout(key, size):
 
     def crack(a):
         a = np.clip(a, 0, 255)
-        im = Image.fromarray(a.astype(np.uint8), "L")
-        closed = np.asarray(im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k)),
-                            dtype=np.float64)
+        closed = _close_u8(a.astype(np.uint8), k).astype(np.float64)
         return np.clip((closed - a - _CRACK_LO) / (_CRACK_HI - _CRACK_LO), 0, 1)
 
     solid = np.clip((ref - _CRACK_REF_LO) / (_CRACK_REF_HI - _CRACK_REF_LO), 0, 1)
@@ -1644,13 +1664,17 @@ def _point_converge(rgb, name, idx, size):
     read = _POINT_READ * min(max(_POINT_BAND * L - 1.0, 0.0), 1.0)
     if read <= 0.0:
         return rgb
+    g = _geom(name, idx)
+    pts = [(cx, cy) for cx, cy in _sharp_corners(name, g)
+           if _outline_angle(name, g, (cx, cy)) <= _POINT_WIDEST]
+    if GPU.BACKEND == "gpu" and pts:
+        from .gpu import stages
+        return stages.point_converge(np.asarray(rgb, dtype=np.float64), pts, L, read,
+                                     _POINT_READ_REACH, _POINT_TAPS)
     ys, xs = np.mgrid[0:size, 0:size] + 0.5
     px, py = xs / L, ys / L
     out = np.asarray(rgb, dtype=np.float64).copy()
-    g = _geom(name, idx)
-    for cx, cy in _sharp_corners(name, g):
-        if _outline_angle(name, g, (cx, cy)) > _POINT_WIDEST:
-            continue
+    for cx, cy in pts:
         src = out.copy()
         dx, dy = px - cx, py - cy
         r = np.hypot(dx, dy)
@@ -2185,6 +2209,9 @@ def _edge_distance_geom(name, idx):
     if not prims:
         c = _chamfer(inside) / (size / V.LOGICAL)
         return np.where(inside, c, -c)
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        return stages.edge_distance(prims, inside, size, V.LOGICAL)
     L = size / V.LOGICAL
     ys, xs = np.mgrid[0:size, 0:size]
     px, py = (xs + 0.5) / L, (ys + 0.5) / L
@@ -2232,10 +2259,16 @@ def _smooth1(a, unit, size):
     r = max(0, int(round(unit * size / V.LOGICAL / 3.0)))
     if r < 1:
         return a.astype(np.float64)
+    if GPU.BACKEND == "gpu" and a.shape[0] >= _GPU_SMOOTH_MIN:
+        from .gpu import ops
+        return ops.smooth1(ops.t(a), unit, size).cpu().numpy()
     out = a.astype(np.float64)
     for _ in range(3):
         out = _box1(_box1(out, r, 0), r, 1)
     return out
+
+
+_GPU_SMOOTH_MIN = 256        # side from which a blur is worth the trip to the device
 
 
 _ROUND_HOLES = {"SizeAll"}   # cursors whose interior hole the author drew round
@@ -2417,6 +2450,28 @@ def _ring_level(a, cx, cy, ang, level, lo, hi, step=0.01):
     return float(r[i] + step * (v[i] - level) / max(1e-9, v[i] - v[i + 1]))
 
 
+def _last_true(mask):
+    """Per row, the index of the last True and whether there is one."""
+    n = mask.shape[1]
+    return n - 1 - np.argmax(mask[:, ::-1], axis=1), mask.any(1)
+
+
+def _ring_levels(a, cx, cy, angs, level, lo, hi, step=0.01):
+    """_ring_level for every ray at once: the samples are per point, so each
+    row is the numbers the scalar version computed for that ray."""
+    r = np.arange(lo, hi, step)
+    n = a.shape[0]
+    v = _sample1(a, (cx + r[None, :] * np.cos(angs)[:, None]) * n / V.LOGICAL - 0.5,
+                 (cy + r[None, :] * np.sin(angs)[:, None]) * n / V.LOGICAL - 0.5)
+    i, found = _last_true(v >= level)
+    found &= i + 1 < len(r)
+    i = np.where(found, i, 0)
+    rows = np.arange(len(angs))
+    vi, vn = v[rows, i], v[rows, np.minimum(i + 1, len(r) - 1)]
+    out = r[i] + step * (vi - level) / np.maximum(1e-9, vi - vn)
+    return np.where(found, out, np.nan)
+
+
 def _ring_kasa(x, y):
     m = np.c_[2 * x, 2 * y, np.ones(len(x))]
     cx, cy, c = np.linalg.lstsq(m, x * x + y * y, rcond=None)[0]
@@ -2444,7 +2499,7 @@ def _ring_fit(name, idx):
     ang = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
     keep = rs = None
     for _ in range(12):
-        rs = np.array([_ring_level(a, cx, cy, t, lev, 2.0, 15.0) for t in ang])
+        rs = _ring_levels(a, cx, cy, ang, lev, 2.0, 15.0)
         keep = np.isfinite(rs)
         if keep.sum() < 40:
             return None
@@ -2465,15 +2520,20 @@ def _ring_fit(name, idx):
     if float(e.std()) > _RING_RMS:
         return None
     # inward from the outer edge to where his material stops: the stroke's width
-    inner = []
-    for t, ro in zip(ang[keep], rs[keep]):
-        q = np.arange(0.2, ro, 0.01)
-        v = _sample1(a, (cx + q * np.cos(t)) * a.shape[0] / V.LOGICAL - 0.5,
-                     (cy + q * np.sin(t)) * a.shape[0] / V.LOGICAL - 0.5)
-        below = np.nonzero(v < lev)[0]
-        if len(below) and below[-1] + 1 < len(q):
-            j = below[-1]
-            inner.append(q[j] + 0.01 * (lev - v[j]) / max(1e-9, v[j + 1] - v[j]))
+    # arange(0.2, ro, .01) is a prefix of the one to the largest ro: the rays
+    # share a grid and each keeps its own length
+    tk, rk = ang[keep], rs[keep]
+    q = np.arange(0.2, float(rk.max()), 0.01)
+    ln = np.array([len(np.arange(0.2, ro, 0.01)) for ro in rk])
+    v = _sample1(a, (cx + q[None, :] * np.cos(tk)[:, None]) * a.shape[0] / V.LOGICAL - 0.5,
+                 (cy + q[None, :] * np.sin(tk)[:, None]) * a.shape[0] / V.LOGICAL - 0.5)
+    below = (v < lev) & (np.arange(len(q))[None, :] < ln[:, None])
+    j, found = _last_true(below)
+    found &= j + 1 < ln
+    j = np.where(found, j, 0)
+    rows = np.arange(len(tk))
+    vj, vn = v[rows, j], v[rows, np.minimum(j + 1, len(q) - 1)]
+    inner = (q[j] + 0.01 * (lev - vj) / np.maximum(1e-9, vn - vj))[found]
     if len(inner) < 20:
         return None
     return (cx, cy, R, float(np.median(inner)))
@@ -2596,9 +2656,8 @@ def _deburr(alpha, size):
     if r < 1:
         return alpha
     k = 2 * r + 1
-    im = Image.fromarray(np.clip(alpha, 0, 255).astype(np.uint8), "L")
-    closed = im.filter(ImageFilter.MaxFilter(k)).filter(ImageFilter.MinFilter(k))
-    return np.maximum(alpha, np.asarray(closed, dtype=np.float64))
+    closed = _close_u8(np.clip(alpha, 0, 255).astype(np.uint8), k)
+    return np.maximum(alpha, closed.astype(np.float64))
 
 
 def _bevel_shading(name, idx, size):
@@ -2665,9 +2724,15 @@ def _along_edge(col, name, idx, size):
     n = np.hypot(gx, gy) + 1e-12
     tx, ty = -gy / n, gx / n
     ys, xs = np.nonzero(m > 0.5)
+    h = _BEVEL_ALONG_STEP
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        out = col.copy()
+        out[ys, xs] = stages.along_edge_walk(col, m, tx, ty, xs, ys, h, L, _BEVEL_ALONG,
+                                             int(np.ceil(2.5 * _BEVEL_ALONG * L / h)))
+        return out
     acc = col[ys, xs].copy()
     wsum = np.ones(len(xs))
-    h = _BEVEL_ALONG_STEP
     for sgn in (1.0, -1.0):
         px, py = xs.astype(np.float64), ys.astype(np.float64)
         dx, dy = tx[ys, xs] * sgn, ty[ys, xs] * sgn
@@ -3166,6 +3231,17 @@ _EDGE_SHADOW_SHARE = {"Handwriting": 0.7}   # of the lift taken. Lifted in full,
                            # Below 0.7 the line reaches the fold fit's window
                            # (fold_step 0.51 -> 0.45 at 0.6, 0.36 at 0.5); NO
                            # at half goes past A's ceiling (1.08)
+_EDGE_SHADOW_WING = {"Arrow": (13.0, 3.0, 0.0)}
+                           # LU round the lit-side point and round the fold's
+                           # start the lift is taken in full, past them by
+                           # the ramp none. The owner's
+                           # complaint is the shadow behind the blade on the
+                           # right wing (NEXT.md 116, selftest rim valley); the
+                           # left edge and the top by the apex keep the thin
+                           # dark line 1.1.0 had: crisp X Arrow 0.80 -> 0.84,
+                           # 0.79 -> 0.89. Hand's fold fit takes the line by
+                           # the apex for its fold (fold_unres 0.29 -> 1.0)
+                           # and held 10 LU off the apex it gains nothing
 # Handwriting and NO were dropped from this set after the first gate run, on
 # two readings: Handwriting's morph_iou_min fell below its ratchet (0.437 ->
 # 0.385) and NO's fold_luma_step nearly doubled (68 -> 90). Added back
@@ -3300,6 +3376,30 @@ def _fold_keepout(name, idx, size, ramp=None):
     return np.clip((np.abs(s) - _FOLD_KEEPOUT) / ramp, 0.0, 1.0)
 
 
+def _wing_zone(name, idx, size, reach, ramp, apex):
+    """1 within `reach` LU of the points on the lit facet's side of the fold
+    (the side _point_along picks) and within `apex` LU of the fold's start,
+    0 past them by `ramp`."""
+    ch = _fold_chord(name, idx)
+    if ch is None:
+        return 1.0
+    L = size / V.LOGICAL
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    (ax, ay), (bx, by) = ch
+    un = np.hypot(bx - ax, by - ay)
+    ux, uy = (bx - ax) / un, (by - ay) / un
+    zone = (np.clip((apex + ramp - np.hypot(xs - ax, ys - ay)) / ramp, 0.0, 1.0)
+            if apex > 0 else np.zeros((size, size)))
+    for cx, cy in _sharp_corners(name, _geom(name, idx)):
+        ox, oy = cx - ax, cy - ay
+        t = ox * ux + oy * uy
+        if (ox - t * ux) * _BEVEL_LIGHT[0] + (oy - t * uy) * _BEVEL_LIGHT[1] < _POINT_ALONG_LIT:
+            continue
+        r = np.hypot(xs - cx, ys - cy)
+        zone = np.maximum(zone, np.clip((reach + ramp - r) / ramp, 0.0, 1.0))
+    return zone
+
+
 def _edge_shadow_declutter(rgb, name, idx, size):
     """Cap the AI master's second, spurious crease line that runs parallel to
     the outer silhouette edge on every wedge-shaped cursor.
@@ -3336,15 +3436,13 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     r = int(round(_EDGE_SHADOW_REACH * size / V.LOGICAL))
     k = 2 * r + 1
 
-    def _closed(chan):
-        im = Image.fromarray(np.clip(chan, 0, 255).astype(np.uint8))
-        return np.asarray(im.filter(ImageFilter.MaxFilter(k))
-                          .filter(ImageFilter.MinFilter(k)), dtype=np.float64)
-
-    lit = np.stack([_closed(rgb[..., c]) for c in range(3)], axis=-1)
+    planes = np.clip(rgb, 0, 255).astype(np.uint8).transpose(2, 0, 1)
+    lit = _close_u8(planes, k).astype(np.float64).transpose(1, 2, 0)
     lum, lit_lum = rgb.mean(-1), lit.mean(-1)
     dip = np.clip((lit_lum - lum - _EDGE_SHADOW_DIP_CAP) / 20.0, 0.0, 1.0)
     lift = _smooth1(dip * w, 0.2, size) * _EDGE_SHADOW_SHARE.get(name, 1.0)
+    if name in _EDGE_SHADOW_WING:
+        lift = lift * _wing_zone(name, idx, size, *_EDGE_SHADOW_WING[name])
     return rgb * (1.0 - lift[..., None]) + lit * lift[..., None]
 
 
@@ -3406,10 +3504,14 @@ def _edge_comb(rgb, name, idx, size):
     tx = np.where(ok, -gy / np.maximum(n, 1e-6), 0.0)
     ty = np.where(ok, gx / np.maximum(n, 1e-6), 0.0)
     steps = np.arange(-_EDGE_COMB_REACH, _EDGE_COMB_REACH + 1e-9, 0.25)
-    acc = np.zeros_like(rgb)
-    for k in steps:
-        acc += _sample(rgb, xs + tx * k * L, ys + ty * k * L)
-    acc /= len(steps)
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        acc = stages.comb_mean(rgb, xs, ys, tx, ty, L, steps)
+    else:
+        acc = np.zeros_like(rgb)
+        for k in steps:
+            acc += _sample(rgb, xs + tx * k * L, ys + ty * k * L)
+        acc /= len(steps)
     return rgb + (acc - rgb) * w[..., None]
 
 
@@ -3745,6 +3847,24 @@ def _rim_coarse(mr, inside, name):
     return out * inside
 
 
+def _rim_blend(px, py, pts, d, corr, k0, k1, fu, var):
+    """_rim_native's per-pixel blend over the stations round it."""
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        return stages.rim_blend(px, py, pts, d, corr, k0, k1, fu, var)
+    size = px.shape[0]
+    delta = np.zeros((size, size))
+    for r0 in range(0, size, 32):
+        sl = slice(r0, r0 + 32)
+        dx = px[sl, :, None] - pts[None, None, :, 0]
+        dy = py[sl, :, None] - pts[None, None, :, 1]
+        arc2 = np.maximum(dx * dx + dy * dy - (d[sl] ** 2)[..., None], 0.0)
+        w = np.exp(-arc2 / var)
+        c = (corr[:, k0[sl]] * (1.0 - fu[sl]) + corr[:, k1[sl]] * fu[sl])
+        delta[sl] = np.einsum("yxs,syx->yx", w, c) / np.maximum(w.sum(2), 1e-9)
+    return delta
+
+
 def _rim_native(rgb, name, idx, size):
     """Rewrite how the glass rises off its edge, keeping everything else, with
     every section read at this size. _rim_transfer is the way in."""
@@ -3842,16 +3962,8 @@ def _rim_native(rgb, name, idx, size):
     # fan out (looked at on Help at 512, 4x). The weight is on the arc offset
     # alone: the pixel's own depth is already the axis being interpolated, and
     # leaving it in the distance would flatten the weights the deeper it sits.
-    delta = np.zeros((size, size))
     var = 2.0 * _RIM_XFER_BLEND ** 2
-    for r0 in range(0, size, 32):
-        sl = slice(r0, r0 + 32)
-        dx = px[sl, :, None] - pts[None, None, :, 0]
-        dy = py[sl, :, None] - pts[None, None, :, 1]
-        arc2 = np.maximum(dx * dx + dy * dy - (d[sl] ** 2)[..., None], 0.0)
-        w = np.exp(-arc2 / var)
-        c = (corr[:, k0[sl]] * (1.0 - fu[sl]) + corr[:, k1[sl]] * fu[sl])
-        delta[sl] = np.einsum("yxs,syx->yx", w, c) / np.maximum(w.sum(2), 1e-9)
+    delta = _rim_blend(px, py, pts, d, corr, k0, k1, fu, var)
     # Held off around the traced points. A section is a reading along one
     # normal, and at a point there is no one normal: the rays of the stations
     # either side of it cross, their sections disagree, and the blend of two
@@ -4139,6 +4251,8 @@ def _master_rgb(name, idx, size):
 
 def _smooth3(rgb, unit, size):
     """Blur an RGB float array by `unit` logical units."""
+    if GPU.BACKEND == "gpu" and rgb.shape[0] >= _GPU_SMOOTH_MIN:
+        return _smooth1(rgb, unit, size)           # the passes run along axes 0 and 1
     return np.dstack([_smooth1(rgb[..., c], unit, size) for c in range(3)])
 
 
@@ -4378,6 +4492,21 @@ def _restep_dipole():
 _RESTEP_DIPOLE_CHORD = 5    # stations the amplitude is smoothed over
 
 
+def _median(a):
+    """np.median of a short 1-d array, the same number (a sort and the middle
+    one or the mean of the middle two) without np.median's call overhead, which
+    for the few-dozen-sample arrays of the fits is most of its cost."""
+    a = np.asarray(a)
+    n = a.size
+    if n == 0 or n > 4096 or a.dtype.kind != "f":
+        return float(np.median(a))
+    s = np.sort(a, axis=None)
+    if np.isnan(s[-1]):
+        return float("nan")
+    h = n >> 1
+    return float(s[h]) if n & 1 else float((s[h - 1] + s[h]) / 2.0)
+
+
 def _restep_line(x, y):
     """Local tangent, with outliers dropped twice."""
     keep = np.ones(len(x), bool)
@@ -4387,8 +4516,8 @@ def _restep_line(x, y):
             break
         k, a = np.polyfit(x[keep], y[keep], 1)
         r = y - (a + k * x)
-        med = float(np.median(r[keep]))
-        mad = float(np.median(np.abs(r[keep] - med)))
+        med = _median(r[keep])
+        mad = _median(np.abs(r[keep] - med))
         if mad < 1e-9:
             break
         new = np.abs(r - med) < 3.0 * 1.4826 * mad
@@ -4442,8 +4571,8 @@ def _restep_dipole_read(name, idx, size):
     """
     FF = _foldfit()
     ts, amps = [], []
-    for t in np.linspace(FF.T_LO, FF.T_HI, FF.STATIONS):
-        m = FF.measure(name, idx, size, _author_at, t)
+    grid = np.linspace(FF.T_LO, FF.T_HI, FF.STATIONS)
+    for t, m in zip(grid, FF.measure_many(name, idx, size, _author_at, grid)):
         ts.append(float(t))
         g = None if m is None else FF._dipole_of(m)
         amps.append(np.nan if g is None else float(g @ FF.DIPOLE))
@@ -4485,7 +4614,7 @@ def _restep_dipole_amp(name, idx, size, ts):
         w = a[max(0, i - h):i + h + 1]
         w = w[np.isfinite(w)]
         if len(w):
-            sm[i] = np.median(w)
+            sm[i] = _median(w)
     ok = np.isfinite(sm)
     if ok.sum() < 3:
         return None
@@ -4564,15 +4693,17 @@ def _fold_restep(rgb, name, idx, size):
     runs = [None] * len(ts)
     edge = np.full(len(ts), np.nan)
 
+    # the sections of all stations are read in one lookup; _sample is per point,
+    # so a station's row is the same numbers as when it was read alone
+    px, py = tx + dx * ts[:, None], ty + dy * ts[:, None]
+    SX, SY = (px + ns * vx) * L - 0.5, (py + ns * vy) * L - 0.5
+    Y = _sample1(lum_c, SX, SY)
+    OK = (_sample1(dist, SX, SY) >= _RESTEP_PROTECT) & (_sample1(alpha, SX, SY) >= 24.0)         & np.isfinite(Y)
+    if owned is not None:
+        OK &= _sample1(owned, SX, SY) < 0.5
+
     for k, t in enumerate(ts):
-        px, py = tx + dx * t, ty + dy * t
-        sx, sy = (px + ns * vx) * L - 0.5, (py + ns * vy) * L - 0.5
-        y = _sample1(lum_c, sx, sy)
-        d = _sample1(dist, sx, sy)
-        a = _sample1(alpha, sx, sy)
-        ok = (d >= _RESTEP_PROTECT) & (a >= 24.0) & np.isfinite(y)
-        if owned is not None:
-            ok &= _sample1(owned, sx, sy) < 0.5
+        y, ok = Y[k], OK[k]
         if ok.sum() < 40:
             continue
         run = max(np.split(np.nonzero(ok)[0],
@@ -4620,7 +4751,7 @@ def _fold_restep(rgb, name, idx, size):
         return rgb
     for c in range(par.shape[1]):
         v = np.interp(np.arange(len(ts)), good, par[good, c])
-        med = np.array([np.median(v[max(0, i - 2):i + 3]) for i in range(len(v))])
+        med = np.array([_median(v[max(0, i - 2):i + 3]) for i in range(len(v))])
         pad = np.pad(med, 2, mode="edge")
         par[:, c] = np.convolve(pad, np.ones(5) / 5.0, "valid")
 
@@ -5405,12 +5536,18 @@ def _band_sides(side):
         yield sd, idx
 
 
+_GPU_BAND_SMOOTH_MIN = 40000   # rows x stations from which one batched convolution beats the loop
+
+
 def _band_smooth(v, side, sigma):
     """Gaussian along the arc over `sigma` LU, never across a corner; v is (..., NS)."""
     sp = sigma / _BAND_ASTEP
     out = np.empty_like(v)
     r = int(3 * sp) + 1
     ker = np.exp(-0.5 * (np.arange(-r, r + 1) / max(sp, 1e-6)) ** 2)
+    if GPU.BACKEND == "gpu" and v.size >= _GPU_BAND_SMOOTH_MIN:
+        from .gpu import stages
+        return stages.band_smooth(v, [idx for _sd, idx in _band_sides(side)], ker, r)
     for _sd, idx in _band_sides(side):
         seg = v[..., idx]
         pad = np.concatenate([seg[..., :1].repeat(r, -1), seg, seg[..., -1:].repeat(r, -1)], -1)
@@ -5422,25 +5559,41 @@ def _band_smooth(v, side, sigma):
 
 def _band_trace(g, side):
     """The band's inner edge as one path per side through the unrolled luma
-    rise: most rise collected, at most one depth sample per station."""
+    rise: most rise collected, at most one depth sample per station.
+
+    The sides do not touch each other, so their dynamic programs run together,
+    one station per step across all of them; a side that has run out of stations
+    just stops updating. Same arithmetic per side as running them one by one."""
     nj, n = g.shape
     out = np.zeros(n, int)
-    for _sd, idx in _band_sides(side):
-        sc = g[:, idx]
-        sc = sc / max(np.percentile(sc.max(0), 75), 1e-6)
-        m = len(idx)
-        acc = sc[:, 0].copy()
-        back = np.zeros((m, nj), int)
-        for i in range(1, m):
-            cand = np.stack([np.r_[-np.inf, acc[:-1]] - _BAND_STEP_COST, acc,
-                             np.r_[acc[1:], -np.inf] - _BAND_STEP_COST])
-            k = np.argmax(cand, 0)
-            back[i] = np.arange(nj) + (k - 1)
-            acc = cand[k, np.arange(nj)] + sc[:, i]
+    sides = list(_band_sides(side))
+    S = len(sides)
+    M = np.array([len(idx) for _sd, idx in sides])
+    sc = np.zeros((S, nj, M.max()))
+    for k, (_sd, idx) in enumerate(sides):
+        v = g[:, idx]
+        sc[k, :, :M[k]] = v / max(np.percentile(v.max(0), 75), 1e-6)
+    acc = sc[:, :, 0].copy()                                   # (S, nj)
+    back = np.zeros((M.max(), S, nj), int)
+    last = acc.copy()
+    ar = np.arange(nj)
+    inf = np.full((S, 1), -np.inf)
+    for i in range(1, M.max()):
+        cand = np.stack([np.concatenate([inf, acc[:, :-1]], 1) - _BAND_STEP_COST, acc,
+                         np.concatenate([acc[:, 1:], inf], 1) - _BAND_STEP_COST])   # (3, S, nj)
+        k = np.argmax(cand, 0)
+        back[i] = ar + (k - 1)
+        new = np.take_along_axis(cand, k[None], 0)[0] + sc[:, :, i]
+        live = (i < M)[:, None]
+        acc = np.where(live, new, acc)
+        done = (i == M - 1)[:, None]
+        last = np.where(done, new, last)
+    for k, (_sd, idx) in enumerate(sides):
+        m = M[k]
         path = np.zeros(m, int)
-        path[-1] = int(np.argmax(acc))
+        path[-1] = int(np.argmax(acc[k] if m == M.max() else last[k]))
         for i in range(m - 1, 0, -1):
-            path[i - 1] = back[i, path[i]]
+            path[i - 1] = back[i, k, path[i]]
         out[idx] = path
     return out
 
@@ -5577,15 +5730,19 @@ def _even_band(im, name, idx, size):
     d = _edge_distance_at(name, idx, size)
     ys, xs = np.nonzero((out[..., 3] > 0) & (d < _BAND_DEPTH + 0.2))
     px, py = (xs + 0.5) / k, (ys + 0.5) / k
-    best = np.full(len(xs), np.inf)
-    si = np.zeros(len(xs), int)
-    for c0 in range(0, len(x), 256):
-        c1 = min(len(x), c0 + 256)
-        dd = (px[:, None] - x[None, c0:c1]) ** 2 + (py[:, None] - y[None, c0:c1]) ** 2
-        j = np.argmin(dd, 1)
-        v = dd[np.arange(len(xs)), j]
-        s = v < best
-        best[s], si[s] = v[s], c0 + j[s]
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        si = stages.nearest_station(px, py, x, y)
+    else:
+        best = np.full(len(xs), np.inf)
+        si = np.zeros(len(xs), int)
+        for c0 in range(0, len(x), 256):
+            c1 = min(len(x), c0 + 256)
+            dd = (px[:, None] - x[None, c0:c1]) ** 2 + (py[:, None] - y[None, c0:c1]) ** 2
+            j = np.argmin(dd, 1)
+            v = dd[np.arange(len(xs)), j]
+            s = v < best
+            best[s], si[s] = v[s], c0 + j[s]
     rx, ry = px - x[si], py - y[si]
     tt = rx * nx[si] + ry * ny[si]
     fs = np.clip(si + (rx * -ny[si] + ry * nx[si]) / _BAND_ASTEP, 0, delta.shape[1] - 1.001)
@@ -5689,6 +5846,13 @@ def _rim_valley(im, name, idx, size):
         w = w * np.clip((np.hypot(xs - cx, ys - cy) - r0) / ramp, 0.0, 1.0)
     if w.max() < 1e-6:
         return im
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        P = dict(alpha=_VALLEY_ALPHA, step=_VALLEY_STEP, out=_VALLEY_OUT, **{"in": _VALLEY_IN},
+                 climb=_VALLEY_CLIMB, smooth=_VALLEY_LEVEL_SMOOTH, cap=_VALLEY_CAP,
+                 ramp=_VALLEY_RAMP, along=_VALLEY_ALONG)
+        delta = stages.rim_valley_core(a, d, nx, ny, w, P)
+        return _compose(a[..., :3] + delta[..., None], a[..., 3])
     lum = a[..., :3].mean(-1)
     al = a[..., 3]
     level = np.where(al >= _VALLEY_ALPHA * al.max(), lum, -1.0)
@@ -5790,6 +5954,11 @@ def _point_along(im, name, idx, size):
     w = zone * np.clip((full + fade - d) / fade, 0.0, 1.0) * (g > 1e-6) * (d > 0)
     if w.max() < 1e-6:
         return im
+    if GPU.BACKEND == "gpu":
+        from .gpu import stages
+        rgb = stages.point_along_core(a, nx, ny, w, _VALLEY_ALONG, _POINT_ALONG_AGREE,
+                                      _POINT_ALONG_BACK[0], _POINT_ALONG_BACK[1])
+        return _compose(np.clip(rgb, 0, 255), a[..., 3])
     al = a[..., 3] / 255.0
     nrm = np.dstack([nx, ny])
     py, px = np.mgrid[0:size, 0:size].astype(np.float64)
@@ -5948,13 +6117,39 @@ def _author_rim(im, name, idx, size):
     return _compose(rgb, a[..., 3])
 
 
+def _disk_frame(kind, name, idx, size, make):
+    """One build run's frames shared between its processes. CGR_FRAME_CACHE names
+    a directory that cgr.build creates for the run and removes at its end: the
+    warm-up workers write the frames, the quality gate's workers read them
+    instead of rendering the same ladder again. Unset (everything else), this
+    is just make()."""
+    d = os.environ.get("CGR_FRAME_CACHE")
+    if not d:
+        return make()
+    path = os.path.join(d, "%s_%s_%d_%d.npy" % (kind, name, idx, size))
+    try:
+        return Image.fromarray(np.load(path), "RGBA")
+    except (OSError, ValueError):
+        pass
+    im = make()
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "wb") as fh:
+            np.save(fh, np.asarray(im))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return im
+
+
 @functools.lru_cache(maxsize=None)
 def frame_image(name, idx, size):
     """Final RGBA frame at any size. Every size, 32px included, draws its colour
     from the sharpened AI master (_master, native up to 512px) inside a
     vector-crisp silhouette; smaller sizes downsample the already-sharpened
     master, so the crispness carries down without a second sharpen pass."""
-    return _author_rim(_frame_chain(name, idx, size), name, idx, size)
+    return _disk_frame("f", name, idx, size, lambda: _author_rim(
+        _frame_chain(name, idx, size), name, idx, size))
 
 
 @functools.lru_cache(maxsize=None)
@@ -5965,7 +6160,7 @@ def frame_light_base(name, idx, size):
     it and lands on _DIM_FLOOR for frames at a time (NEXT.md 119)."""
     if name not in _AUTHOR_RIM_CURSORS or size >= _AUTHOR_RIM_SIZES[1]:
         return frame_image(name, idx, size)
-    return _frame_chain(name, idx, size)
+    return _disk_frame("b", name, idx, size, lambda: _frame_chain(name, idx, size))
 
 
 def _frame_chain(name, idx, size):
@@ -6079,6 +6274,30 @@ def _spline(p0, p1, p2, p3, t):
 
 
 def anim_frames(name, size, interp=True):
+    """_anim_frames, shared between the processes of one build run through the
+    run's frame cache directory (see _disk_frame): the build's own animations
+    and the quality gate's measurements ask for the same ones."""
+    d = os.environ.get("CGR_FRAME_CACHE")
+    if not d:
+        return _anim_frames(name, size, interp)
+    path = os.path.join(d, "anim_%s_%d_%d.npz" % (name, size, int(bool(interp))))
+    try:
+        with np.load(path) as z:
+            return ([Image.fromarray(a, "RGBA") for a in z["frames"]], [int(r) for r in z["rates"]])
+    except (OSError, ValueError, KeyError):
+        pass
+    frames, rates = _anim_frames(name, size, interp)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "wb") as fh:
+            np.savez(fh, frames=np.stack([np.asarray(f) for f in frames]), rates=np.asarray(rates))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return frames, rates
+
+
+def _anim_frames(name, size, interp=True):
     """(frames, rates_jiffies) for an animated cursor at the given size.
 
     AppStarting/Hand/Wait: 27 cross-faded frames at rate 1 (60 fps) when

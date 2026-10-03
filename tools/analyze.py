@@ -2408,8 +2408,13 @@ def collect(sizes, names=None, jobs=1):
         prev = {v: os.environ.get(v) for v in env}
         os.environ.update({v: "1" for v in env})     # BLAS threads would fight the pool
         try:
-            with cf.ProcessPoolExecutor(max_workers=min(jobs, len(work))) as ex:
-                for name, e in ex.map(_collect_one, work):
+            from cgr import gpu
+            with cf.ProcessPoolExecutor(max_workers=min(gpu.workers(jobs), len(work)),
+                                        initializer=gpu.apply_limits) as ex:
+                # the long ones (animated, many frames) first, so the pool does
+                # not end on one of them with the other workers idle
+                heavy = sorted(work, key=lambda w: -len(H.BY_NAME[w[0]]["frames"]))
+                for name, e in ex.map(_collect_one, heavy):
                     rep[name] = e
                     print(f"  {name} done", file=sys.stderr)
         finally:

@@ -1,0 +1,3 @@
+# Optional: CGR_BACKEND=gpu (see docs/BUILD.md). The CPU path needs only requirements.txt.
+-r requirements.txt
+torch>=2.0
