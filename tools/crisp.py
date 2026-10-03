@@ -1,7 +1,7 @@
 """Rim crispness against release 1.1.0, the direction the render is held to.
 
-Two numbers per cursor and size, frame 0 composited on white, in the rim band
-(0.15-1.6 logical units in from the traced edge):
+Two numbers per cursor at 128, 256 and 512, frame 0 composited on white,
+in the rim band (0.15-1.6 logical units in from the traced edge):
 
   X  mean luminance gradient across the edge: how sharp the rim's dark
      hairline and lit line are. Release 1.1.0 is the floor.
@@ -27,7 +27,7 @@ from PIL import Image
 from cgr import hybrid as H
 
 CURSORS = ("Arrow", "AppStarting", "Wait", "Hand", "Help", "NO", "Handwriting")
-SIZES = (256, 512)
+SIZES = (128, 256, 512)
 BAND = (0.15, 1.6)
 X_FLOOR = 0.95    # of release: across-edge sharpness may not fall below
 A_CEIL = 0.75     # of release: along-edge variation must stay under
