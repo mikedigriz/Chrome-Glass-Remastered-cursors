@@ -1263,17 +1263,35 @@ class _phase:
 
 def main(argv=None):
     # frames the warm-up renders are read back by the quality gate's processes
-    # from this directory, which exists for this run only
+    # from this directory. By default it exists for this run only; with
+    # CGR_KEEP_CACHE=1 it is keyed by a hash of the code and art (framecache.py)
+    # and the next build reuses it.
     if "CGR_FRAME_CACHE" in os.environ:
         return _main(argv)
-    import tempfile
-    cache = tempfile.mkdtemp(prefix="cgr-frames-")
+    keep = os.environ.get("CGR_KEEP_CACHE") == "1"
+    if keep:
+        from . import framecache
+        cache, msg = framecache.open_cache()
+        print(msg, flush=True)
+        n = int(os.environ.get("CGR_CACHE_VERIFY", "0") or 0)
+        if n and "hit" in msg:
+            os.environ["CGR_FRAME_CACHE"] = cache
+            done, bad = framecache.verify(cache, n)
+            print("frame cache: verified %d frames, %d differ" % (done, len(bad)), flush=True)
+            if bad:
+                os.environ.pop("CGR_FRAME_CACHE", None)
+                shutil.rmtree(cache, ignore_errors=True)
+                raise SystemExit("frame cache is stale (%s); removed, run again" % ", ".join(bad[:5]))
+    else:
+        import tempfile
+        cache = tempfile.mkdtemp(prefix="cgr-frames-")
     os.environ["CGR_FRAME_CACHE"] = cache
     try:
         return _main(argv)
     finally:
         os.environ.pop("CGR_FRAME_CACHE", None)
-        shutil.rmtree(cache, ignore_errors=True)
+        if not keep:
+            shutil.rmtree(cache, ignore_errors=True)
 
 
 def _main(argv=None):

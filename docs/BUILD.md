@@ -33,6 +33,8 @@ The defaults are gentle: render processes run below normal priority, six at most
 | `CGR_GPU_FIT_MB=N` | the same for the fold width search, which is launch-bound and wants big chunks (default 300) |
 | `CGR_NICE=0` | do not lower the priority of GPU workers (Windows) |
 | `CGR_WEBP_METHOD=N` | webp encoder effort for the README animations: 4 (default, seconds) or 6 (smallest files, about two minutes for the strip) |
+| `CGR_KEEP_CACHE=1` | keep rendered frames between builds in `CGR_CACHE_DIR` (default: temp dir), named by a hash of `cgr/`, `art/`, `data/`, `tools/foldfit.py` and library versions. Any change means a full re-render; the build prints `hit` or `miss (changed: ...)`. Off by default |
+| `CGR_CACHE_VERIFY=N` | on a cache hit, re-render N frames from scratch and stop (dropping the cache) if any differs |
 | `CGR_JOB_LOG=1` | print how long each warm-up frame took |
 
 `dist/original/Chrome Glass (2006)/` is the untouched 2006 set rebuilt as a reference to diff against. It is deliberately local only - not packaged, not released.
