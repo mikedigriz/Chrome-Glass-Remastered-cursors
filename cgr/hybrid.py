@@ -3231,7 +3231,7 @@ _EDGE_SHADOW_SHARE = {"Handwriting": 0.7}   # of the lift taken. Lifted in full,
                            # Below 0.7 the line reaches the fold fit's window
                            # (fold_step 0.51 -> 0.45 at 0.6, 0.36 at 0.5); NO
                            # at half goes past A's ceiling (1.08)
-_EDGE_SHADOW_WING = {"Arrow": (13.0, 3.0, 0.0)}
+_EDGE_SHADOW_WING = {"Arrow": (13.0, 3.0, 0.0), "Hand": (13.0, 3.0, 0.0)}
                            # LU round the lit-side point and round the fold's
                            # start the lift is taken in full, past them by
                            # the ramp none. The owner's
@@ -3239,9 +3239,10 @@ _EDGE_SHADOW_WING = {"Arrow": (13.0, 3.0, 0.0)}
                            # right wing (NEXT.md 116, selftest rim valley); the
                            # left edge and the top by the apex keep the thin
                            # dark line 1.1.0 had: crisp X Arrow 0.80 -> 0.84,
-                           # 0.79 -> 0.89. Hand's fold fit takes the line by
-                           # the apex for its fold (fold_unres 0.29 -> 1.0)
-                           # and held 10 LU off the apex it gains nothing
+                           # 0.79 -> 0.89, Hand 0.79 -> 0.82, 0.76 -> 0.83.
+                           # Hand's fold reads narrower than foldfit resolves
+                           # (fold_unres 0.29 -> 1.0, debt): looked at 512,
+                           # it is the crease drawn crisp, as in 1.1.0
 # Handwriting and NO were dropped from this set after the first gate run, on
 # two readings: Handwriting's morph_iou_min fell below its ratchet (0.437 ->
 # 0.385) and NO's fold_luma_step nearly doubled (68 -> 90). Added back
