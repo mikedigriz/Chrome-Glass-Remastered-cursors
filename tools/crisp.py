@@ -11,7 +11,12 @@ in the rim band (0.15-1.6 logical units in from the traced edge):
      the ceiling: release 1.1.0 was sharp and wavy, 201694a even and dull,
      the target is both at once (docs/dev/IDEAL.md).
 
-A stage that lowers X without lowering A blurs the chrome and buys nothing.
+  F  the fold: the steepest luminance step across the fold chord within
+     0.6 LU of it, station by station, past the rim band and the points.
+     Release 1.1.0 is the floor, as for X.
+
+A stage that lowers X or F without lowering A blurs the chrome and buys
+nothing.
 
 Read on the unrolled band, not along pixels: a difference taken along a
 pixel's own tangent reads a crisp line a degree off the outline, and any
@@ -44,6 +49,7 @@ CURSORS = ("Arrow", "AppStarting", "Wait", "Hand", "Help", "NO", "Handwriting")
 SIZES = (128, 256, 512)
 BAND = (0.15, 1.6)
 X_FLOOR = 0.95    # of release: across-edge sharpness may not fall below
+F_FLOOR = 0.95    # of release: the fold's, likewise
 A_CEIL = 1.05     # of 201694a: along-edge wobble may not rise above
 DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 REF = os.path.join(DATA, "crisp-release.json")
@@ -55,6 +61,8 @@ ALONG = (None, 0.5)   # neighbours either way: 2 px (dots), 0.5 LU (the wave)
 SMOOTH = 3        # binomial passes before the wobble is read
 DEPTH_TOL = 0.25  # LU a sample's own depth may sit off its ray's: past it
                   # the ray has crossed the medial ridge
+FOLD_T = (0.1, 0.9, 33)   # stations along the chord
+FOLD_N = 0.6      # LU either side of the chord a station reads
 
 
 def complaint(rel, name, size):
@@ -149,6 +157,37 @@ def measure(rgba, name, size, skip=None):
     return float(across), float(along)
 
 
+def fold(rgba, name, size):
+    """Mean over the chord's stations of the steepest step across it, in
+    levels per logical unit, or None for a cursor with no fold chord."""
+    ch = H._fold_chord(name, 0)
+    if ch is None:
+        return None
+    a = np.asarray(rgba, dtype=np.float64)
+    al = a[..., 3:] / 255.0
+    lum = (a[..., :3] * al + 255.0 * (1.0 - al)) @ [0.2126, 0.7152, 0.0722]
+    d = H._edge_distance_at(name, 0, size)
+    L = size / 32.0
+    (x0, y0), (x1, y1) = ch
+    dx, dy = x1 - x0, y1 - y0
+    ln = np.hypot(dx, dy)
+    nx, ny = -dy / ln, dx / ln
+    ts = np.linspace(*FOLD_T)
+    k = np.arange(-FOLD_N, FOLD_N + 1e-9, 0.5 / L)
+    px = x0 + dx * ts[:, None] + k[None] * nx
+    py = y0 + dy * ts[:, None] + k[None] * ny
+    v = H._sample1(lum, px * L - 0.5, py * L - 0.5)
+    dd = H._sample1(d, px * L - 0.5, py * L - 0.5)
+    g = np.abs(np.diff(v, axis=1)) / (0.5 / L)
+    ok = (dd[:, 1:] > BAND[1]) & (dd[:, :-1] > BAND[1])
+    for cx, cy in H._sharp_corners(name, 0):
+        ok &= np.hypot(px[:, 1:] - cx, py[:, 1:] - cy) >= POINT
+    rows = ok.sum(1) >= len(k) // 2
+    if not rows.any():
+        return None
+    return float(np.where(ok, g, 0.0).max(1)[rows].mean())
+
+
 def _load_zone():
     zone = {}
     with np.load(ZONE) as z:
@@ -184,7 +223,7 @@ def main():
         for name, size, im in _frames(args.write):
             key = "%s@%d" % (name, size)
             zone[key] = complaint(im, name, size)
-            got[key] = measure(im, name, size, zone[key])
+            got[key] = measure(im, name, size, zone[key]) + (fold(im, name, size),)
         _dump(REF, got)
         np.savez_compressed(ZONE, **{k: np.packbits(v) for k, v in zone.items()
                                      if v.any()})
@@ -194,7 +233,7 @@ def main():
     got = {}
     for name, size, im in _frames(args.even):
         key = "%s@%d" % (name, size)
-        got[key] = measure(im, name, size, zone.get(key))
+        got[key] = measure(im, name, size, zone.get(key)) + (fold(im, name, size),)
     if args.even:
         _dump(EVEN, got)
         return 0
@@ -203,19 +242,23 @@ def main():
     with open(EVEN, "rb") as f:
         even = json.loads(f.read().decode())
     bad = 0
-    print("%-16s %6s %6s %6s   %6s %6s %6s %6s"
-          % ("", "X", "rel", "x/rel", "A", "even", "a/even", "a/rel"))
-    for key, (x, a) in got.items():
-        rx, ra = ref[key]
+    print("%-16s %6s %6s %6s   %6s %6s %6s %6s   %6s"
+          % ("", "X", "rel", "x/rel", "A", "even", "a/even", "a/rel", "f/rel"))
+    for key, (x, a, f) in got.items():
+        rx, ra, rf = ref[key]
         ea = even[key][1]
         flag = []
         if x < X_FLOOR * rx:
             flag.append("blurred")
         if a > A_CEIL * ea:
             flag.append("wobbly")
+        fr = f / rf if f is not None and rf else None
+        if fr is not None and fr < F_FLOOR:
+            flag.append("soft fold")
         bad += bool(flag)
-        print("%-16s %6.2f %6.2f %6.2f   %6.2f %6.2f %6.2f %6.2f  %s"
-              % (key, x, rx, x / rx, a, ea, a / ea, a / ra, " ".join(flag)))
+        print("%-16s %6.2f %6.2f %6.2f   %6.2f %6.2f %6.2f %6.2f   %6s  %s"
+              % (key, x, rx, x / rx, a, ea, a / ea, a / ra,
+                 "-" if fr is None else "%.2f" % fr, " ".join(flag)))
     print("crisp: %d of %d off target" % (bad, len(got)))
     return 0
 
