@@ -29,7 +29,7 @@
 | Система | Файл | Как ставится |
 |---|---|---|
 | Windows 10/11 | `ChromeGlassRemastered-windows.zip` | правая кнопка по `Install.inf`, пункт **Установить** |
-| Linux | `.deb` или `ChromeGlassRemastered-linux.tar.gz` | пакет или распаковка в `~/.local/share/icons` |
+| Linux | `.deb` или `ChromeGlassRemastered-linux.tar.gz` | пакет или распаковка в `~/.icons` |
 | macOS 15+ | `ChromeGlassRemastered.cape` | открыть в [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
 
 <details open>

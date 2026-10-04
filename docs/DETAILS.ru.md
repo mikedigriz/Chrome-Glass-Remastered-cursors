@@ -65,7 +65,7 @@ rundll32.exe setupapi,InstallHinfSection DefaultUninstall 132 "<полный п�
 ```sh
 sudo apt remove chrome-glass-remastered-cursors        # .deb
 sudo pacman -R chrome-glass-remastered-cursors         # Arch
-rm -rf ~/.local/share/icons/"Chrome Glass Remastered"  # ручная установка
+rm -rf ~/.icons/"Chrome Glass Remastered"  # ручная установка
 ```
 
 ## macOS
@@ -82,7 +82,7 @@ rm -rf ~/.local/share/icons/"Chrome Glass Remastered"  # ручная устан
 
 **Темы нет в списке или указатель не сменился.** Выйдите из сеанса и войдите снова. Приложения запоминают курсор при запуске, так что перезапустите те, где остался старый.
 
-**Распаковал на Linux, ничего не появилось.** Архив должен лечь как `~/.local/share/icons/Chrome Glass Remastered/cursors/`, без лишней папки-обёртки между ними. Проверка: `ls ~/.local/share/icons/"Chrome Glass Remastered"/cursors | head`.
+**Распаковал на Linux, ничего не появилось.** Архив должен лечь как `~/.icons/Chrome Glass Remastered/cursors/`, без лишней папки-обёртки между ними. Проверка: `ls ~/.icons/"Chrome Glass Remastered"/cursors | head`.
 
 **Указатель уезжает в другую тему посреди перетаскивания или на ссылке в Firefox.** Эти запросы идут по устаревшим хекс-именам. В релизных архивах есть все 114 имён, так что проверьте, что у вас именно эта тема, а не её частичная копия.
 

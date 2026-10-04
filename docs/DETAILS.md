@@ -65,7 +65,7 @@ For a single session or a single application, set `XCURSOR_THEME="Chrome Glass R
 ```sh
 sudo apt remove chrome-glass-remastered-cursors        # .deb
 sudo pacman -R chrome-glass-remastered-cursors         # Arch
-rm -rf ~/.local/share/icons/"Chrome Glass Remastered"  # manual install
+rm -rf ~/.icons/"Chrome Glass Remastered"  # manual install
 ```
 
 ## macOS
@@ -82,7 +82,7 @@ To restore the system cursors: **File → Reset System Cursor**, or <kbd>⌘</kb
 
 **The theme is not in the list, or the pointer did not change.** Log out and back in. Applications cache the cursor at startup, so restart anything that still shows the old one.
 
-**Unpacked on Linux and nothing appeared.** The archive has to land as `~/.local/share/icons/Chrome Glass Remastered/cursors/`, with no extra wrapper directory in between. Check with `ls ~/.local/share/icons/"Chrome Glass Remastered"/cursors | head`.
+**Unpacked on Linux and nothing appeared.** The archive has to land as `~/.icons/Chrome Glass Remastered/cursors/`, with no extra wrapper directory in between. Check with `ls ~/.icons/"Chrome Glass Remastered"/cursors | head`.
 
 **The pointer reverts to another theme mid-drag, or on a link in Firefox.** Those requests go by the legacy hex names. All 114 names ship in the release archives, so check you are running this theme and not a partial copy of it.
 

@@ -29,7 +29,7 @@ All files live in the [latest release](https://github.com/mikedigriz/Chrome-Glas
 | Your system | File | How it goes on |
 |---|---|---|
 | Windows 10/11 | `ChromeGlassRemastered-windows.zip` | right-click `Install.inf`, choose **Install** |
-| Linux | `.deb`, or `ChromeGlassRemastered-linux.tar.gz` | install the package, or unpack into `~/.local/share/icons` |
+| Linux | `.deb`, or `ChromeGlassRemastered-linux.tar.gz` | install the package, or unpack into `~/.icons` |
 | macOS 15+ | `ChromeGlassRemastered.cape` | open it with [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
 
 <details open>
