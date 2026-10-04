@@ -41,6 +41,8 @@ A_CEIL = 0.75     # of release: along-edge variation must stay under
 REF = os.path.join(os.path.dirname(__file__), "..", "data", "crisp-release.json")
 ZONE = os.path.join(os.path.dirname(__file__), "..", "data", "crisp-zone.npz")
 LIFT = 0.5        # levels _rim_valley lifts a release pixel by to be complaint
+POINT = 3.0       # LU round a sharp point left out: in the narrow wedge the
+                  # other side's lines run across this side's "along"
 
 
 def complaint(rel, name, size):
@@ -60,6 +62,10 @@ def measure(rgba, name, size, skip=None):
     inner = d > BAND[0]
     # off the medial ridge and the points, where the edge has no one normal
     band = inner & (d < BAND[1]) & (gn > 0.5 * np.median(gn[inner]))
+    L = size / 32.0
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    for cx, cy in H._sharp_corners(name, 0):
+        band &= np.hypot(xs - cx, ys - cy) >= POINT
     if skip is not None:
         band &= ~skip
     nx, ny = dx / np.maximum(gn, 1e-9), dy / np.maximum(gn, 1e-9)
