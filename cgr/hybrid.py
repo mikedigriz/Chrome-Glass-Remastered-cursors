@@ -1578,6 +1578,11 @@ _POINT_READ = 2.5         # logical units: where a convex point reads its own we
 _POINT_READ_REACH = 8.0   # logical units: identity again here. Over 2 * _POINT_READ
                           # or the remap folds; four times it halves the radius at
                           # the point, and the cycle keeps its liveliness
+_POINT_READ_REACH_FOR = {"Help": 6.5}   # where 8.0 bent the fold behind the
+                          # point: Help's chord leaves the point on the bisector
+                          # and the remap took its crease down to 0.94 of release
+                          # 1.1.0's at 128. The arrows keep 8.0: at 6.5 Arrow_Down's
+                          # chisel came back (tip_nest 8 -> 29)
 _POINT_BAND = 0.7         # logical units: the rim band's depth. The read fades in
                           # from one hardware pixel of band (46px) to two (91px)
 _POINT_CONVERGE = _BLADE_CURSORS | {"Hand", "Help", "Handwriting", "NO"}
@@ -1671,6 +1676,7 @@ def _point_converge(rgb, name, idx, size):
     if name not in _POINT_CONVERGE:
         return rgb
     L = size / float(V.LOGICAL)
+    reach = _POINT_READ_REACH_FOR.get(name, _POINT_READ_REACH)
     read = _POINT_READ * min(max(_POINT_BAND * L - 1.0, 0.0), 1.0)
     if read <= 0.0:
         return rgb
@@ -1685,7 +1691,7 @@ def _point_converge(rgb, name, idx, size):
     if GPU.BACKEND == "gpu" and pts:
         from .gpu import stages
         return stages.point_converge(np.asarray(rgb, dtype=np.float64), pts, L, read,
-                                     _POINT_READ_REACH, _POINT_TAPS, cub)
+                                     reach, _POINT_TAPS, cub)
     ys, xs = np.mgrid[0:size, 0:size] + 0.5
     px, py = xs / L, ys / L
     out = np.asarray(rgb, dtype=np.float64).copy()
@@ -1693,9 +1699,9 @@ def _point_converge(rgb, name, idx, size):
         src = out.copy()
         dx, dy = px - cx, py - cy
         r = np.hypot(dx, dy)
-        m = r < _POINT_READ_REACH
+        m = r < reach
         rm = r[m]
-        rho = rm + read * (1.0 - rm / _POINT_READ_REACH) ** 2
+        rho = rm + read * (1.0 - rm / reach) ** 2
         th = np.arctan2(dy[m], dx[m])
         span = np.maximum(1.0 / np.maximum(rm, 1.0 / L) - 1.0 / rho, 0.0) / L
         cm = (cub[m] if np.ndim(cub) else cub)[:, None]
