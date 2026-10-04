@@ -1471,10 +1471,16 @@ def test_fold_jitter():
         A._cycle_cache.pop(key, None)
         if keep_cycle is not None:
             A._cycle_cache[key] = keep_cycle
-    check("fold jitter", hurt["p95"] > max(clean["p95"] * 1.5,
-                                            A.THRESHOLDS["fold_jitter"])
+    # The gate has to fire on it, and the shift has to stand clear of the fit's
+    # own noise. Read on the mean, not on p95: on a crease as sharp as the
+    # master's the fit flips its centre at a few stations while the edge itself
+    # does not move (p95 0.25 clean, read by the steepest pixel 0.00), and that
+    # tail is all a p95 of the clean cycle sees.
+    check("fold jitter", hurt["p95"] > A.THRESHOLDS["fold_jitter"]
+          and hurt["mean"] > 3.0 * clean["mean"]
           and hurt["stations"] >= A._JITTER_STATIONS,
-          f"p95 {clean['p95']:.3f} -> {hurt['p95']:.3f} logical units on "
+          f"p95 {clean['p95']:.3f} -> {hurt['p95']:.3f}, mean {clean['mean']:.3f} "
+          f"-> {hurt['mean']:.3f} logical units on "
           f"{hurt['stations']} stations, coverage {hurt['pair_coverage']:.2f}")
 
 
@@ -2032,8 +2038,9 @@ def test_restep_support():
     0.05-unit grid leaves that much dust."""
     eps, bad = 0.5, []
     reach = H._RESTEP_SUPPORT + H._RESTEP_FADE
-    for name, idx, size in (("Arrow", 0, 512), ("Hand", 0, 256), ("Wait", 0, 512),
-                            ("Help", 0, 512), ("Handwriting", 0, 256)):
+    # below H._RESTEP_MAX_SIZE: from there up the stage is off by design
+    for name, idx, size in (("Arrow", 0, 96), ("Hand", 0, 64), ("Wait", 0, 96),
+                            ("Help", 0, 96), ("Handwriting", 0, 64)):
         rgb = A.frame(name, idx, size)[..., :3]
         out = np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1)
         hit = out > eps
@@ -2053,13 +2060,16 @@ def test_restep_support():
             j = np.nonzero(v > eps)[0]
             if len(j):
                 wide = max(wide, float(ns[j[-1]] - ns[j[0]]))
-        if leak or wide > 2 * reach:
+        # plus the pixel's own footprint, which the splat back onto the grid
+        # adds at any size and is a third of a unit at 96
+        room = 2 * reach + V.LOGICAL / size
+        if leak or wide > room:
             bad.append(f"{name}@{size}: {leak} px inside the tip guard, "
-                       f"widest run {wide:.2f} of {2 * reach:.2f} allowed")
+                       f"widest run {wide:.2f} of {room:.2f} allowed")
         elif not hit.any():
             bad.append(f"{name}@{size}: the stage did nothing at all")
     check("restep touches only the fold", not bad, "; ".join(bad) or
-          "nothing inside the tip guard, no run over %.2f logical units"
+          "nothing inside the tip guard, no run over %.2f logical units and a pixel"
           % (2 * reach))
 
 
@@ -2092,12 +2102,12 @@ def test_restep_one_edge():
     ns = np.arange(-H._RESTEP_REACH, H._RESTEP_REACH + H._RESTEP_PITCH, H._RESTEP_PITCH)
     win = np.abs(ns) <= H._RESTEP_REACH - H._RESTEP_FIT[1] - 0.1
     box = np.ones(max(3, int(round(0.15 / H._RESTEP_PITCH)) | 1))
-    frames = {size: A.frame("Help", 0, size)[..., :3] for size in (256, 512)}
+    frames = {size: A.frame("Help", 0, size)[..., :3] for size in (80, 96)}
     keep = H._FOLD_CHORD_OF
     H._FOLD_CHORD_OF = {}
     _chord_caches()
     try:
-        for name, idx, size in (("Help", 0, 256), ("Help", 0, 512)):
+        for name, idx, size in (("Help", 0, 80), ("Help", 0, 96)):
             rgb = frames[size]
             out = np.ascontiguousarray(
                 np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1))
@@ -2122,9 +2132,11 @@ def test_restep_one_edge():
             if end >= at[-1]:
                 bad.append(f"{name}@{size}: the fold reads to the chord's end")
                 continue
-            said.append(f"{name}@{size}: {got[end + 2:].max():.1f} past "
-                        f"t={(end + 1) / (len(edge) - 1):.2f}")
-            if got[end + 2:].max() > eps or got[:end + 1].max() <= eps:
+            # the splat reaches as many stations past the end as a pixel spans
+            pad = 1 + int(np.ceil(V.LOGICAL / size / (seg / (len(edge) - 1))))
+            said.append(f"{name}@{size}: {got[end + pad:].max():.1f} past "
+                        f"t={(end + pad - 1) / (len(edge) - 1):.2f}")
+            if got[end + pad:].max() > eps or got[:end + 1].max() <= eps:
                 bad.append(said[-1])
     finally:
         H._FOLD_CHORD_OF = keep
