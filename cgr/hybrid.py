@@ -1606,6 +1606,82 @@ _POINT_KEEP_LIGHT_OFF = {"AppStarting", "Wait"}
                           # their bottom point reads 15-20 levels paler than
                           # release 1.1.0's already; given the light back it
                           # lost the author's dark point (tip contrast 0.30 -> 0.23)
+_POINT_NEST = {"Wait": {(29.0, 13.98): -0.18}, "AppStarting": {(29.0, 13.98): -0.22},
+               "Hand": {(29.0, 13.98): 0.5}}
+                          # logical units across the point's bisector the inner
+                          # point sits off it, read by eye at 512 on the canonical
+                          # frame (+ toward the bisector's left normal). The rest
+                          # of the points are within 0.1 of their line already
+_POINT_NEST_ZONE = (0.5, 1.8, 2.5, 4.5)
+                          # LU from the point the shift starts, is full from and
+                          # to, and is gone by: the outer point stays put, the
+                          # inner one (1.8-2.1 out on these) moves
+_POINT_NEST_EDGE = (0.08, 0.3)
+                          # LU in from the outline the shift starts and is full:
+                          # the hairline and the blade stay on the silhouette
+
+
+def _point_axis(name, idx, c):
+    """Unit bisector into the glass at traced corner c, from the outline's
+    straight run 2.5-8 units either side of it."""
+    c = np.asarray(c, dtype=np.float64)
+    pts = min((np.asarray(g, dtype=np.float64)[:, :2] for kind, g in _mask_prims(name, idx)
+               if kind == "poly"), key=lambda p: float(np.hypot(*(p - c).T).min()))
+    i = int(np.argmin(np.hypot(*(pts - c).T)))
+    sides = []
+    for step in (1, -1):
+        j, run = i, []
+        for _ in range(len(pts) - 1):
+            j = (j + step) % len(pts)
+            d = float(np.hypot(*(pts[j] - pts[i])))
+            if d > 8.0:
+                break
+            if d > 2.5:
+                run.append(pts[j] - pts[i])
+        v = np.mean(run, axis=0)
+        sides.append(v / np.hypot(*v))
+    b = sides[0] + sides[1]
+    return b / np.hypot(*b)
+
+
+def _point_nest(rgb, name, idx, size):
+    """Put the inner point on the line through the outer one.
+
+    The rim's bands keep their depth to the point and close behind it in a
+    second, nested point (owner, 2026-10-04: the inner point stays inside, on
+    one line with the outer). Where the master's bands differ in depth either
+    side that nested point sits off the bisector, by up to 0.2 units on the
+    wings of Wait, AppStarting and Hand. Each one is slid across onto it: the
+    shift is full round the inner point and gone at the outer one, past 4.5
+    units and on the outline, so only the bands' depths change near the point."""
+    table = _POINT_NEST.get(name)
+    if not table:
+        return rgb
+    L = size / float(V.LOGICAL)
+    g = _geom(name, idx)
+    ys, xs = np.mgrid[0:size, 0:size]
+    px, py = (xs + 0.5) / L, (ys + 0.5) / L
+    d = _edge_distance_at(name, idx, size)
+    e0, e1 = _POINT_NEST_EDGE
+    edge = _smoothstep(np.clip((d - e0) / (e1 - e0), 0.0, 1.0))
+    r0, r1, r2, r3 = _POINT_NEST_ZONE
+    sx, sy = xs.astype(np.float64), ys.astype(np.float64)
+    for c in _sharp_corners(name, g):
+        lat = next((v for k, v in table.items() if np.hypot(k[0] - c[0], k[1] - c[1]) < 0.5), 0.0)
+        if not lat:
+            continue
+        ax, ay = _point_axis(name, g, c)
+        r = np.hypot(px - c[0], py - c[1])
+        w = (_smoothstep(np.clip((r - r0) / (r1 - r0), 0.0, 1.0))
+             * _smoothstep(np.clip((r3 - r) / (r3 - r2), 0.0, 1.0)) * edge)
+        sx = sx + lat * w * (-ay) * L
+        sy = sy + lat * w * ax * L
+    lo, ramp = _POINT_CUBIC_RIM
+    cm = np.clip((d - lo) / ramp, 0.0, 1.0)[..., None]
+    src = np.asarray(rgb, dtype=np.float64)
+    moved = ((sx != xs) | (sy != ys))[..., None]
+    read = cm * _band_cubic(src, sx, sy) + (1.0 - cm) * _sample(src, sx, sy)
+    return np.where(moved, np.clip(read, 0, 255), src)
 
 
 def _outline_angle(name, idx, c):
@@ -5988,7 +6064,7 @@ _VALLEY_ALPHA = 0.25         # of peak alpha: glass that can serve as a level
 _VALLEY_CAP = 3.0            # levels of dip left alone, then lifted in full
 _VALLEY_RAMP = 12.0          # over this many more
 _VALLEY_APEX = (13.0, 2.0)   # LU from the apex held off, and the ramp back in
-_VALLEY_POINT = (2.5, 1.0)   # LU from every point held off, and the ramp
+_VALLEY_POINT = (3.0, 1.0)   # LU from every point held off, and the ramp
 _VALLEY_CLIMB = 0.5          # of a step the distance must still climb inward
 _VALLEY_FOLD_RAMP = 1.0      # LU the fill comes back in over off the fold
 _VALLEY_LEVEL_SMOOTH = 0.1   # LU the fill level is smoothed across
@@ -6090,6 +6166,10 @@ _POINT_ALONG_BACK = (4, 2.0)               # smoothings along the edge and gain 
                                            # (point along 5.9-7.1), this 4.3
 _POINT_ALONG_LIT = 0.5                     # LU off the fold toward the light a point
                                            # must lie
+_POINT_ALONG_KERNEL = ((-3, 1), (-2, 6), (-1, 15), (0, 20), (1, 15), (2, 6), (3, 1))
+                                           # px along the edge, weight: _VALLEY_ALONG's
+                                           # five taps left the lower edge's dots at 4.2
+                                           # with the inner point nested (2026-10-04)
 
 
 def _point_along(im, name, idx, size):
@@ -6128,7 +6208,7 @@ def _point_along(im, name, idx, size):
         return im
     if GPU.BACKEND == "gpu":
         from .gpu import stages
-        rgb = stages.point_along_core(a, nx, ny, w, _VALLEY_ALONG, _POINT_ALONG_AGREE,
+        rgb = stages.point_along_core(a, nx, ny, w, _POINT_ALONG_KERNEL, _POINT_ALONG_AGREE,
                                       _POINT_ALONG_BACK[0], _POINT_ALONG_BACK[1])
         return _compose(np.clip(rgb, 0, 255), a[..., 3])
     al = a[..., 3] / 255.0
@@ -6136,7 +6216,7 @@ def _point_along(im, name, idx, size):
     py, px = np.mgrid[0:size, 0:size].astype(np.float64)
     lo, hi = _POINT_ALONG_AGREE
     taps = []
-    for k, wt in _VALLEY_ALONG:
+    for k, wt in _POINT_ALONG_KERNEL:
         if k == 0:
             taps.append((None, None, wt))
             continue
@@ -6344,7 +6424,9 @@ def _frame_chain(name, idx, size):
     rgb = _tip_level(rgb, name, idx, size)
     if name in _FOLD_RESTEP_ON:
         rgb = _fold_restep(rgb, name, idx, size)
-    rgb = _point_converge(rgb, name, idx, size)
+    # _point_converge is out of the chain (owner, 2026-10-04): read from 2.5
+    # units back it bent every band and the chord into the point
+    rgb = _point_nest(rgb, name, idx, size)
     # _straighten_fold and _tip_pinch used to run here. Both are out, and both
     # were measured on the way out rather than argued about.
     #
@@ -6401,7 +6483,60 @@ def _frame_chain(name, idx, size):
         im = _even_band(im, name, idx, size)
     # _rim_valley and _point_along from _VALLEY_MIN_SIZE up, _author_rim below
     # it: the order between them is free
-    return _point_along(_rim_valley(im, name, idx, size), name, idx, size)
+    return _destair(_point_along(_rim_valley(im, name, idx, size), name, idx, size),
+                       size)
+
+
+_DESTAIR_MIN_SIZE = 256      # side from which the master's lines are drawn on
+                             # the pixel grid: the inner layers' edges step a
+                             # pixel at a time (comparison.png, owner 2026-10-04).
+                             # At 128 a step is the fold's own width and the
+                             # stage bent it: fold_curv SizeAll 0.30 -> 0.73
+_DESTAIR = (0.8, 2.0, 1.5, 2)
+                             # pixels: gradient scale, orientation scale, step
+                             # along the edge, and lookups either side of it
+
+
+def _gauss_px(a, s):
+    """Gaussian blur of a 2D field by `s` pixels, edge-padded."""
+    r = int(3 * s + 1)
+    k = np.exp(-np.arange(-r, r + 1) ** 2 / (2.0 * s * s))
+    k /= k.sum()
+    p = np.pad(a, r, mode="edge")
+    h = sum(k[i] * p[:, i:i + a.shape[1]] for i in range(2 * r + 1))
+    return sum(k[i] * h[i:i + a.shape[0]] for i in range(2 * r + 1))
+
+
+def _destair(im, size):
+    """Smooth along each edge and not across it, so a line that steps a
+    pixel at a time is a line again and stays as sharp.
+
+    The direction is the structure tensor's, and the weight its coherence:
+    flat glass and corners, where no single direction holds, are left alone.
+    Five lookups _DESTAIR[2] pixels apart, binomial, Catmull-Rom."""
+    if size < _DESTAIR_MIN_SIZE:
+        return im
+    sg, st, step, taps = _DESTAIR
+    a = np.asarray(im, dtype=np.float64)
+    rgb, al = a[..., :3], a[..., 3]
+    y = _gauss_px(rgb @ [0.2126, 0.7152, 0.0722], sg)
+    gy, gx = np.gradient(y)
+    jxx, jyy, jxy = _gauss_px(gx * gx, st), _gauss_px(gy * gy, st), _gauss_px(gx * gy, st)
+    tr = jxx + jyy
+    dif = np.sqrt((jxx - jyy) ** 2 + 4.0 * jxy ** 2)
+    l1 = 0.5 * (tr + dif)
+    coh = (dif / np.maximum(tr, 1e-9)) ** 2
+    th = 0.5 * np.arctan2(2.0 * jxy, jxx - jyy)
+    tx, ty = -np.sin(th), np.cos(th)
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    w = np.array([1.0, 4.0, 6.0, 4.0, 1.0][2 - taps:3 + taps])
+    w /= w.sum()
+    acc = sum(wk * _band_cubic(rgb, xs + k * step * tx, ys + k * step * ty)
+              for k, wk in zip(range(-taps, taps + 1), w))
+    k = (np.clip(np.sqrt(l1) / 4.0, 0.0, 1.0) * coh
+         * _smoothstep(np.clip((al - 60.0) / 60.0, 0.0, 1.0)))
+    out = np.clip(rgb + k[..., None] * (acc - rgb), 0, 255)
+    return Image.fromarray(np.dstack([out, al]).round().astype(np.uint8), "RGBA")
 
 
 def _premult(im):

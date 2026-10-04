@@ -610,66 +610,6 @@ def test_inner_tip():
           % (100 * clean, 100 * hurt))
 
 
-def test_tip_nest():
-    """Take the points back out of _point_converge: the chisel of 2026-09-24.
-
-    The band that closes behind the point is the render's own rim, so the
-    render with the stage off is the defect itself rather than a picture of
-    it, and the gate has to fall between the two."""
-    name = "Hand"
-    clean, _ = A.tip_nest(name)
-    keep = H._POINT_CONVERGE
-    H._POINT_CONVERGE = set()
-    repoint()
-    try:
-        hurt, _ = A.tip_nest(name)
-    finally:
-        H._POINT_CONVERGE = keep
-        repoint()
-    check("tip nest", clean <= A.THRESHOLDS["tip_nest"] < hurt,
-          "%.1f -> %.1f levels behind the point, gate %.0f"
-          % (clean, hurt, A.THRESHOLDS["tip_nest"]))
-
-
-def test_point_ink():
-    """_point_converge leaves the author's point alone at 32.
-
-    There the rim band is 0.7 of a pixel and the point is his: rim to its end,
-    the darkest glass on the cursor. Read at full depth, the stage put the
-    body's glass on it and the points came out 20-60 levels paler on white
-    (NEXT.md 101). Read here as the darkest on-white luma within 2.5 units of
-    each converged point, the stage against no stage; the fade taken out has
-    to show it, and at 512 the stage still has to act."""
-    def ink(size):
-        L = size / float(V.LOGICAL)
-        ys, xs = np.mgrid[0:size, 0:size] + 0.5
-        f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
-        al = f[..., 3] / 255.0
-        w = f[..., :3].mean(-1) * al + 255.0 * (1.0 - al)
-        return np.array([w[(np.hypot(xs / L - cx, ys / L - cy) <= 2.5) & (al > 0.05)].min()
-                         for cx, cy in H._sharp_corners(name, H._geom(name, 0))])
-
-    def paler(size, band):
-        keep = H._POINT_CONVERGE, H._POINT_BAND
-        try:
-            H._POINT_BAND = band
-            repoint()
-            on = ink(size)
-            H._POINT_CONVERGE = set()
-            repoint()
-            return float((on - ink(size)).max())
-        finally:
-            H._POINT_CONVERGE, H._POINT_BAND = keep
-            repoint()
-
-    name = "AppStarting"
-    clean, hurt = paler(32, H._POINT_BAND), paler(32, 1e9)
-    acts = paler(512, H._POINT_BAND)
-    check("point ink at 32", clean <= 0.5 < hurt and abs(acts) > 0.5,
-          "%.1f -> %.1f levels paler on white with the fade out; %.1f at 512"
-          % (clean, hurt, acts))
-
-
 def test_band_even():
     """_even_band keeps the rim band's inner edge on one course along a side.
 
@@ -1068,30 +1008,34 @@ def test_point_along():
 
     _rim_valley is held off the points, and in their last 2-3 LU the master's
     hairline, a pixel wide on a slanted edge, came out a dark pixel per step of
-    the staircase at 256 and 384 (NEXT.md 120). Along the upper edge 1-3 LU
-    from the wing tip the darkest composite on grey over 0.05-0.45 LU in is read
-    in half-pixel steps, as its spread about a 4 px running mean, the worse of
-    Arrow and Arrow_Down at 256. Without the stage it has to fail."""
-    eps, size = 5.0, 256
-    tip, apex = np.array([29.0, 13.98]), np.array([3.08, 2.95])
-    u = (apex - tip) / np.hypot(*(apex - tip))
-    n = np.array([u[1], -u[0]])                        # inward off the upper edge
+    the staircase at 256 and 384 (NEXT.md 120). With the inner point nested
+    again (2026-10-04) the upper edge's hairline is a line without the stage;
+    the lower edge's is not. On grey at 256, the 90th percentile of how far a
+    pixel of the lower edge's blade (0.03-0.3 LU in, 0.8-3 LU from the wing
+    tip) stands off the mean of its neighbours along the edge, the worst of
+    Arrow, UpArrow and Arrow_Down: 5.2 with the stage, 10.5 without. Without
+    the stage it has to fail."""
+    eps, size = 6.0, 256
+    tip, lower = np.array([29.0, 13.98]), np.array([-0.466, -0.885])
     L = size / 32.0
-    ts = np.arange(1.0, 3.0, 0.5 / L)
-    ds = np.arange(0.05, 0.46, 0.05)
-    xs = (tip[0] + u[0] * ts[:, None] + n[0] * ds[None]) * L - 0.5
-    ys = (tip[1] + u[1] * ts[:, None] + n[1] * ds[None]) * L - 0.5
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    py, px = np.mgrid[0:size, 0:size].astype(np.float64)
+    r = np.hypot(xs - tip[0], ys - tip[1])
 
     def dots():
         worst = 0.0
-        for name in ("Arrow", "Arrow_Down"):
+        for name in ("Arrow", "UpArrow", "Arrow_Down"):
             f = np.asarray(H.frame_image(name, 0, size), dtype=np.float64)
+            d = H._edge_distance_at(name, 0, size)
+            gy, gx = np.gradient(d)
+            g = np.maximum(np.hypot(gx, gy), 1e-9)
+            nx, ny = gx / g, gy / g
+            band = ((d > 0.03) & (d < 0.3) & (r > 0.8) & (r < 3.0)
+                    & (nx * lower[0] + ny * lower[1] > 0.95))
             al = f[..., 3] / 255.0
-            grey = f[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
-            line = H._sample1(grey, xs, ys).min(1)
-            run = np.convolve(np.pad(line, 4, mode="edge"), np.ones(8) / 8,
-                              mode="valid")[:len(line)]
-            worst = max(worst, float(np.std(line - run)))
+            c = f[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
+            near = sum(H._sample1(c, px - ny * k, py + nx * k) for k in (-2, -1, 1, 2)) / 4
+            worst = max(worst, float(np.percentile(np.abs(c - near)[band], 90)))
         return worst
 
     clean = dots()
@@ -1104,7 +1048,7 @@ def test_point_along():
         H._point_along = real
         repoint()
     check("point along", clean <= eps < hurt,
-          "%.2f -> %.2f levels of dots on the hairline by the wing tip without "
+          "%.2f -> %.2f levels of dots on the lower edge by the wing tip without "
           "the stage, bound %.2f" % (clean, hurt, eps))
 
 
@@ -1278,16 +1222,18 @@ def test_author_rim_light():
     lightanim takes the leaving light as a share of the glass, and read off the
     darkened rim the same loss is a larger share of it: by AppStarting's wing
     tip at 64 the light sat on _DIM_FLOOR for ten frames running and jumped
-    (NEXT.md 119). Within 3 LU of the points of Wait and AppStarting at 64,
-    against the render keys (_under_keys): the levels by which the frames go
-    more than 20 under them, summed. The frames each pixel spent by its own
-    darkest were counted first; the light's power form has a smooth minimum
-    they dwell at anyway (NEXT.md 121). With the share read off the darkened
-    frame it has to fail."""
-    eps = 80.0
+    (NEXT.md 119). That was the converged point. With the inner point nested
+    again (2026-10-04) the keys swing at its vertex 1.5-3 LU in, which the
+    light field carried up from 32px cannot follow, and that alone put 144
+    levels past 20 under the keys there; the darkened share added 18. It shows
+    now 6-8 LU off the points at 32-48. Over the glass of Wait and AppStarting
+    at 32, against the render keys (_under_keys): the levels by which the
+    frames go more than 15 under them, summed. With the share read off the
+    darkened frame it has to fail."""
+    eps = 420.0
 
     def read():
-        return sum(float(np.maximum(-_under_keys(name, 64, True) - 20.0, 0.0).sum())
+        return sum(float(np.maximum(-_under_keys(name, 32) - 15.0, 0.0).sum())
                    for name in ("Wait", "AppStarting"))
 
     clean = read()
@@ -1299,8 +1245,8 @@ def test_author_rim_light():
         H.frame_light_base = keep
         LA._phase_cache.clear()
     check("author rim under the light", clean <= eps < hurt,
-          "%.1f -> %.1f levels past 20 under the keys by the points with the "
-          "share read off the darkened rim, bound %.1f" % (clean, hurt, eps))
+          "%.1f -> %.1f levels past 15 under the keys at 32 with the share read "
+          "off the darkened rim, bound %.1f" % (clean, hurt, eps))
 
 
 def test_light_under_keys():
@@ -1371,49 +1317,78 @@ def test_point_light_gain():
           "at full gain, bound %.2f" % (clean, hurt, eps))
 
 
-def test_point_taps():
-    """_point_converge reads each pixel's whole arc near a point.
+def test_point_nest():
+    """_point_nest moves the inner point onto the bisector and nothing else.
 
-    The read squeezes the arc up to 5.4 times there, and one bilinear lookup
-    per pixel took every third pixel of the rim's dark line: at 256 its last
-    two units before Arrow's points were a row of beads (NEXT.md 106). The
-    stage's input is caught on Arrow's frame 0 at 256, and its output 0.25-2.5
-    LU from the points is held against the same read at 64 lookups, 95th
-    percentile of the luma difference. One lookup has to fail the same bound."""
-    name, size, eps = "Arrow", 256, 1.0
-    got = {}
-    real = H._point_converge
-
-    def grab(rgb, n, i, s):
-        got["rgb"] = np.array(rgb, dtype=np.float64)
-        return real(rgb, n, i, s)
-
-    H._point_converge = grab
-    try:
-        H.frame_image.__wrapped__(name, 0, size)
-    finally:
-        H._point_converge = real
+    Wait's wing at 512: the content round the inner point (2 units out on the
+    bisector) has to come from `lat` across, while the outline and the glass
+    past _POINT_NEST_ZONE stay bit for bit. The control is the table's shift
+    reversed, which has to land somewhere else."""
+    name, idx, size = "Wait", 2, 512
     L = size / 32.0
-    g = H._geom(name, 0)
-    pts = [c for c in H._sharp_corners(name, g)
-           if H._outline_angle(name, g, c) <= H._POINT_WIDEST]
-    ys, xs = np.mgrid[0:size, 0:size] + 0.5
-    near = np.min([np.hypot(xs / L - cx, ys / L - cy) for cx, cy in pts], axis=0)
-    zone = (H._mask(name, 0, size) >= 128) & (near > 0.25) & (near < 2.5)
+    rng = np.random.default_rng(7)
+    rgb = rng.uniform(0, 255, (size, size, 3))
+    rgb = np.dstack([H._gauss_px(rgb[..., c], 6.0) for c in range(3)])
+    c = (29.0, 13.98)
+    lat = H._POINT_NEST[name][c]
+    ax, ay = H._point_axis(name, H._geom(name, idx), c)
+    px, py = (c[0] + 2.1 * ax) * L - 0.5, (c[1] + 2.1 * ay) * L - 0.5
+    want = H._band_cubic(rgb, np.array([px + lat * -ay * L]), np.array([py + lat * ax * L]))[0]
 
-    def lum(taps):
-        keep = H._POINT_TAPS
-        H._POINT_TAPS = taps
-        try:
-            return H._point_converge(got["rgb"], name, 0, size)[..., :3].mean(-1)
-        finally:
-            H._POINT_TAPS = keep
+    def at(out):
+        return H._band_cubic(out, np.array([px]), np.array([py]))[0]
 
-    dense = lum(64)
-    clean = float(np.percentile(np.abs(lum(H._POINT_TAPS) - dense)[zone], 95))
-    hurt = float(np.percentile(np.abs(lum(1) - dense)[zone], 95))
-    check("point taps", clean <= eps < hurt,
-          "%.2f -> %.2f levels off the full arc with one lookup, bound %.1f" % (clean, hurt, eps))
+    out = H._point_nest(rgb, name, idx, size)
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    far = np.ones((size, size), dtype=bool)
+    for q in H._POINT_NEST[name]:
+        far &= np.hypot(xs - q[0], ys - q[1]) > H._POINT_NEST_ZONE[3]
+    rim = H._edge_distance_at(name, idx, size) <= H._POINT_NEST_EDGE[0]
+    still = float(np.abs(out - rgb)[far | rim].max())
+    H._POINT_NEST[name][c] = -lat
+    try:
+        wrong = at(H._point_nest(rgb, name, idx, size))
+    finally:
+        H._POINT_NEST[name][c] = lat
+    err, ctl = float(np.abs(at(out) - want).max()), float(np.abs(wrong - want).max())
+    check("point nest", err < 1.0 < ctl and still < 1e-6,
+          "inner point %.2f levels off its source, %.2f with the shift reversed; "
+          "outside the zone %.2g" % (err, ctl, still))
+
+
+def test_destair():
+    """_destair takes the pixel steps out of a line and keeps it as sharp.
+
+    A hard edge at a slope of 1 in 5 drawn on the pixel grid steps a pixel
+    every five columns. Its crossing per column has to wobble less about the
+    true line after, and the step across it keep 0.75 of its height over one
+    pixel (a step a pixel high spreads by its own height when it becomes a
+    line: 0.81 measured). The control is a plain blur, which takes the steps
+    out by taking the sharpness (0.32)."""
+    size = 256
+    ys, xs = np.mgrid[0:size, 0:size]
+    hard = np.where(ys > 0.2 * xs + 80, 220.0, 60.0)
+    rgba = lambda g: Image.fromarray(np.dstack([g, g, g, np.full_like(g, 255.0)])
+                                     .round().astype(np.uint8), "RGBA")
+    cols = np.arange(40, 216)
+
+    def read(im):
+        a = np.asarray(im, dtype=np.float64)[..., 0]
+        r = []
+        for x in cols:
+            y0 = int(0.2 * x + 80) - 6
+            v = a[y0:y0 + 13, x]
+            r.append(y0 + float(np.interp(140.0, v, np.arange(13))) - (0.2 * x + 79.5))
+        r = np.array(r)
+        jump = float(np.median([np.abs(np.diff(a[:, x])).max() for x in cols]))
+        return float(np.std(r - r.mean())), jump
+
+    w0, j0 = read(rgba(hard))
+    w1, j1 = read(H._destair(rgba(hard), size))
+    w2, j2 = read(rgba(H._gauss_px(hard, 1.2)))
+    check("destair", w1 < 0.6 * w0 and j1 >= 0.75 * j0 > j2,
+          "wobble %.3f -> %.3f px, step %.0f -> %.0f levels; a blur %.0f"
+          % (w0, w1, j0, j1, j2))
 
 
 def test_bead_core():
@@ -2493,13 +2468,13 @@ def main():
               test_fold_dipole_controls, test_fold_dipole_eligibility,
               test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
               test_fold_discontinuity, test_fold_notch,
-              test_inner_tip, test_tip_nest, test_point_ink, test_bead_core,
+              test_inner_tip, test_point_nest, test_destair, test_bead_core,
               test_band_even, test_bevel_along, test_notch_floor, test_neutral_glass,
               test_apex_floor, test_morph_mottle, test_rim_valley,
               test_valley_ridge, test_valley_along, test_point_along,
               test_point_along_alpha,
               test_author_rim, test_author_rim_light, test_light_under_keys, test_point_light_gain,
-              test_point_taps, test_fold_jitter, test_crisp_fold, test_crisp_rim,
+              test_fold_jitter, test_crisp_fold, test_crisp_rim,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_small_pace,

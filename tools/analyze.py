@@ -154,9 +154,10 @@ THRESHOLDS = {
     "tip_extreme_contrast": 1.0,  # the most visible pixel at a point, as a share
                                 # of the author's own. tip_profile is reported
                                 # beside it and is not gated - see tip_profile.
-    "tip_nest": 20.0,           # levels: the chisel's inner point, worst corner.
-                                # He reads 4-14; a nested apex 20-110, and when
-                                # one comes back the worst corner reads 40 and up
+    "tip_nest": 20.0,           # levels: the inner point's step, worst corner.
+                                # He reads 4-14, a nested apex 20-110. Recorded,
+                                # not gated: the owner wants the inner point
+                                # nested inside the outer one (2026-10-04)
     # --- the fold, read at every size on every frame (validate_multiscale) ---
     # Every one of these is calibrated against the author, because the author can
     # now be read: the numbers in the comments are his own, measured 2026-08-22
@@ -2690,8 +2691,6 @@ def gate(rep, base=None):
             fail(name, "tip_extreme_contrast", e["tip_extreme_contrast"], "<",
                  round(e["tip_extreme_contrast_orig"]
                        * T["tip_extreme_contrast"], 3))
-        if e.get("tip_nest") is not None and e["tip_nest"] > T["tip_nest"]:
-            fail(name, "tip_nest", e["tip_nest"], ">", T["tip_nest"])
         it = e.get("interp")
         if it:
             if it["ghost_rgb"] > T["ghost_rgb"]:

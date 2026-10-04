@@ -57,6 +57,9 @@ EVEN = os.path.join(DATA, "crisp-even.json")
 ZONE = os.path.join(DATA, "crisp-zone.npz")
 LIFT = 0.5        # levels _rim_valley lifts a release pixel by to be complaint
 POINT = 3.0       # LU round a sharp point left out
+POINT_A = 4.5     # the same for A: the nested inner point's lines run oblique
+                  # to the edge out to 4-5 LU on release 1.1.0 as on ours,
+                  # and read along the arc a crisp oblique line is wobble
 ALONG = (None, 0.5)   # neighbours either way: 2 px (dots), 0.5 LU (the wave)
 SMOOTH = 3        # binomial passes before the wobble is read
 DEPTH_TOL = 0.25  # LU a sample's own depth may sit off its ray's: past it
@@ -143,7 +146,7 @@ def measure(rgba, name, size, skip=None):
         G = H._sample1(sm, sx, sy)
         ok = np.abs(H._sample1(d, sx, sy) - dep[None]) < DEPTH_TOL
         for cx, cy in corners:
-            ok &= np.hypot(X - cx, Y - cy) >= POINT
+            ok &= np.hypot(X - cx, Y - cy) >= POINT_A
         if skip is not None:
             ix = np.clip(np.round(sx).astype(int), 0, size - 1)
             iy = np.clip(np.round(sy).astype(int), 0, size - 1)
