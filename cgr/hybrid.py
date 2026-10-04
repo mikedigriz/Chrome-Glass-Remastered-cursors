@@ -3758,6 +3758,12 @@ def _notch_from_author(rgb, name, idx, size):
 # sized in raw levels arrives at the eye scaled by whatever the alpha happens
 # to be, and the dip the metric reads is the composited one.
 _RIM_XFER = {"Arrow", "Help", "NO", "AppStarting"}   # cursors it runs on
+_RIM_XFER_BEAD_ONLY = {"Help"}   # on the dot alone: on the arrow it took
+                           # the rim's dark hairline and lit line off (crisp X
+                           # 0.79 -> 0.95 at 256 without it, A unchanged), and
+                           # rim_layers, delta_e and tip_convergence all read
+                           # better without it; the dot without it is a dark
+                           # smudge with no light ring (docs/dev/IDEAL.md)
 _RIM_XFER_DEPTH = 1.0      # logical units inward a section is read over. Wider
                            # windows reach past the rim into the body and bring
                            # the fold's neighbourhood back with them - at 2.5
@@ -4010,6 +4016,21 @@ def _rim_ref_field(name, idx):
 
 def _rim_transfer(rgb, name, idx, size):
     """The rim transfer, fitted here or borrowed from _RIM_XFER_REF."""
+    out = _rim_transfer_field(rgb, name, idx, size)
+    if name not in _RIM_XFER_BEAD_ONLY or out is rgb:
+        return out
+    beads = [C._round_island(poly) for poly in C.TRACED[name]["frames"][idx]["polys"]
+             if len(poly) <= 12]
+    s = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    w = np.zeros((size, size))
+    for cx, cy, r in (b for b in beads if b is not None):
+        dist = np.hypot(xs - cx * s, ys - cy * s) / s
+        w = np.maximum(w, np.clip(r + 1.0 - dist, 0.0, 1.0))
+    return rgb + (out - rgb) * w[..., None]
+
+
+def _rim_transfer_field(rgb, name, idx, size):
     if name not in _RIM_XFER_BORROW or size >= _RIM_XFER_MIN:
         return _rim_native(rgb, name, idx, size)
     f = _rim_ref_field(name, idx)
