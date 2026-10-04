@@ -4500,6 +4500,12 @@ _RESTEP_PIXEL = 0.75      # hardware pixels of transition from 64 up: his 0.6 of
                           # his own pixel, kept just over foldfit's resolution
                           # (2.2 s past one pixel), so the fold is a crease and
                           # not the master's one-pixel discontinuity
+_RESTEP_MAX_SIZE = 128    # and none from here up: the master's crease is about
+                          # a pixel wide already, with a lit lip on the crest
+                          # just before the fall (220 -> 226..234 on Arrow at
+                          # 512). The model has no term for the lip and planed
+                          # it off, which left the fold at 0.55-0.8 of release
+                          # 1.1.0's gradient across it (docs/dev/IDEAL.md)
 _RESTEP_SUPPORT = 1.25    # logical units either side of the transition this
                           # stage may touch. Outside it the frame is unchanged,
                           # and tools/selftest.py checks that as a contract -
@@ -4729,6 +4735,8 @@ def _fold_restep(rgb, name, idx, size):
     The correction is zero outside `_RESTEP_SUPPORT` of the transition and
     inside `_RESTEP_PROTECT` of the outline, both by construction.
     """
+    if size >= _RESTEP_MAX_SIZE:
+        return rgb
     ch = _fold_chord(name, idx)
     if ch is None:
         return rgb
