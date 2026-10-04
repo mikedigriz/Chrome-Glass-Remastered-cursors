@@ -2839,6 +2839,7 @@ _TIP_RELIGHT_ALONG = 0.6     # share of the tip-to-notch chord the relight
                              # reaches down in total (flat part plus fade),
                              # before it fades back to the AI master
 _TIP_RELIGHT_RIM_KEEP = {"Arrow": (0.9, 1.4, 2.0, 4.0),
+                         "AppStarting": (0.9, 1.4, 2.0, 4.0),
                          "Handwriting": (0.9, 1.4, 3.0, 5.0)}
                              # LU from the outline the rim band is left to
                              # the master (full to the first, none past the
@@ -2849,8 +2850,9 @@ _TIP_RELIGHT_RIM_KEEP = {"Arrow": (0.9, 1.4, 2.0, 4.0),
                              # 0.87 -> 0.93, 0.89 -> 0.95 at 256 / 512.
                              # Handwriting from 3 LU: nearer, its master's
                              # black lines at the point come back (selftest
-                             # apex floor, NEXT.md 113). Hand pays as much in
-                             # A as it gets in X, Wait and AppStarting are
+                             # apex floor, NEXT.md 113). AppStarting 0.95 ->
+                             # 0.98 at 256 and 512 with its rim detail at 7.
+                             # Hand pays as much in A as it gets in X, Wait is
                              # crisp already (docs/dev/IDEAL.md)
 
 # Per-cursor fold shape near the point.
@@ -3239,8 +3241,10 @@ def _tip_relight(rgb, name, idx, size):
         d = _edge_distance_at(name, idx, size)
         ap = np.hypot(px - tx, py - ty)
         keep = (np.clip((r1 - d) / (r1 - r0), 0.0, 1.0)
-                * np.clip((ap - a0) / (a1 - a0), 0.0, 1.0))[..., None]
-        out = out * (1.0 - keep) + rgb * keep
+                * np.clip((ap - a0) / (a1 - a0), 0.0, 1.0))
+        # the master's luma only: its chroma carries the colour streak the
+        # chroma flattening above is for (a blue line by AppStarting's point)
+        out = np.clip(out + ((rgb.mean(-1) - out.mean(-1)) * keep)[..., None], 0, 255)
     return out
 
 
@@ -3781,8 +3785,13 @@ _RIM_XFER_DETAIL = 3       # samples across depth the master's own lines are
                            # analytic section took off (docs/dev/IDEAL.md). At
                            # 5 the valley behind Arrow's blade came back past
                            # selftest's bound (4.3 > 4.0 at 512)
-_RIM_XFER_DETAIL_FOR = {"Help": 1}   # Help's fold fit reads them as a second
-                           # fold (fold_unident 0.737 -> 0.895)
+_RIM_XFER_DETAIL_FOR = {"Help": 1, "AppStarting": 7}
+                           # Help's fold fit read them as a second fold
+                           # (fold_unident 0.737 -> 0.895); AppStarting keeps
+                           # 7, the line inside its rim was below 1.1.0's
+                           # sharpness at 3 (crisp X 0.94 -> 0.95). At 9 its
+                           # fold width read a grid rung wider at one size
+                           # (fold_s_conv 3.6 -> 5.5)
 _RIM_XFER_STATION = 0.25   # logical units of arc between sections
 _RIM_XFER_ARC = 1.0        # half-width of the mean that runs along the arc.
                            # Without it each ray prints its own correction and
