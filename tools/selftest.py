@@ -1448,6 +1448,74 @@ def test_bead_core():
           % (clean, hurt, his, eps))
 
 
+def test_crisp_fold():
+    """The target's fold reading sees the fold planed off.
+
+    _fold_restep from 128 up is the defect it was written for: the model cut
+    the lit lip on the master's crest and left the fold at 0.55-0.8 of release
+    1.1.0's gradient across it (docs/dev/IDEAL.md). On Arrow at 256, with the
+    stage put back there, crisp_f has to fall under its floor and stand clear
+    of it without."""
+    clean = A.crisp_ratios("Arrow", [256])["256"][2]
+    keep = H._RESTEP_MAX_SIZE
+    H._RESTEP_MAX_SIZE = 10 ** 6
+    repoint()
+    try:
+        hurt = A.crisp_ratios("Arrow", [256])["256"][2]
+    finally:
+        H._RESTEP_MAX_SIZE = keep
+        repoint()
+    floor = A.CR.F_FLOOR
+    check("crisp fold", clean >= floor > hurt,
+          "%.2f -> %.2f of release with the fold restepped at 256, floor %.2f"
+          % (clean, hurt, floor))
+
+
+def test_crisp_rim():
+    """The target's rim readings see a blur across and dots along.
+
+    Planted on Arrow's frame 0 at 256 as crisp_ratios reads it: a binomial blur
+    for X, and for A a dark dot every 6 px over the rim band - the pitch the
+    synthetic in tools/crisp.py read 1.4 levels on."""
+    from PIL import Image
+    real = H.frame_image
+    clean = A.crisp_ratios("Arrow", [256])["256"]
+
+    def planted(fn):
+        def get(name, idx, size):
+            return Image.fromarray(fn(np.asarray(real(name, idx, size), dtype=np.float64),
+                                      name, size).astype(np.uint8), "RGBA")
+        return get
+
+    def blur(a, _name, _size):
+        out = a.copy()
+        for ax in (0, 1):
+            out[..., :3] = (0.5 * out[..., :3] + 0.25 * (np.roll(out[..., :3], 1, ax)
+                                                         + np.roll(out[..., :3], -1, ax)))
+        return out
+
+    def dots(a, name, size):
+        d = H._edge_distance_at(name, 0, size)
+        ys, xs = np.mgrid[0:size, 0:size]
+        hit = (d > 0.3) & (d < 1.2) & ((xs + ys) % 6 == 0)
+        out = a.copy()
+        out[..., :3][hit] *= 0.7
+        return out
+
+    got = []
+    for fn in (blur, dots):
+        H.frame_image = planted(fn)
+        try:
+            got.append(A.crisp_ratios("Arrow", [256])["256"])
+        finally:
+            H.frame_image = real
+    x_ok = clean[0] >= A.CR.X_FLOOR > got[0][0]
+    a_ok = clean[1] <= A.CR.A_CEIL < got[1][1]
+    check("crisp rim", x_ok and a_ok,
+          "X %.2f -> %.2f blurred, floor %.2f; A %.2f -> %.2f dotted, ceiling %.2f"
+          % (clean[0], got[0][0], A.CR.X_FLOOR, clean[1], got[1][1], A.CR.A_CEIL))
+
+
 def test_fold_jitter():
     """The same damage test_inner_jitter plants, read by the step-aware fit.
 
@@ -2419,7 +2487,7 @@ def main():
               test_valley_ridge, test_valley_along, test_point_along,
               test_point_along_alpha,
               test_author_rim, test_author_rim_light, test_light_under_keys, test_point_light_gain,
-              test_point_taps, test_fold_jitter,
+              test_point_taps, test_fold_jitter, test_crisp_fold, test_crisp_rim,
               test_product_cycle_pairs, test_author_at_exact,
               test_author_at_harmonics, test_product_cycle_static,
               test_canonical_phase, test_small_pace,

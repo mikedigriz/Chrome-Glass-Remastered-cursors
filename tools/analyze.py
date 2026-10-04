@@ -37,6 +37,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import crisp as CR  # noqa: E402
 import foldfit as FF  # noqa: E402
 from cgr import hybrid as H  # noqa: E402
 from cgr import lightanim as LA  # noqa: E402
@@ -2345,6 +2346,34 @@ def validate_topology(name):
     return bad
 
 
+def crisp_ratios(name, sizes):
+    """docs/dev/IDEAL.md's target on frame 0: per size, (X, A, F) as shares of
+    their references - X and F of release 1.1.0, A of 201694a. Only the sizes
+    tools/crisp.py has references for and the ladder renders."""
+    ref = _crisp_refs()
+    out = {}
+    for size in CR.SIZES:
+        if size not in sizes:
+            continue
+        key = "%s@%d" % (name, size)
+        im = H.frame_image(name, 0, size)
+        x, a = CR.measure(im, name, size, ref["zone"].get(key))
+        f = CR.fold(im, name, size)
+        rx, _ra, rf = ref["rel"][key]
+        out[str(size)] = (x / rx, a / ref["even"][key][1],
+                          f / rf if f is not None and rf else None)
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _crisp_refs():
+    with open(CR.REF, "rb") as fh:
+        rel = json.loads(fh.read().decode())
+    with open(CR.EVEN, "rb") as fh:
+        even = json.loads(fh.read().decode())
+    return {"rel": rel, "even": even, "zone": CR._load_zone()}
+
+
 def _collect_one(job):
     name, sizes, vsizes = job
     e = {}
@@ -2365,6 +2394,8 @@ def _collect_one(job):
     e["mirror_asym_orig"] = mirror_asym_author(name)
     e["multiscale"] = validate_multiscale(name, vsizes)
     e["delta_e"] = delta_e(name)
+    if name in CR.CURSORS:
+        e["crisp"] = crisp_ratios(name, sizes)
     if name in H.ANIM:
         e["interp"] = interp_uniformity(name)
         e["temporal"] = temporal_smoothness(name)
@@ -2517,6 +2548,17 @@ def gate(rep, base=None):
             fail(name, "scale_drift", e["scale_drift"], ">", T["scale_drift"])
         if e["density"] > T["density"]:
             fail(name, "density_%", e["density"], ">", T["density"], "density")
+        # The target (docs/dev/IDEAL.md, tools/crisp.py), absolute: across the
+        # rim and the fold no softer than release 1.1.0, along the rim no
+        # wavier than 201694a, at the worst of 128, 256 and 512.
+        for size, (x, a, f) in ((int(k), v) for k, v in
+                                (e.get("crisp") or {}).items()):
+            if x < CR.X_FLOOR:
+                fail(name, f"crisp_x@{size}", x, "<", CR.X_FLOOR, "crisp_x", fresh=True)
+            if a > CR.A_CEIL:
+                fail(name, f"crisp_a@{size}", a, ">", CR.A_CEIL, "crisp_a", fresh=True)
+            if f is not None and f < CR.F_FLOOR:
+                fail(name, f"crisp_f@{size}", f, "<", CR.F_FLOOR, "crisp_f", fresh=True)
         declares_fold = any(getattr(H.C, "CURSOR_TOPOLOGY", {})
                             .get(name, {}).get("fold", []))
         ms = e.get("multiscale")
@@ -2541,19 +2583,17 @@ def gate(rep, base=None):
                                f"{st['unident']:8.3f} > "
                                f"{ref * (1.0 + _RATCHET_SLACK):.3f}"
                                f"  (was {ref:.3f})")
-                if st["unres"] > T["fold_unres"]:
-                    fail(name, "fold_unres", st["unres"], ">", T["fold_unres"],
-                         fresh=True)
-                lo, hi = st["s_ratio_lo"], st["s_ratio_hi"]
-                if lo is not None and lo < T["fold_s_min"]:
-                    fail(name, "fold_s_thin", lo, "<", T["fold_s_min"],
-                         "fold_s_min_ratio", fresh=True)
+                # fold_unres, fold_s_thin and fold_s_conv are recorded and decide
+                # nothing. All three ask for a transition at least the author's
+                # 0.60 units wide, which is his 32px grid pitch, not a width he
+                # drew; release 1.1.0, the render the owner holds up, reads
+                # 0.08-0.42 of it, and docs/dev/IDEAL.md takes its crease as the
+                # target (crisp_f below). The wide side still gates: a smear is
+                # a smear at any reference.
+                hi = st["s_ratio_hi"]
                 if hi is not None and hi > T["fold_s_max"]:
                     fail(name, "fold_s_wide", hi, ">", T["fold_s_max"],
                          "fold_s_max_ratio", fresh=True)
-                if st["s_conv"] > T["fold_s_conv"]:
-                    fail(name, "fold_s_conv", st["s_conv"], ">", T["fold_s_conv"],
-                         fresh=True)
                 # Where the author's own path bends more than the flat bound, his
                 # is the standard: SizeAll's chord is short and his centre swings
                 # 1.4 logical units along it, which no render has to beat.
@@ -2730,7 +2770,13 @@ def _flat(e):
     fj = e.get("fold_jitter")
     st = (ms or {}).get("step") or {}
     got = bool(st.get("resolved"))
+    cr = list((e.get("crisp") or {}).values())
+    crf = [v[2] for v in cr if v[2] is not None]
     return {
+        # the target itself (docs/dev/IDEAL.md), worst size of 128-512
+        "crisp_x": min(v[0] for v in cr) if cr else None,
+        "crisp_a": max(v[1] for v in cr) if cr else None,
+        "crisp_f": min(crf) if crf else None,
         "scale_drift": e["scale_drift"],
         "density": e["density"],
         "tip_convergence": e["tip_convergence"],
