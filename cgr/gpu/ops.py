@@ -73,3 +73,26 @@ def band_bilinear(img, x, y):
         fx, fy = fx[..., None], fy[..., None]
     return (img[y0, x0] * (1 - fx) * (1 - fy) + img[y0, x0 + 1] * fx * (1 - fy)
             + img[y0 + 1, x0] * (1 - fx) * fy + img[y0 + 1, x0 + 1] * fx * fy)
+
+
+def band_cubic(img, x, y):
+    """hybrid._band_cubic: Catmull-Rom, the same clip and tap order."""
+    h, w = img.shape[:2]
+    x = torch.clamp(x, 0, w - 1.001)
+    y = torch.clamp(y, 0, h - 1.001)
+    x0, y0 = torch.floor(x).to(torch.int64), torch.floor(y).to(torch.int64)
+
+    def taps(t):
+        t2, t3 = t * t, t * t * t
+        return ((-t3 + 2 * t2 - t) / 2, (3 * t3 - 5 * t2 + 2) / 2,
+                (-3 * t3 + 4 * t2 + t) / 2, (t3 - t2) / 2)
+
+    wx, wy = taps(x - x0), taps(y - y0)
+    if img.ndim == 3:
+        wx, wy = [v[..., None] for v in wx], [v[..., None] for v in wy]
+    out = 0.0
+    for j in range(4):
+        yi = torch.clamp(y0 - 1 + j, 0, h - 1)
+        row = sum(img[yi, torch.clamp(x0 - 1 + i, 0, w - 1)] * wx[i] for i in range(4))
+        out = out + row * wy[j]
+    return out

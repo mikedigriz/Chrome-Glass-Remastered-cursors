@@ -1585,6 +1585,11 @@ _POINT_WIDEST = 80.0      # degrees: the widest point converged. Every point of 
                           # arrows reads 50-75, the shoulders of Handwriting's
                           # passing keys 87-90
 _POINT_ANGLE_AT = 1.5     # logical units along the outline that angle is read over
+_POINT_CUBIC = 1.0        # share of each lookup read cubic, from _RESTEP_MAX_SIZE
+_POINT_CUBIC_RIM = (0.6, 0.6)  # logical units in from the outline the cubic share
+                          # starts at, and ramps in over: on the rim the hairline
+                          # is a pixel's staircase, and read cubic its steps came
+                          # out as dots (selftest point along 4.3 -> 5.3)
 _POINT_TAPS = 9           # lookups spread over each pixel's arc: the read squeezes
                           # the arc up to 5.4 times half a unit from the point
 
@@ -1657,7 +1662,12 @@ def _point_converge(rgb, name, idx, size):
     bilinear lookup per pixel took every third pixel of the dark line there,
     and at 256 the last two units of it were a row of beads. So each pixel
     averages _POINT_TAPS lookups spread over the arc it covers, less the one
-    pixel the lookup spans itself; where the read is identity they coincide."""
+    pixel the lookup spans itself; where the read is identity they coincide.
+
+    Each lookup is cubic, not bilinear: off a half pixel the bilinear one is a
+    [0.5 0.5] blur, and nine of them took the fold behind the point down to
+    0.75 of release 1.1.0's gradient across it from 3.6 to 7 units out on Help
+    (docs/dev/IDEAL.md, rule 2)."""
     if name not in _POINT_CONVERGE:
         return rgb
     L = size / float(V.LOGICAL)
@@ -1667,10 +1677,15 @@ def _point_converge(rgb, name, idx, size):
     g = _geom(name, idx)
     pts = [(cx, cy) for cx, cy in _sharp_corners(name, g)
            if _outline_angle(name, g, (cx, cy)) <= _POINT_WIDEST]
+    cub = 0.0
+    if size >= _RESTEP_MAX_SIZE:
+        lo, ramp = _POINT_CUBIC_RIM
+        cub = _POINT_CUBIC * np.clip((_edge_distance_at(name, idx, size) - lo) / ramp,
+                                     0.0, 1.0)
     if GPU.BACKEND == "gpu" and pts:
         from .gpu import stages
         return stages.point_converge(np.asarray(rgb, dtype=np.float64), pts, L, read,
-                                     _POINT_READ_REACH, _POINT_TAPS)
+                                     _POINT_READ_REACH, _POINT_TAPS, cub)
     ys, xs = np.mgrid[0:size, 0:size] + 0.5
     px, py = xs / L, ys / L
     out = np.asarray(rgb, dtype=np.float64).copy()
@@ -1683,11 +1698,13 @@ def _point_converge(rgb, name, idx, size):
         rho = rm + read * (1.0 - rm / _POINT_READ_REACH) ** 2
         th = np.arctan2(dy[m], dx[m])
         span = np.maximum(1.0 / np.maximum(rm, 1.0 / L) - 1.0 / rho, 0.0) / L
+        cm = (cub[m] if np.ndim(cub) else cub)[:, None]
         acc = 0.0
         for j in range(_POINT_TAPS):
             a = th + ((j + 0.5) / _POINT_TAPS - 0.5) * span
-            acc = acc + _sample(src, (cx + rho * np.cos(a)) * L - 0.5,
-                                (cy + rho * np.sin(a)) * L - 0.5)
+            sx, sy = (cx + rho * np.cos(a)) * L - 0.5, (cy + rho * np.sin(a)) * L - 0.5
+            acc = acc + (cm * _band_cubic(src, sx, sy)
+                         + (1.0 - cm) * _sample(src, sx, sy))
         out[m] = acc / _POINT_TAPS
     return out
 

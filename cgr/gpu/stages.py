@@ -300,7 +300,7 @@ def band_smooth(v, sides, ker, r):
     return out.reshape(v.shape)
 
 
-def point_converge(rgb, corners, L, read, reach, taps):
+def point_converge(rgb, corners, L, read, reach, taps, cub):
     """hybrid._point_converge's disc reads. The coordinates are numpy's own (a
     1 ulp difference in a cosine moved one pixel of Handwriting by three
     levels); only the lookups, the part that costs, run on the device."""
@@ -318,10 +318,13 @@ def point_converge(rgb, corners, L, read, reach, taps):
         rho = rm + read * (1.0 - rm / reach) ** 2
         th = np.arctan2(dy[m], dx[m])
         span = np.maximum(1.0 / np.maximum(rm, 1.0 / L) - 1.0 / rho, 0.0) / L
+        cm = ops.t((cub[m] if np.ndim(cub) else np.full(rm.shape, cub))[:, None])
         acc = 0.0
         for j in range(taps):
             a = th + ((j + 0.5) / taps - 0.5) * span
-            acc = acc + ops.sample(src, ops.t((cx + rho * np.cos(a)) * L - 0.5),
-                                   ops.t((cy + rho * np.sin(a)) * L - 0.5))
+            sx = ops.t((cx + rho * np.cos(a)) * L - 0.5)
+            sy = ops.t((cy + rho * np.sin(a)) * L - 0.5)
+            acc = acc + (cm * ops.band_cubic(src, sx, sy)
+                         + (1.0 - cm) * ops.sample(src, sx, sy))
         out[m] = (acc / taps).cpu().numpy()
     return out
