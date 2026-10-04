@@ -106,4 +106,4 @@ The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE
 ## More
 
 - **[docs/DETAILS.md](docs/DETAILS.md)** - what is inside each package, what each platform can and cannot do, full removal, checksums, the longer troubleshooting list.
-- **[docs/BUILD.md](docs/BUILD.md)** - build it yourself. Python, Pillow, NumPy, no GPU.
+- **[docs/BUILD.md](docs/BUILD.md)** - build it yourself. Python, Pillow, NumPy; a GPU is optional and only speeds the build up.

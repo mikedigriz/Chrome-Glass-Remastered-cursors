@@ -106,4 +106,4 @@ Chrome Glass - [работа yoyos](https://www.deviantart.com/yoyos/art/Chrome-
 ## Дальше
 
 - **[docs/DETAILS.ru.md](docs/DETAILS.ru.md)** - что внутри каждого пакета, что умеет и чего не умеет каждая платформа, полное удаление, контрольные суммы, длинный разбор проблем.
-- **[docs/BUILD.ru.md](docs/BUILD.ru.md)** - собрать самому. Python, Pillow, NumPy, без видеокарты.
+- **[docs/BUILD.ru.md](docs/BUILD.ru.md)** - собрать самому. Python, Pillow, NumPy; видеокарта необязательна и только ускоряет сборку.
