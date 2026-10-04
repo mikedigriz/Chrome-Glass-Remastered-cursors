@@ -3122,7 +3122,15 @@ def _tip_realign(rgb, name, idx, size):
     # pulling that content onto the chord instead of moving the chord to it.
     sx = xs + shift * w * (-uy) * L
     sy = ys + shift * w * ux * L
-    return _sample(rgb, sx, sy)
+    # cubic: a shift of a fraction of a pixel read bilinear is a [0.5 0.5]
+    # blur across the fold it moves (Wait at 64: 0.84 -> 0.89 of release
+    # 1.1.0's step, docs/dev/IDEAL.md rule 2). Bilinear on the rim, as in
+    # _point_converge: read cubic the hairline's staircase came out as a wave
+    # (Arrow crisp A at 512 over its ceiling)
+    lo, ramp = _POINT_CUBIC_RIM
+    cm = np.clip((_edge_distance_at(name, idx, size) - lo) / ramp, 0.0, 1.0)[..., None]
+    src = np.asarray(rgb, dtype=np.float64)
+    return np.clip(cm * _band_cubic(src, sx, sy) + (1.0 - cm) * _sample(src, sx, sy), 0, 255)
 
 
 def _tip_relight(rgb, name, idx, size):
@@ -4574,12 +4582,13 @@ _RESTEP_PIXEL = 0.75      # hardware pixels of transition from 64 up: his 0.6 of
                           # his own pixel, kept just over foldfit's resolution
                           # (2.2 s past one pixel), so the fold is a crease and
                           # not the master's one-pixel discontinuity
-_RESTEP_MAX_SIZE = 128    # and none from here up: the master's crease is about
-                          # a pixel wide already, with a lit lip on the crest
-                          # just before the fall (220 -> 226..234 on Arrow at
-                          # 512). The model has no term for the lip and planed
-                          # it off, which left the fold at 0.55-0.8 of release
-                          # 1.1.0's gradient across it (docs/dev/IDEAL.md)
+_RESTEP_MAX_SIZE = 32     # and none from here up, so at no shipped size: the
+                          # master's crease is about a pixel wide already, with
+                          # a lit lip on the crest just before the fall (220 ->
+                          # 226..234 on Arrow at 512). The model has no term for
+                          # the lip and planed it off, which left the fold at
+                          # 0.55-0.8 of release 1.1.0's gradient across it from
+                          # 128 up and 0.46-0.74 at 48-96 (docs/dev/IDEAL.md)
 _RESTEP_SUPPORT = 1.25    # logical units either side of the transition this
                           # stage may touch. Outside it the frame is unchanged,
                           # and tools/selftest.py checks that as a contract -
@@ -5408,6 +5417,15 @@ _FOLD_PROFILE_STATIONS = 96
 _FOLD_PROFILE_REACH = 6.0   # units sampled each side - `foldfit.REACH`, the
                          # window whose readings this stage exists to fix
 _FOLD_PROFILE_PITCH = 0.05
+_FOLD_PROFILE_HOLD = 1.0    # units either side of the chord the correction is
+                         # held at its value there: the difference of two
+                         # low-passed sections is a ramp wherever his step and
+                         # ours differ in height, and laid on the crease it
+                         # softened it (NO at 64: 0.78 -> 0.89 of release
+                         # 1.1.0's step across it, Help 0.81 -> 0.93)
+_FOLD_PROFILE_HOLD_MAX_SIZE = 128  # and below this only: from it up the fold
+                         # is already 0.99-1.14 of release, and on Help at 128
+                         # the hold costs a fold station its width reading
 
 
 def _fold_profile_from_author(rgb, name, idx, size):
@@ -5480,8 +5498,15 @@ def _fold_profile_from_author(rgb, name, idx, size):
         lh = np.convolve(np.pad(yh[run], k // 2, mode="edge"), ker, "valid")
         w = np.clip((_FOLD_PROFILE_BAND + _FOLD_PROFILE_FADE - np.abs(ns[run]))
                     / _FOLD_PROFILE_FADE, 0.0, 1.0)
-        delta[j, run] = np.clip(lh - lo, -_FOLD_PROFILE_CAP,
-                                _FOLD_PROFILE_CAP) * w
+        dl = np.clip(lh - lo, -_FOLD_PROFILE_CAP, _FOLD_PROFILE_CAP) * w
+        if _FOLD_PROFILE_HOLD > 0 and size < _FOLD_PROFILE_HOLD_MAX_SIZE:
+            nr = ns[run]
+            for sgn in (-1.0, 1.0):
+                at = np.argmin(np.abs(nr - sgn * _FOLD_PROFILE_HOLD))
+                side = (nr * sgn > 0) & (np.abs(nr) < _FOLD_PROFILE_HOLD)
+                if abs(nr[at] - sgn * _FOLD_PROFILE_HOLD) <= _FOLD_PROFILE_PITCH:
+                    dl[side] = dl[at]
+        delta[j, run] = dl
     m = _FOLD_PROFILE_CHORD
     pad = np.pad(delta, ((m // 2, m // 2), (0, 0)), mode="edge")
     delta = np.apply_along_axis(

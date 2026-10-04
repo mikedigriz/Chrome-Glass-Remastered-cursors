@@ -1925,7 +1925,8 @@ def test_product_cycle_static():
             if p is None:
                 continue
             want["cover"] = min(want["cover"], p["cover"])
-            want["unres"] = max(want["unres"], p["unres"])
+            if p["unres"] is not None:
+                want["unres"] = max(want["unres"], p["unres"])
             want["curv"] = max(want["curv"], p["curv"])
             want["rms"] = max(want["rms"], p["rms"])
             if o is None:
@@ -2088,6 +2089,18 @@ def test_facet_light_contract():
           "byte-identical with the facet stage disabled")
 
 
+def _restep_on(rgb, name, idx, size):
+    """_fold_restep with its size cut-off lifted. The stage is off at every
+    shipped size (hybrid._RESTEP_MAX_SIZE); its contracts are kept for the day
+    it comes back, and test_crisp_fold puts it back as a planted defect."""
+    keep = H._RESTEP_MAX_SIZE
+    H._RESTEP_MAX_SIZE = 10 ** 6
+    try:
+        return H._fold_restep(rgb, name, idx, size)
+    finally:
+        H._RESTEP_MAX_SIZE = keep
+
+
 def test_restep_support():
     """_fold_restep changes the fold's cross-section and nothing else.
 
@@ -2106,11 +2119,10 @@ def test_restep_support():
     0.05-unit grid leaves that much dust."""
     eps, bad = 0.5, []
     reach = H._RESTEP_SUPPORT + H._RESTEP_FADE
-    # below H._RESTEP_MAX_SIZE: from there up the stage is off by design
     for name, idx, size in (("Arrow", 0, 96), ("Hand", 0, 64), ("Wait", 0, 96),
                             ("Help", 0, 96), ("Handwriting", 0, 64)):
         rgb = A.frame(name, idx, size)[..., :3]
-        out = np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1)
+        out = np.abs(_restep_on(rgb.copy(), name, idx, size) - rgb).max(-1)
         hit = out > eps
         leak = int((hit & (H._edge_distance_at(name, idx, size)
                            < H._RESTEP_PROTECT)).sum())
@@ -2178,7 +2190,7 @@ def test_restep_one_edge():
         for name, idx, size in (("Help", 0, 80), ("Help", 0, 96)):
             rgb = frames[size]
             out = np.ascontiguousarray(
-                np.abs(H._fold_restep(rgb.copy(), name, idx, size) - rgb).max(-1))
+                np.abs(_restep_on(rgb.copy(), name, idx, size) - rgb).max(-1))
             (tx, ty), (ex, ey) = H._fold_chord(name, idx)
             L = size / V.LOGICAL
             dx, dy = ex - tx, ey - ty
