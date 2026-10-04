@@ -2,6 +2,9 @@
  "AppStarting": {
   "cadence": 1.026068,
   "cadence_win": 1.01941,
+  "crisp_a": 1.020701,
+  "crisp_f": 1.006569,
+  "crisp_x": 0.977896,
   "delta_e": 4.907947,
   "density": 0.148981,
   "edge_straight": 0.317345,
@@ -38,6 +41,9 @@
   "tip_wobble": 0.19328
  },
  "Arrow": {
+  "crisp_a": 1.047066,
+  "crisp_f": 0.996145,
+  "crisp_x": 0.974158,
   "delta_e": 3.197876,
   "density": 0.149332,
   "edge_straight": 0.317345,
@@ -119,6 +125,9 @@
  "Hand": {
   "cadence": 1.022459,
   "cadence_win": 1.019409,
+  "crisp_a": 1.033324,
+  "crisp_f": 0.994192,
+  "crisp_x": 0.98624,
   "delta_e": 2.758129,
   "density": 0.204725,
   "edge_straight": 0.317345,
@@ -161,6 +170,9 @@
  },
  "Handwriting": {
   "cadence": 1.454586,
+  "crisp_a": 1.021008,
+  "crisp_f": 0.976343,
+  "crisp_x": 0.967316,
   "delta_e": 3.914423,
   "density": 0.185786,
   "edge_straight": 0.318731,
@@ -196,6 +208,9 @@
   "tip_profile": 1.699422
  },
  "Help": {
+  "crisp_a": 1.015927,
+  "crisp_f": 0.952982,
+  "crisp_x": 1.010587,
   "delta_e": 3.554584,
   "density": 0.104541,
   "edge_straight": 0.443086,
@@ -245,6 +260,9 @@
  },
  "NO": {
   "cadence": 2.377327,
+  "crisp_a": 1.0107,
+  "crisp_f": 0.959871,
+  "crisp_x": 0.966087,
   "delta_e": 5.553502,
   "density": 0.161904,
   "edge_straight": 0.243074,
@@ -411,6 +429,9 @@
  "Wait": {
   "cadence": 1.036554,
   "cadence_win": 1.027337,
+  "crisp_a": 1.00375,
+  "crisp_f": 1.005165,
+  "crisp_x": 0.962505,
   "delta_e": 4.198459,
   "density": 0.148981,
   "edge_straight": 0.317345,
