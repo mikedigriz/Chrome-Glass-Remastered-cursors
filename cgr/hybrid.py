@@ -2834,6 +2834,11 @@ _TIP_RELIGHT_LATERAL = 2.6   # logical units either side of the chord the
                              # |s|~2.0-2.5.
 _TIP_RELIGHT_LATERAL_FALLOFF = 1.2  # logical units past _TIP_RELIGHT_LATERAL
                              # the blend weight takes to reach zero
+_TIP_RELIGHT_EDGE_PX = (2.0, 1.0)  # device pixels the step's half-width is
+                             # floored at, below _RESTEP_MAX_SIZE and from it up.
+                             # Two from 128 was a ramp four pixels wide where the
+                             # master's own crease is one, and it softened the fold
+                             # down to 0.6 of the chord on Handwriting
 _TIP_RELIGHT_ALONG_FLAT = 0.25  # share of the chord replaced at full weight
                              # before along starts fading - was a straight
                              # ramp from t=0, so by t=0.24 (about where the
@@ -3181,7 +3186,8 @@ def _tip_relight(rgb, name, idx, size):
         # rather than arriving already separated. Floored at a couple of
         # device pixels: sub-pixel-wide it is a knife edge on the sampling
         # grid and reads as speckle rather than as a drawn line.
-        width = np.maximum(p["edge"] * taper_frac, 2.0 / L)
+        floor = _TIP_RELIGHT_EDGE_PX[size >= _RESTEP_MAX_SIZE]
+        width = np.maximum(p["edge"] * taper_frac, floor / L)
         # `width` closes to its device-pixel floor at the apex, but the wedge
         # itself is already wider than that floor almost immediately off the
         # point (0.6 logical units of half-width at t=0.05), so without also
