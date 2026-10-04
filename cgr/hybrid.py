@@ -3253,10 +3253,13 @@ _EDGE_SHADOW_SHARE = {"Handwriting": 0.7}   # of the lift taken. Lifted in full,
                            # Below 0.7 the line reaches the fold fit's window
                            # (fold_step 0.51 -> 0.45 at 0.6, 0.36 at 0.5); NO
                            # at half goes past A's ceiling (1.08)
-_EDGE_SHADOW_WING = {"Arrow": (13.0, 3.0, 0.0), "Hand": (13.0, 3.0, 0.0)}
+_EDGE_SHADOW_WING = {"Arrow": (13.0, 3.0, 0.0, 0.45), "Hand": (13.0, 3.0, 0.0, 0.0)}
                            # LU round the lit-side point and round the fold's
                            # start the lift is taken in full, past them by
-                           # the ramp none. The owner's
+                           # the ramp the last share of it. Arrow keeps 0.45:
+                           # with none its left edge carried the master's
+                           # wobble past 201694a's (crisp A 1.07 at 512; 1.05
+                           # at 0.45, X 0.97-1.11 of 1.1.0). The owner's
                            # complaint is the shadow behind the blade on the
                            # right wing (NEXT.md 116, selftest rim valley); the
                            # left edge and the top by the apex keep the thin
@@ -3465,7 +3468,9 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     dip = np.clip((lit_lum - lum - _EDGE_SHADOW_DIP_CAP) / 20.0, 0.0, 1.0)
     lift = _smooth1(dip * w, 0.2, size) * _EDGE_SHADOW_SHARE.get(name, 1.0)
     if name in _EDGE_SHADOW_WING:
-        lift = lift * _wing_zone(name, idx, size, *_EDGE_SHADOW_WING[name])
+        reach, ramp, apex, floor = _EDGE_SHADOW_WING[name]
+        lift = lift * (floor + (1.0 - floor) * _wing_zone(name, idx, size,
+                                                          reach, ramp, apex))
     return rgb * (1.0 - lift[..., None]) + lit * lift[..., None]
 
 
