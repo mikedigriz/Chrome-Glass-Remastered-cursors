@@ -52,6 +52,7 @@ ZONE = os.path.join(DATA, "crisp-zone.npz")
 LIFT = 0.5        # levels _rim_valley lifts a release pixel by to be complaint
 POINT = 3.0       # LU round a sharp point left out
 ALONG = (None, 0.5)   # neighbours either way: 2 px (dots), 0.5 LU (the wave)
+SMOOTH = 3        # binomial passes before the wobble is read
 DEPTH_TOL = 0.25  # LU a sample's own depth may sit off its ray's: past it
                   # the ray has crossed the medial ridge
 
@@ -113,11 +114,17 @@ def measure(rgba, name, size, skip=None):
     ly, lx = np.gradient(lum)
     across = np.abs(lx * nx + ly * ny)[band].mean()
 
-    # Smoothed by a pixel's binomial first, so that bilinear lookups across a
-    # crisp line do not print their own interpolation error as wobble.
+    # Smoothed first (SMOOTH binomial passes, about 1.2 px). A perfectly
+    # antialiased straight line a pixel wide still changes its pixels with its
+    # phase on the grid, so read raw it scores wobble in proportion to its own
+    # darkness: measured on a synthetic line, 0.80 levels at 80 levels dark
+    # with one pass, 0.28 with three, while a 0.3 px wave of 8 px is 1.2 and
+    # dots every 6 px 1.4. Dots every 3 px are the grid's own beat and cannot
+    # be told from it.
     sm = lum
-    for ax in (0, 1):
-        sm = 0.5 * sm + 0.25 * (np.roll(sm, 1, ax) + np.roll(sm, -1, ax))
+    for _ in range(SMOOTH):
+        for ax in (0, 1):
+            sm = 0.5 * sm + 0.25 * (np.roll(sm, 1, ax) + np.roll(sm, -1, ax))
     step = 0.5 / L
     dep = np.arange(BAND[0], BAND[1], step)
     res = {h: [] for h in ALONG}
