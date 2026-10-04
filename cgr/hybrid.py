@@ -1597,6 +1597,15 @@ _POINT_CUBIC_RIM = (0.6, 0.6)  # logical units in from the outline the cubic sha
                           # out as dots (selftest point along 4.3 -> 5.3)
 _POINT_TAPS = 9           # lookups spread over each pixel's arc: the read squeezes
                           # the arc up to 5.4 times half a unit from the point
+_POINT_KEEP_LIGHT = (0.35, 2.0, 4.0, 0.4, 0.8, 4.0)
+                          # the light the read takes off the rim given back: blur
+                          # (LU), full to and gone at (LU from the point), full to
+                          # and gone at (LU from the outline), and the levels of
+                          # loss it is all given back from
+_POINT_KEEP_LIGHT_OFF = {"AppStarting", "Wait"}
+                          # their bottom point reads 15-20 levels paler than
+                          # release 1.1.0's already; given the light back it
+                          # lost the author's dark point (tip contrast 0.30 -> 0.23)
 
 
 def _outline_angle(name, idx, c):
@@ -1672,7 +1681,13 @@ def _point_converge(rgb, name, idx, size):
     Each lookup is cubic, not bilinear: off a half pixel the bilinear one is a
     [0.5 0.5] blur, and nine of them took the fold behind the point down to
     0.75 of release 1.1.0's gradient across it from 3.6 to 7 units out on Help
-    (docs/dev/IDEAL.md, rule 2)."""
+    (docs/dev/IDEAL.md, rule 2).
+
+    The read moves the point, not its tone (_keep_point_light). The lit bevel
+    beside the bottom point runs at one depth from the edge, and read from 2.5
+    units back it became a sliver that went out before the tip: the last two
+    units of Arrow, Arrow_Down and NO came out 22-35 levels darker than release
+    1.1.0's."""
     if name not in _POINT_CONVERGE:
         return rgb
     L = size / float(V.LOGICAL)
@@ -1690,8 +1705,9 @@ def _point_converge(rgb, name, idx, size):
                                      0.0, 1.0)
     if GPU.BACKEND == "gpu" and pts:
         from .gpu import stages
-        return stages.point_converge(np.asarray(rgb, dtype=np.float64), pts, L, read,
-                                     reach, _POINT_TAPS, cub)
+        out = stages.point_converge(np.asarray(rgb, dtype=np.float64), pts, L, read,
+                                    reach, _POINT_TAPS, cub)
+        return _keep_point_light(rgb, out, pts, name, idx, size)
     ys, xs = np.mgrid[0:size, 0:size] + 0.5
     px, py = xs / L, ys / L
     out = np.asarray(rgb, dtype=np.float64).copy()
@@ -1712,7 +1728,36 @@ def _point_converge(rgb, name, idx, size):
             acc = acc + (cm * _band_cubic(src, sx, sy)
                          + (1.0 - cm) * _sample(src, sx, sy))
         out[m] = acc / _POINT_TAPS
-    return out
+    return _keep_point_light(rgb, out, pts, name, idx, size)
+
+
+def _keep_point_light(rgb, out, pts, name, idx, size):
+    """Give the rim near each point back the light _point_converge took off it.
+
+    The loss is blurred over the glass and returned only where it is a loss,
+    only on the rim. Given back everywhere it returned the master's flat bevel
+    at the point as a pale blot on NO, Arrow_Down and Handwriting; given back
+    where the read lightened, it put a grey smudge on the apex and the wing tip;
+    a lighter read (half, a quarter) brought the chisel back instead (tip_nest
+    12-60)."""
+    if not pts or name in _POINT_KEEP_LIGHT_OFF:
+        return out
+    blur, p0, p1, d0, d1, lv = _POINT_KEEP_LIGHT
+    pre = np.asarray(rgb, dtype=np.float64)
+    L = size / float(V.LOGICAL)
+    dist = _edge_distance_at(name, idx, size)
+    inside = (dist > 0).astype(np.float64)
+    den = np.maximum(_smooth1(inside, blur, size), 1e-6)
+    lost = np.dstack([_smooth1((pre[..., c] - out[..., c]) * inside, blur, size) / den
+                      for c in range(3)])
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    near = np.zeros((size, size))
+    for cx, cy in pts:
+        near = np.maximum(near, _smoothstep(np.clip(
+            (p1 - np.hypot(xs - cx, ys - cy)) / (p1 - p0), 0.0, 1.0)))
+    w = (near * _smoothstep(np.clip((d1 - dist) / (d1 - d0), 0.0, 1.0))
+         * _smoothstep(np.clip(lost @ [0.2126, 0.7152, 0.0722] / lv, 0.0, 1.0)))
+    return np.clip(out + w[..., None] * lost, 0, 255)
 
 
 def _blade_level(a, d, size):
