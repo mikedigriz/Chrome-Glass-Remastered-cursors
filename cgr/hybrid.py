@@ -2049,9 +2049,14 @@ def _bead(rgb, name, idx, size):
 
 _ENGRAVE_DROP = 70.0     # levels a pixel may fall below the glass around it
 _ENGRAVE_UNIT = 2.0      # logical units that "around it" spans
+_ENGRAVE_RIM = (1.6, 0.4)   # LU from the outline it is held off, and its ramp:
+                           # the rim's dark hairline beside lit glass is a dip
+                           # too, and the limit lifted it the length of the top
+                           # edge (crisp X 0.92 -> 1.06 at 256, 0.84 -> 1.01 at
+                           # 512 held off it; the mark sits deeper)
 
 
-def _engrave(rgb, name, size):
+def _engrave(rgb, name, idx, size):
     """Keep Help's question mark a groove in the glass instead of ink on it.
 
     The author cut the mark into the surface: a shallow depression, a highlight
@@ -2075,6 +2080,8 @@ def _engrave(rgb, name, size):
     around = np.asarray(im.resize((small, small), Image.BOX)
                           .resize((size, size), Image.BILINEAR), dtype=np.float64)
     lift = np.clip(around - _ENGRAVE_DROP - lum, 0.0, None)
+    lo, ramp = _ENGRAVE_RIM
+    lift = lift * np.clip((_edge_distance_at(name, idx, size) - lo) / ramp, 0.0, 1.0)
     return np.clip(rgb + lift[..., None], 0, 255)
 
 
@@ -5426,7 +5433,7 @@ def _rgb_pre_rim(name, idx, size):
         rgb = _material_layer(name, idx, _MATERIAL_BASIS[(name, idx)], size)
     rgb = _fold_profile_from_author(rgb, name, idx, size)
     if name == "Help":
-        rgb = _engrave(rgb, name, size)
+        rgb = _engrave(rgb, name, idx, size)
         rgb = _bead(rgb, name, idx, size)
     if name in _SYNTH_BEVEL:
         rgb = np.clip(_bevel_colour(orig, name, idx, size)
