@@ -5686,6 +5686,11 @@ _BAND_LINE_KEEP = 4.0    # levels: a line this deep starts to lead the average..
 _BAND_LINE_CAP = 10.0    # ...up to this weight
 _BAND_TRUST = 0.35 * 255  # alpha below which the straight colour is not trusted
 _BAND_CONS = 1.0         # LU of arc the section-mean balance is smoothed over
+_BAND_ANCHOR_SMOOTH = {"Wait": 1.5, "AppStarting": 1.5}
+                         # LU of arc the anchor is smoothed over, 0.1 elsewhere:
+                         # their dark rim is wide and its line weak, the anchor
+                         # wandered with it and the glass behind the band was
+                         # laid back in waves (Wait's long side at 512)
 _BAND_LUM = np.array([0.2126, 0.7152, 0.0722])
 _BAND_CUBIC = {"Handwriting"}   # read with _band_cubic, the rest bilinear.
                            # Help's fold fit takes the sharper rim for a second
@@ -5920,7 +5925,7 @@ def _band_target(rgba, name, idx, size):
     bt = float(np.median(b[ok]))
     ws = np.clip((cd - _BAND_CORNER[0]) / (_BAND_CORNER[1] - _BAND_CORNER[0]), 0.0, 1.0)
     ws = _band_smooth((ws * np.clip((dm - 0.2 - np.maximum(b, bt)) / 0.3, 0.0, 1.0))[None], side, 0.5)[0]
-    b = _band_smooth(anchor[None], side, 0.1)[0]
+    b = _band_smooth(anchor[None], side, _BAND_ANCHOR_SMOOTH.get(name, 0.1))[0]
     tg = _band_smooth(b[None], side, _BAND_COURSE)[0]
     # Averaged in a reference geometry with every edge at one depth, then laid
     # back at its own target: a target that follows the side must not smear the
@@ -6033,9 +6038,9 @@ def _even_band(im, name, idx, size):
 # valley is filled, the blade and the glass keep their levels. Only lifted,
 # never darkened. Held off the apex, where the band's inner line is the inner
 # tip's separator (filling a dip there took inner_tip 0.83 -> 0.25, DEAD_ENDS
-# R_FILL), off the fold (_fold_keepout), and off the points, where
-# _point_converge owns the band: at 1.5 LU Arrow_Down's tip_nest went
-# 8.4 -> 10.2. Wait and AppStarting are left out: their dark rim is his own
+# R_FILL), off the fold (_fold_keepout), and off the points: at 1.5 LU
+# Arrow_Down's tip_nest went 8.4 -> 10.2. The wing tip, on the lit facet, is
+# filled to 0.2 LU (_VALLEY_POINT_LIT, NEXT.md 128). Wait and AppStarting are left out: their dark rim is his own
 # drawing at the edge, and filling it moved their fold readings (Wait
 # fold_s_conv 1.0 -> 1.5, fold_jumps 1 -> 2). Below 128 the valley is under a
 # pixel and the stage changes nothing that could be seen.
@@ -6070,10 +6075,26 @@ _VALLEY_CAP = 3.0            # levels of dip left alone, then lifted in full
 _VALLEY_RAMP = 12.0          # over this many more
 _VALLEY_APEX = (13.0, 2.0)   # LU from the apex held off, and the ramp back in
 _VALLEY_POINT = (3.0, 1.0)   # LU from every point held off, and the ramp
+_VALLEY_POINT_LIT = (0.2, 0.3)   # the same for the point on the lit facet: held
+                                 # off 3 LU, the hairline was a shadow along its
+                                 # last 3-4 LU; its nested vertex lies on the ridge,
+                                 # which the inward climb already leaves alone
 _VALLEY_CLIMB = 0.5          # of a step the distance must still climb inward
 _VALLEY_FOLD_RAMP = 1.0      # LU the fill comes back in over off the fold
 _VALLEY_LEVEL_SMOOTH = 0.1   # LU the fill level is smoothed across
 _VALLEY_ALONG = ((-2, 1), (-1, 4), (0, 6), (1, 4), (2, 1))   # px along the edge, weight
+
+
+def _lit_point(ch, cx, cy):
+    """Whether a point lies on the lit facet's side of the fold chord `ch`."""
+    if ch is None:
+        return False
+    (ax, ay), (bx, by) = ch
+    un = np.hypot(bx - ax, by - ay)
+    ux, uy = (bx - ax) / un, (by - ay) / un
+    ox, oy = cx - ax, cy - ay
+    t = ox * ux + oy * uy
+    return (ox - t * ux) * _BEVEL_LIGHT[0] + (oy - t * uy) * _BEVEL_LIGHT[1] >= _POINT_ALONG_LIT
 
 
 def _rim_valley(im, name, idx, size):
@@ -6094,8 +6115,8 @@ def _rim_valley(im, name, idx, size):
     if ch is not None:
         r0, ramp = _VALLEY_APEX
         w = w * np.clip((np.hypot(xs - ch[0][0], ys - ch[0][1]) - r0) / ramp, 0.0, 1.0)
-    r0, ramp = _VALLEY_POINT
     for cx, cy in _sharp_corners(name, _geom(name, idx)):
+        r0, ramp = _VALLEY_POINT_LIT if _lit_point(ch, cx, cy) else _VALLEY_POINT
         w = w * np.clip((np.hypot(xs - cx, ys - cy) - r0) / ramp, 0.0, 1.0)
     if w.max() < 1e-6:
         return im
