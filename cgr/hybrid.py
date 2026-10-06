@@ -2104,6 +2104,7 @@ def _sat_anchor(name, idx):
 
 _BEAD_FEATHER = 0.25     # logical units the bead blends back into the glass
 _BEAD_SS = 8             # samples per pixel side its tone is averaged over
+_BEAD_FLAT = (96, 192)   # px: his radial profile in full, then flat
 
 
 def _bead_q(cx, cy, r, size, ys, xs):
@@ -2171,7 +2172,11 @@ def _bead(rgb, name, idx, size):
         tone = _bead_tone(name, idx, float(cx), float(cy), float(r))
         if tone is None:
             continue
-        around = tone[0] + _bead_q(cx, cy, r, size, ys, xs)[..., None] * tone[1]
+        # His dark core is one pixel at 32; held at 128 and over it reads as a
+        # grey washer, so from there the profile eases onto its own mean.
+        k = np.clip((_BEAD_FLAT[1] - size) / (_BEAD_FLAT[1] - _BEAD_FLAT[0]), 0.0, 1.0)
+        q = _bead_q(cx, cy, r, size, ys, xs)[..., None]
+        around = tone[0] + (0.5 + k * (q - 0.5)) * tone[1]
         # A sphere, not a cone: the height r - dist has a crease running out of
         # the centre because its normal turns over discontinuously there, and
         # the bead came out with a seam across it.
