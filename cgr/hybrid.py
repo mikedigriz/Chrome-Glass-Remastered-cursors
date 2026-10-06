@@ -1612,10 +1612,13 @@ _POINT_NEST = {"Wait": {(29.0, 13.98): -0.18}, "AppStarting": {(29.0, 13.98): -0
                           # point sits off it, read by eye at 512 on the canonical
                           # frame (+ toward the bisector's left normal). The rest
                           # of the points are within 0.1 of their line already
-_POINT_NEST_ZONE = (0.5, 1.8, 2.5, 4.5)
+_POINT_NEST_ZONE = (0.5, 1.8, 2.5, 8.0)
                           # LU from the point the shift starts, is full from and
                           # to, and is gone by: the outer point stays put, the
-                          # inner one (1.8-2.1 out on these) moves
+                          # inner one (1.8-2.1 out on these) moves. Past it the
+                          # shift falls linearly along the bisector, so the
+                          # bands' inner lines stay straight: tapered round
+                          # the point by 4.5 they bent into an S (NEXT.md 129)
 _POINT_NEST_EDGE = (0.08, 0.3)
                           # LU in from the outline the shift starts and is full:
                           # the hairline and the blade stay on the silhouette
@@ -1652,8 +1655,9 @@ def _point_nest(rgb, name, idx, size):
     one line with the outer). Where the master's bands differ in depth either
     side that nested point sits off the bisector, by up to 0.2 units on the
     wings of Wait, AppStarting and Hand. Each one is slid across onto it: the
-    shift is full round the inner point and gone at the outer one, past 4.5
-    units and on the outline, so only the bands' depths change near the point."""
+    shift is full round the inner point and gone at the outer one, on the
+    outline and by 8 units back along the bisector, linearly, so the bands'
+    inner lines stay straight."""
     table = _POINT_NEST.get(name)
     if not table:
         return rgb
@@ -1672,8 +1676,9 @@ def _point_nest(rgb, name, idx, size):
             continue
         ax, ay = _point_axis(name, g, c)
         r = np.hypot(px - c[0], py - c[1])
+        t = (px - c[0]) * ax + (py - c[1]) * ay
         w = (_smoothstep(np.clip((r - r0) / (r1 - r0), 0.0, 1.0))
-             * _smoothstep(np.clip((r3 - r) / (r3 - r2), 0.0, 1.0)) * edge)
+             * np.clip((r3 - t) / (r3 - r2), 0.0, 1.0) * (t > 0) * edge)
         sx = sx + lat * w * (-ay) * L
         sy = sy + lat * w * ax * L
     lo, ramp = _POINT_CUBIC_RIM

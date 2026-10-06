@@ -1322,8 +1322,8 @@ def test_point_nest():
 
     Wait's wing at 512: the content round the inner point (2 units out on the
     bisector) has to come from `lat` across, while the outline and the glass
-    past _POINT_NEST_ZONE stay bit for bit. The control is the table's shift
-    reversed, which has to land somewhere else."""
+    past _POINT_NEST_ZONE along the bisector stay bit for bit. The control is
+    the table's shift reversed, which has to land somewhere else."""
     name, idx, size = "Wait", 2, 512
     L = size / 32.0
     rng = np.random.default_rng(7)
@@ -1342,7 +1342,9 @@ def test_point_nest():
     ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
     far = np.ones((size, size), dtype=bool)
     for q in H._POINT_NEST[name]:
-        far &= np.hypot(xs - q[0], ys - q[1]) > H._POINT_NEST_ZONE[3]
+        qx, qy = H._point_axis(name, H._geom(name, idx), q)
+        t = (xs - q[0]) * qx + (ys - q[1]) * qy
+        far &= (t >= H._POINT_NEST_ZONE[3]) | (t <= 0) | (np.hypot(xs - q[0], ys - q[1]) <= H._POINT_NEST_ZONE[0])
     rim = H._edge_distance_at(name, idx, size) <= H._POINT_NEST_EDGE[0]
     still = float(np.abs(out - rgb)[far | rim].max())
     H._POINT_NEST[name][c] = -lat
