@@ -43,7 +43,7 @@
  "Arrow": {
   "crisp_a": 1.047755,
   "crisp_f": 1.029718,
-  "crisp_x": 1.025023,
+  "crisp_x": 1.028333,
   "delta_e": 3.182702,
   "density": 0.149332,
   "edge_straight": 0.317345,
@@ -169,10 +169,10 @@
   "tip_wobble": 0.329624
  },
  "Handwriting": {
-  "cadence": 1.505053,
-  "crisp_a": 1.008033,
+  "cadence": 1.567422,
+  "crisp_a": 1.019113,
   "crisp_f": 0.961503,
-  "crisp_x": 0.982802,
+  "crisp_x": 0.970947,
   "delta_e": 3.627725,
   "density": 0.185786,
   "edge_straight": 0.318731,
@@ -180,7 +180,7 @@
   "fold_cover": 0.75,
   "fold_curv": 1.3,
   "fold_jumps": 9,
-  "fold_notch": 0.630089,
+  "fold_notch": 0.468662,
   "fold_rms": 29.231858,
   "fold_s": 0.25,
   "fold_s_conv": 12.0,
@@ -198,13 +198,13 @@
   "morph_cadence_err": 0.288587,
   "morph_iou": 0.630137,
   "morph_peak_abs": 6.7041,
-  "rim_layers": 0.904762,
+  "rim_layers": 0.794872,
   "rim_layers_orig": 0.145833,
-  "rim_layers_per_station": 1.241758,
+  "rim_layers_per_station": 1.095238,
   "scale_drift": 0.008505,
   "tip_convergence": 1.5,
   "tip_extreme_contrast": 0.136932,
-  "tip_nest": 79.93921,
+  "tip_nest": 70.130064,
   "tip_profile": 1.283203
  },
  "Help": {
