@@ -3541,6 +3541,16 @@ _EDGE_SHADOW_DIP_CAP = 3.0 # luma levels a pixel may sit below the brightest
                            # so little margin is needed to leave real shading
                            # alone while still catching the artefact, which is
                            # 50-150 levels deep.
+_EDGE_SHADOW_POINT = (0.15, 3.0, 2.0)
+                           # LU: the reach round the points off the lit side,
+                           # where it is full to, and the ramp back to
+                           # _EDGE_SHADOW_REACH. There the inner facet runs into
+                           # the point narrower than the full reach, the
+                           # closing took all of it for a dip and lifted it to
+                           # the rim's light up to a flat cut across the point
+                           # (Handwriting, NO, Arrow_Down, UpArrow at 256-512).
+                           # The master's line is thinner than the facet there
+                           # and the short reach still closes over it
 
 
 _FOLD_KEEPOUT = 0.8      # logical units either side of the chord the edge-shadow
@@ -3605,6 +3615,20 @@ def _wing_zone(name, idx, size, reach, ramp, apex):
     return zone
 
 
+def _dark_points_zone(name, idx, size, full, ramp):
+    """1 within `full` LU of the points off the lit side of the fold, 0 past
+    them by `ramp`."""
+    ch = _fold_chord(name, idx)
+    L = size / V.LOGICAL
+    ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
+    zone = np.zeros((size, size))
+    for cx, cy in _sharp_corners(name, _geom(name, idx)):
+        if not _lit_point(ch, cx, cy):
+            zone = np.maximum(zone, np.clip((full + ramp - np.hypot(xs - cx, ys - cy))
+                                            / ramp, 0.0, 1.0))
+    return zone
+
+
 def _edge_shadow_declutter(rgb, name, idx, size):
     """Cap the AI master's second, spurious crease line that runs parallel to
     the outer silhouette edge on every wedge-shaped cursor.
@@ -3645,6 +3669,12 @@ def _edge_shadow_declutter(rgb, name, idx, size):
     lit = _close_u8(planes, k).astype(np.float64).transpose(1, 2, 0)
     lum, lit_lum = rgb.mean(-1), lit.mean(-1)
     dip = np.clip((lit_lum - lum - _EDGE_SHADOW_DIP_CAP) / 20.0, 0.0, 1.0)
+    near = _dark_points_zone(name, idx, size, *_EDGE_SHADOW_POINT[1:])
+    if near.max() > 0:
+        rs = max(1, int(round(_EDGE_SHADOW_POINT[0] * size / V.LOGICAL)))
+        short = _close_u8(planes, 2 * rs + 1).astype(np.float64).mean(0)
+        dips = np.clip((short - lum - _EDGE_SHADOW_DIP_CAP) / 20.0, 0.0, 1.0)
+        dip = dip + near * (dips - dip)
     lift = _smooth1(dip * w, 0.2, size) * _EDGE_SHADOW_SHARE.get(name, 1.0)
     if name in _EDGE_SHADOW_WING:
         reach, ramp, apex, floor = _EDGE_SHADOW_WING[name]
@@ -5691,11 +5721,13 @@ _BAND_LINE_KEEP = 4.0    # levels: a line this deep starts to lead the average..
 _BAND_LINE_CAP = 10.0    # ...up to this weight
 _BAND_TRUST = 0.35 * 255  # alpha below which the straight colour is not trusted
 _BAND_CONS = 1.0         # LU of arc the section-mean balance is smoothed over
-_BAND_ANCHOR_SMOOTH = {"Wait": 1.5, "AppStarting": 1.5}
+_BAND_ANCHOR_SMOOTH = {"Wait": 1.5, "AppStarting": 1.5, "Handwriting": 1.0}
                          # LU of arc the anchor is smoothed over, 0.1 elsewhere:
                          # their dark rim is wide and its line weak, the anchor
                          # wandered with it and the glass behind the band was
-                         # laid back in waves (Wait's long side at 512)
+                         # laid back in waves (Wait's long side at 512); on
+                         # Handwriting it kinked the line beside the apex
+                         # (1.5 took crisp X at 256 to 0.945 of release)
 _BAND_LUM = np.array([0.2126, 0.7152, 0.0722])
 _BAND_CUBIC = {"Handwriting"}   # read with _band_cubic, the rest bilinear.
                            # Help's fold fit takes the sharper rim for a second
