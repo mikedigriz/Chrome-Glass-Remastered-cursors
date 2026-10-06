@@ -69,9 +69,16 @@ FOLD_N = 0.6      # LU either side of the chord a station reads
 
 
 def complaint(rel, name, size):
-    """Pixels of the release frame the valley fill lifts: the owner's complaint."""
+    """Pixels of the release frame the valley fill lifts: the owner's complaint.
+
+    At the fill's full depth: where a cursor is filled shallower
+    (_VALLEY_DEEPEST) the valley past it is still the complaint."""
     a = np.asarray(rel, dtype=np.float64)
-    b = np.asarray(H._rim_valley(rel, name, 0, size), dtype=np.float64)
+    keep, H._VALLEY_DEEPEST = H._VALLEY_DEEPEST, {}
+    try:
+        b = np.asarray(H._rim_valley(rel, name, 0, size), dtype=np.float64)
+    finally:
+        H._VALLEY_DEEPEST = keep
     return np.abs(b[..., :3] - a[..., :3]).max(-1) >= LIFT
 
 

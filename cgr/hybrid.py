@@ -6070,6 +6070,18 @@ def _even_band(im, name, idx, size):
 # edge over a couple of pixels and divided back; what the ground sees of it
 # never exceeds what its neighbours along the edge got.
 _VALLEY_CURSORS = {"Arrow", "Arrow_Down", "UpArrow", "Hand"}
+_VALLEY_FRAMES = {"Handwriting": (0, 1, 2)}   # its opening frames are Hand's
+                                             # pointer from the same master, the
+                                             # shadow by the wing tip with them
+_VALLEY_DEEPEST = {"Handwriting": 0.9}   # LU, in place of _VALLEY_BAND's: past it
+                                         # its rim has a line of its own drawn,
+                                         # filled to 1.6 crisp X 0.98 -> 0.75
+
+
+def _valley_on(name, idx, size):
+    """Whether _rim_valley and _point_along act on this frame."""
+    return size >= _VALLEY_MIN_SIZE and (name in _VALLEY_CURSORS
+                                         or idx in _VALLEY_FRAMES.get(name, ()))
 _VALLEY_MIN_SIZE = 128
 _VALLEY_BAND = (0.15, 1.6)   # LU from the traced edge the fill may touch
 _VALLEY_OUT = 1.0            # LU outward the blade's level is looked for
@@ -6104,7 +6116,7 @@ def _lit_point(ch, cx, cy):
 
 def _rim_valley(im, name, idx, size):
     """Fill the valley the master's hairline leaves between blade and glass."""
-    if name not in _VALLEY_CURSORS or size < _VALLEY_MIN_SIZE:
+    if not _valley_on(name, idx, size):
         return im
     a = np.asarray(im, dtype=np.float64)
     L = size / V.LOGICAL
@@ -6112,7 +6124,7 @@ def _rim_valley(im, name, idx, size):
     gy, gx = np.gradient(d)
     g = np.hypot(gx, gy)
     nx, ny = gx / np.maximum(g, 1e-9), gy / np.maximum(g, 1e-9)   # inward
-    lo, hi = _VALLEY_BAND
+    lo, hi = _VALLEY_BAND[0], _VALLEY_DEEPEST.get(name, _VALLEY_BAND[1])
     w = np.clip(np.minimum(d - lo, hi - d) / 0.1, 0.0, 1.0) * (g > 1e-6)
     w = w * _fold_keepout(name, idx, size, _VALLEY_FOLD_RAMP)
     ys, xs = (np.mgrid[0:size, 0:size] + 0.5) / L
@@ -6205,7 +6217,7 @@ _POINT_ALONG_KERNEL = ((-3, 1), (-2, 6), (-1, 15), (0, 20), (1, 15), (2, 6), (3,
 
 def _point_along(im, name, idx, size):
     """Even the hairline by the points along the edge."""
-    if name not in _VALLEY_CURSORS or size < _VALLEY_MIN_SIZE:
+    if not _valley_on(name, idx, size):
         return im
     a = np.asarray(im, dtype=np.float64)
     L = size / V.LOGICAL
