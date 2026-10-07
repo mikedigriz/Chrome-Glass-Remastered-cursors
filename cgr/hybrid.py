@@ -2608,6 +2608,8 @@ _RING_BAR_MIN = 64       # px: the bar is drawn from here. Below it the feather
                          # is under a pixel, and at 32 the drawn bar on frame 7
                          # beside frame 6's own soft sign took NO's step 6 -> 7
                          # further from his (morph_cadence_err 0.179 -> 0.211)
+_RING_DERED = (2.0, 8.0)  # red over the pointer's other channels, levels: where
+                          # lifting starts and its ramp. His glass reads -15..6
 
 
 def _ring_level(a, cx, cy, ang, level, lo, hi, step=0.01):
@@ -2822,6 +2824,16 @@ def _no_ring(rgb, alpha, name, idx, size):
         sign = np.where(d < mid, (cov > 0).astype(np.float64), sign)
     paint = (np.clip((R + _RING_MARGIN - d) / _RING_FADE, 0.0, 1.0)
              * keep * sign)[..., None]
+    if drawn:
+        # The pointer the hole lets through carries the master's red: his own
+        # 32px blend of the stroke into the glass, and the master's wider bar
+        # past ours, as pink smears and red seams on it at 256-512. Inside the
+        # mid-line the sign is all drawn, so red left on the pointer is ink:
+        # lifted to the pixel's brightest channel, the glass's lightness stays
+        hi = rgb.max(-1, keepdims=True)
+        ex = rgb[..., 0] - rgb[..., 1:].max(-1)
+        u = np.clip((ex - _RING_DERED[0]) / _RING_DERED[1], 0.0, 1.0) * (d < mid) * (1.0 - cov)
+        rgb = rgb + (u * (1.0 - keep))[..., None] * (hi - rgb)
     return paint * np.array(_RING_RGB) + (1.0 - paint) * rgb, alpha
 
 
