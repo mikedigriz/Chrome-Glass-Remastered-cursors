@@ -2595,6 +2595,18 @@ _RING_GREY = 80.0        # channel spread under which one of his pixels is the
                          # ring, so it cannot be cut out by angle - that was
                          # tried in the analysis and let the arrow through at
                          # the sector's edge, 36 units of error on one pixel
+_RING_BAR = 1.30         # the bar's width in ring widths, on his 45 degrees
+                         # through the ring's centre: across his bar at half
+                         # height frames 8 and 10 read 1.30 and 1.25. At 1.17
+                         # (red area over the chord) frame 8 lost a pixel a row
+                         # at 32 and morph_iou fell 0.359 -> 0.311. Left to the
+                         # master the bar came through the hole soft, 0.3 LU of
+                         # red feather each side and 42.75 degrees, beside a
+                         # ring drawn to one device pixel
+_RING_BAR_MIN = 64       # px: the bar is drawn from here. Below it the feather
+                         # is under a pixel, and at 32 the drawn bar on frame 7
+                         # beside frame 6's own soft sign took NO's step 6 -> 7
+                         # further from his (morph_cadence_err 0.179 -> 0.211)
 
 
 def _ring_level(a, cx, cy, ang, level, lo, hi, step=0.01):
@@ -2743,10 +2755,11 @@ def _no_ring(rgb, alpha, name, idx, size):
     Coverage of a true annulus, and the stroke's own flat colour, written
     together: see the note above _NO_RING for why they cannot be separated.
 
-    What this stage does not own: the pointer (protected by chroma off his own
-    art), the bar's geometry (its angle reads 42.75 against his 45.00 and is a
-    separate step), and every pixel further than `_RING_MARGIN + _RING_FADE`
-    from the ring's band, which comes through bit for bit."""
+    The bar is drawn the same way, `_RING_BAR` wide on his 45 degrees, and
+    inside the ring the stage owns the whole hole: on his art it is clear but
+    for the pointer. What it does not own: the pointer (protected by chroma off
+    his own art), and every pixel further than `_RING_MARGIN + _RING_FADE`
+    outside the ring's band, which comes through bit for bit."""
     fit = _ring_fit(name, idx)
     if fit is None:
         return rgb, alpha
@@ -2754,22 +2767,29 @@ def _no_ring(rgb, alpha, name, idx, size):
     mid, half = 0.5 * (R + r), 0.5 * (R - r)
     L = size / V.LOGICAL
     ys, xs = np.mgrid[0:size, 0:size]
-    d = np.hypot((xs + 0.5) / L - cx, (ys + 0.5) / L - cy)
-    # coverage of the annulus, one device pixel of edge
+    px, py = (xs + 0.5) / L - cx, (ys + 0.5) / L - cy
+    d = np.hypot(px, py)
+    # coverage of the annulus and the bar, one device pixel of edge. The
+    # 24-vertex polygon bulges 0.21 past the circle at 45 degrees, and
+    # replacing trims our own lumps
     w = V.LOGICAL / size
     cov = np.clip(0.5 - np.maximum(d - R, r - d) / w, 0.0, 1.0)
+    drawn = size >= _RING_BAR_MIN
+    if drawn:
+        s = (py - px) * np.sqrt(0.5)
+        bar = np.clip(0.5 - (np.abs(s) - 0.5 * _RING_BAR * (R - r)) / w, 0.0, 1.0)
+        cov = np.maximum(cov, bar * (d < mid))
     band = np.abs(d - mid) - half
     auth = np.clip((_RING_MARGIN + _RING_FADE - band) / _RING_FADE, 0.0, 1.0)
     keep = 1.0 - _ring_pointer(name, idx, size)
-    auth = auth * keep
-    # Outside the mid-line the annulus is the whole answer and replacing trims
-    # our own lumps - the 24-vertex polygon bulges 0.21 past the circle at 45
-    # degrees. Inside it the bar crosses, and the bar is not this stage's: where
-    # our render already carries more material than a plain annulus, that is the
-    # crossing and it stays. Without this the two junctions lose 150 levels of
-    # coverage each, which is the whole of what is left of the alpha error.
     want = 255.0 * cov
-    want = np.where(d < mid, np.maximum(want, alpha), want)
+    if drawn:
+        auth = np.where(d < mid, 1.0, auth)
+    else:
+        # inside the mid-line the master's bar crosses, and where our render
+        # carries more than the plain annulus that is the crossing and stays
+        want = np.where(d < mid, np.maximum(want, alpha), want)
+    auth = auth * keep
     alpha = auth * want + (1.0 - auth) * alpha
     # The colour is the whole sign's, bar included: on his art the two are one
     # red, measured rather than assumed - the bar's own opaque pixels and the
@@ -2781,9 +2801,13 @@ def _no_ring(rgb, alpha, name, idx, size):
     # while the disc-wide paint was in. Colourfulness decides, on the same
     # calibration as the pointer mask: the sign is the one saturated thing on
     # the frame, so a pixel counts as its own to the extent that its channels
-    # spread, and the analytic ring counts whatever its coverage says.
+    # spread, and the analytic ring counts whatever its coverage says. Inside
+    # the mid-line the drawn sign is all of it: the master's red past the bar's
+    # edge is the feather this stage replaces
     spread = rgb.max(-1) - rgb.min(-1)
     sign = np.maximum(cov, np.clip(spread / _RING_GREY, 0.0, 1.0))
+    if drawn:
+        sign = np.where(d < mid, cov, sign)
     paint = (np.clip((R + _RING_MARGIN - d) / _RING_FADE, 0.0, 1.0)
              * keep * sign)[..., None]
     return paint * np.array(_RING_RGB) + (1.0 - paint) * rgb, alpha
