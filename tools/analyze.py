@@ -991,6 +991,9 @@ def _fold_width(got):
     return s_hat, float(grid[int(np.searchsorted(cum, 0.10))])
 
 
+_CURV_BENDS_MIN = 3     # bends a frame's path curvature is a median over
+
+
 def _fold_bends(slots, identified_only=False):
     """Second differences across adjacent, usable fold stations.
 
@@ -1006,7 +1009,8 @@ def _fold_bends(slots, identified_only=False):
             continue
         if identified_only and not all(m.get("s_identified", True) for m in triple):
             continue
-        bends.append(abs(triple[0]["c"] - 2 * triple[1]["c"] + triple[2]["c"]))
+        c = [m.get("c_path", m["c"]) for m in triple]
+        bends.append(abs(c[0] - 2 * c[1] + c[2]))
     return bends
 
 
@@ -1027,7 +1031,16 @@ def fold_step_profile(name, idx, size, get=frame):
     percentile: a single station where the fit lands on another feature moves a
     p95 by four logical units, and the author's own frames do that at one rung of
     Arrow and at every rung of Arrow_Down. Those dislocations are counted
-    separately as `jumps` and printed rather than gated."""
+    separately as `jumps` and printed rather than gated.
+
+    And a median of fewer than `_CURV_BENDS_MIN` bends is not one: it is a
+    single triple, and on a frame with no fold to follow - Handwriting's morph
+    frame 5, where the author identifies five or six stations of twenty-four
+    and one or two triples - that triple spans two different features and
+    read 1.30. Under the minimum the frame has no path reading, his or ours.
+
+    The path is read off `c_path`, the soft minimum over the candidate centres
+    (foldfit._c_path), not off the argmin `c`."""
     if size < _FOLD_MIN_SIZE:
         return None
     slots = FF.track_slots(name, idx, size, get)
@@ -1047,7 +1060,7 @@ def fold_step_profile(name, idx, size, get=frame):
         "s_p10": s_p10,
         "unres": (float(sum(1 for m in identified if not m["s_resolved"]))
                   / len(identified) if identified else None),
-        "curv": float(np.median(curv)) if curv else 0.0,
+        "curv": float(np.median(curv)) if len(curv) >= _CURV_BENDS_MIN else 0.0,
         "jumps": int(sum(1 for v in jumps if v > _STEP_JUMP)),
         "step": float(np.median([abs(m["step"]) for m in got])),
         "notch": float(np.median([m["d"] for m in got])),
@@ -1175,7 +1188,7 @@ def fold_jitter(name):
         slots = FF.track_slots(name, geom, JITTER_SIZE, _still(frames[i]))
         for j, m in enumerate(slots):
             if m is not None:
-                C[i, j] = m["c"]
+                C[i, j] = m.get("c_path", m["c"])
     seen = np.isfinite(C)
     pair = seen & np.roll(seen, -1, axis=0)
     cols = pair.any(0)

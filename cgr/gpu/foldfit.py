@@ -146,7 +146,8 @@ def _interp_dipole(x, xp, fp):
 
 
 def profiles(preps, s_grid, lam, passes, dipole, pitch, x0):
-    """Per station, foldfit._profile_cpu's list of (score, s, c, a, b, res, A)."""
+    """Per station, foldfit._profile_cpu's list of (score, s, c, a, b, res, A,
+    c_path)."""
     out = [None] * len(preps)
     for use_dipole in (False, True):
         idx = [i for i, p in enumerate(preps) if bool(p["use_dipole"]) == use_dipole]
@@ -194,10 +195,17 @@ def _batch(ps, use_dipole, s_grid, lam, passes, dipole, pitch, x0):
         score = torch.where(ok & cmask, score, torch.full_like(score, float("inf")))
         i = torch.argmin(score, -1)                                      # (B, R)
         rr = torch.arange(score.shape[1], device=ops.DEV)[None, :]
+        # foldfit._c_path: soft minimum over the candidates, tol one standard error
+        tol = torch.clamp(scale[..., 0] / torch.sqrt(torch.clamp(nvalid, min=1.0)), min=1e-9)
+        fin = torch.isfinite(score)
+        low = torch.where(fin, score, torch.full_like(score, float("inf"))).min(-1, keepdim=True).values
+        w = torch.where(fin, torch.exp(-(torch.where(fin, score, low) - low) / tol),
+                        torch.zeros_like(score))
+        cp = (w * cs).sum(-1) / torch.clamp(w.sum(-1), min=1e-30)          # (B, R)
         got.append(tuple(t_.transpose(0, 1) for t_ in (
             score[ar, rr, i], cs.expand(-1, score.shape[1], -1)[ar, rr, i], a[ar, rr, i],
-            b[ar, rr, i], A[ar, rr, i], res[ar, rr, i])))
-    sc, cc, aa, bb, AA, rr_ = (torch.cat([g[k] for g in got]).cpu().numpy() for k in range(6))
+            b[ar, rr, i], A[ar, rr, i], res[ar, rr, i], cp)))
+    sc, cc, aa, bb, AA, rr_, cp_ = (torch.cat([g[k] for g in got]).cpu().numpy() for k in range(7))
     result = []
     for b, p in enumerate(ps):
         k = len(p["n"])
@@ -205,6 +213,7 @@ def _batch(ps, use_dipole, s_grid, lam, passes, dipole, pitch, x0):
         for r, s in enumerate(s_grid):
             if np.isfinite(sc[r, b]):
                 prof.append((float(sc[r, b]), float(s), float(cc[r, b]), float(aa[r, b]),
-                             float(bb[r, b]), rr_[r, b, :k].copy(), float(AA[r, b])))
+                             float(bb[r, b]), rr_[r, b, :k].copy(), float(AA[r, b]),
+                             float(cp_[r, b])))
         result.append(prof)
     return result

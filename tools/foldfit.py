@@ -582,8 +582,24 @@ def _profile_cpu(p):
         if np.isfinite(score[i]):
             profile.append((float(score[i]), float(s), float(cs[i]),
                             float(a[i]), float(b[i]), res[i].copy(),
-                            float(A[i])))
+                            float(A[i]), _c_path(score, cs, robust_scale, len(n))))
     return profile
+
+
+def _c_path(score, cs, scale, samples):
+    """The centre as a soft minimum over the candidates, for the path readings.
+
+    The argmin is discontinuous: where two centres score within a standard
+    error of each other, a one-level change in the picture moves it the whole
+    way between them. Hand's fold sat on such a tie at 0.00 and 0.30 and read
+    as jitter while its section changed by one or two levels. Weighted by
+    exp(-excess / tol), tol the same standard error `_profile_verdict` judges
+    the width by, the reading moves only as far as the scores do."""
+    tol = PROFILE_SIGMA * scale / np.sqrt(max(int(samples), 1))
+    fin = np.isfinite(score)
+    w = np.where(fin, np.exp(-(np.where(fin, score, 0.0) - score[fin].min())
+                             / max(tol, 1e-9)), 0.0)
+    return float((w * cs).sum() / w.sum())
 
 
 def _finish(p, profile):
@@ -593,7 +609,7 @@ def _finish(p, profile):
     n, y, robust_scale = p["n"], p["y"], p["robust_scale"]
     j, s_lo, s_hi, profile_tol, s_identified = _profile_verdict(
         profile, robust_scale, len(n))
-    score, s, c, b_lo, b_hi, joint_res, A = profile[j]
+    score, s, c, b_lo, b_hi, joint_res, A, c_path = profile[j]
 
     # `d`, `w` and `rms` are read against the STEP ALONE, never against the
     # joint residual. The dipole is in the model to keep it out of the width
@@ -612,7 +628,8 @@ def _finish(p, profile):
     # Under one hardware pixel of that there is nothing left to measure, and the
     # grid's lowest rung is then a floor, not a reading. Say so instead of
     # quietly storing the number.
-    return dict(t=float(p["t"]), c=float(c), s=float(s), c0=p["c0"], A=float(A),
+    return dict(t=float(p["t"]), c=float(c), c_path=float(c_path), s=float(s),
+                c0=p["c0"], A=float(A),
                 joint_res=joint_res,
                 joint_rms=float(np.sqrt((joint_res ** 2).mean())),
                 s_identified=s_identified, s_lo=s_lo, s_hi=s_hi,
