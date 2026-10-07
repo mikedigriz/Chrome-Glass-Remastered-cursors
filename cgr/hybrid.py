@@ -2726,6 +2726,15 @@ def _ring_pointer(name, idx, size):
     o = np.asarray(original(name, idx), dtype=np.float64)
     rgb, a = _resize(o, size) if size != o.shape[0] else (o[..., :3], o[..., 3])
     grey = (a > 40) & (rgb.max(-1) - rgb.min(-1) < _RING_GREY)
+    # Only near his own grey pixels: resampled, the light glass round the
+    # ring's inner edge passes the test in slivers, and they came through the
+    # hole as broken arcs (NO 10 has no grey but the pointer at 32)
+    own = (o[..., 3] > 40) & (o[..., :3].max(-1) - o[..., :3].min(-1) < _RING_GREY)
+    n = own.shape[0]
+    p = np.pad(own, 1)
+    own = np.max([p[dy:dy + n, dx:dx + n] for dy in range(3) for dx in range(3)], 0)
+    j = np.arange(size) * n // size
+    grey &= own[j[:, None], j[None, :]]
     return _smooth1(grey.astype(np.float64), _RING_FADE, size)
 
 
@@ -2804,11 +2813,13 @@ def _no_ring(rgb, alpha, name, idx, size):
     # the frame, so a pixel counts as its own to the extent that its channels
     # spread, and the analytic ring counts whatever its coverage says. Inside
     # the mid-line the drawn sign is all of it: the master's red past the bar's
-    # edge is the feather this stage replaces
+    # edge is the feather this stage replaces. Its edge pixels are red at
+    # partial alpha, not red mixed with his glass: mixed, the bar's edge
+    # carried a light hairline
     spread = rgb.max(-1) - rgb.min(-1)
     sign = np.maximum(cov, np.clip(spread / _RING_GREY, 0.0, 1.0))
     if drawn:
-        sign = np.where(d < mid, cov, sign)
+        sign = np.where(d < mid, (cov > 0).astype(np.float64), sign)
     paint = (np.clip((R + _RING_MARGIN - d) / _RING_FADE, 0.0, 1.0)
              * keep * sign)[..., None]
     return paint * np.array(_RING_RGB) + (1.0 - paint) * rgb, alpha
