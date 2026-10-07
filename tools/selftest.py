@@ -781,14 +781,18 @@ def test_apex_floor():
     both sides: 47-60 levels on grey at 256, where the author's darkest is 100
     and Hand's relit point 85 (NEXT.md 113). Read as the darkest pixel on grey
     within 3 LU of the chord's point, alpha at least half, on frames 0 and 1 at
-    256; without Handwriting's relight it has to fail the same bound."""
-    size, eps = 256, 75.0
+    256; without Handwriting's relight it has to fail the same bound. Help's
+    apex is the same pointer with the same black separator, NO's doubles it
+    down the left side (NEXT.md 138): Help's frame 0 and NO's frames with a
+    chord are held too, NO to a lower bound: on its short reach frame 0 keeps
+    70 levels."""
+    size = 256
 
-    def darkest():
+    def darkest(name, frames):
         out = []
-        for idx in (0, 1):
-            f = np.asarray(H.frame_image("Handwriting", idx, size), dtype=np.float64)
-            (tx, ty), _notch = H._fold_chord("Handwriting", idx)
+        for idx in frames:
+            f = np.asarray(H.frame_image(name, idx, size), dtype=np.float64)
+            (tx, ty), _notch = H._fold_chord(name, idx)
             L = size / 32.0
             ys, xs = np.mgrid[0:size, 0:size] + 0.5
             near = (np.hypot(xs / L - tx, ys / L - ty) < 3.0) & (f[..., 3] >= 128)
@@ -796,16 +800,19 @@ def test_apex_floor():
             out.append(float((f[..., :3] * al + 128.0 * (1.0 - al)).mean(-1)[near].min()))
         return min(out)
 
-    clean = darkest()
-    keep = H._TROUGH_PARAMS.pop("Handwriting")
-    repoint()
-    try:
-        hurt = darkest()
-    finally:
-        H._TROUGH_PARAMS["Handwriting"] = keep
+    for name, frames, eps in (("Handwriting", (0, 1), 75.0), ("Help", (0,), 75.0),
+                              ("NO", (0, 1, 2, 3), 60.0)):
+        clean = darkest(name, frames)
+        keep = H._TROUGH_PARAMS.pop(name)
         repoint()
-    check("apex floor", hurt < eps <= clean,
-          "%.1f -> %.1f levels at Handwriting's point without its relight, bound %.1f" % (clean, hurt, eps))
+        try:
+            hurt = darkest(name, frames)
+        finally:
+            H._TROUGH_PARAMS[name] = keep
+            repoint()
+        check("apex floor %s" % name, hurt < eps <= clean,
+              "%.1f -> %.1f levels at %s's point without its relight, bound %.1f"
+              % (clean, hurt, name, eps))
 
 
 def test_morph_mottle():

@@ -3002,7 +3002,8 @@ def _bevel_colour(orig, name, idx, size):
 # contrast is what that costs. Left out. The knob to try next is
 # `_TEMPER_PER_CURSOR` on "relight" rather than the whole stage at full
 # strength - see NEXT.md 23.9. Handwriting got exactly that, and only the
-# relight (NEXT.md 113): its master does blacken the point after all.
+# relight (NEXT.md 113): its master does blacken the point after all. So
+# do Help's and NO's (NEXT.md 138).
 _WEDGE_TIPS = {"Arrow", "Arrow_Down", "Hand", "UpArrow", "Wait", "AppStarting"}
 # Who gets `_fold_restep`. Deliberately not `_WEDGE_TIPS` itself: that set also
 # gates `_notch_declutter`, `_temper` and `_match_author_level`, and widening it
@@ -3189,6 +3190,17 @@ _TROUGH_PARAMS = {
     # morph frames (_MATERIAL_BASIS) carry no black rim, and there the step
     # widened the fold 6.25 times against the author.
     "Handwriting": dict(diff=85.0, edge=0.12, taper=5.0),
+    # Help's apex is Arrow's pixel for pixel in the author's art, and its master
+    # draws the same black separator along the upper side: 33 levels on grey
+    # at 256 within 3 LU of the point, a black streak at 128-512 that the
+    # release did not have (NEXT.md 138). Same step, same strength. NO's
+    # opening frames are the same pointer and its master doubles the black
+    # line down the left side (30-37 levels); frames 4 on have no chord and
+    # the stage leaves them alone. Both on a short reach: at Hand's the step
+    # replaced their own crisp fold down the chord, crisp F 0.98 -> 0.85 on
+    # Help, and from along 0.35 up F stays under the release floor.
+    "Help": dict(diff=85.0, edge=0.12, taper=5.0, along_flat=0.1, along=0.3),
+    "NO": dict(diff=85.0, edge=0.12, taper=5.0, along_flat=0.1, along=0.3),
 }
 
 
@@ -4717,7 +4729,9 @@ if os.environ.get("CGR_TEMPER"):
         _TEMPER_K[_s.strip()] = float(_v)
 
 
-_TEMPER_PER_CURSOR = {("Handwriting", "relight"): _LEGACY_TEMPER}
+_TEMPER_PER_CURSOR = {("Handwriting", "relight"): _LEGACY_TEMPER,
+                      ("Help", "relight"): _LEGACY_TEMPER,
+                      ("NO", "relight"): _LEGACY_TEMPER}
 # Handwriting is not a wedge tip for the other stages, so its relight strength
 # is named here: Hand's, for Hand's black-rimmed point (_TROUGH_PARAMS). At full
 # strength the point dissolves into a flat wash, the way the entry below did.
