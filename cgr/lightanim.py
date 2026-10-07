@@ -685,9 +685,18 @@ def _facet_pixel_grid(geometry, size):
     support = np.clip((_FACET_SUPPORT + _FACET_FADE
                        - np.abs(normal - centre)) / _FACET_FADE, 0.0, 1.0)
     weight = np.where(inside, support * guard, 0.0)
+    # where each pixel's facet meets the per-pixel light: the band's own edge
+    # on its side of the transition, in pixel coordinates (see _facet_apply)
+    edge = _FACET_SUPPORT + _FACET_FADE
+    sides = []
+    for sign in (-1.0, 1.0):
+        shift = (centre + sign * edge - normal) * scale
+        sides.append((xs + shift * vx, ys + shift * vy))
+    side = 0.5 * (1.0 + np.tanh((normal - centre) / H._restep_width(size)))
     return dict(k0=k0, j0=j0, station_mix=station_mix,
                 normal_mix=normal_mix, inside=inside, weight=weight,
-                chord_t=chord_t, normal=normal, centre=centre)
+                chord_t=chord_t, normal=normal, centre=centre,
+                sides=sides, side=side)
 
 
 def _facet_remap_field(grid, field):
@@ -719,6 +728,18 @@ def _facet_apply(lin, ship_lin, delta_coef, geometry, grid):
     fold_delta = _facet_remap_field(grid, local)
     gamut = _gamut_scale(np.clip(lin, 0.0, 1.0), fold_delta)
     fold_lin = lin + fold_delta * gamut[..., None]
+    # Each facet carries the light the per-pixel path gives it at the band's
+    # edge on its side. The coefficients are the masters' facet levels, without
+    # _LIGHT_GAIN or the point weight the per-pixel light has, and across the
+    # band's fade the two were mixed: on Wait at 512 by the apex the lit facet
+    # took +29 levels outside and +6 at the transition, a ramp into the fold
+    # that read as 0.9 units of width on the frames round key 4 (fold_s_wide
+    # 2.24). Offset by their difference there, the step stays the model's.
+    off = ship_lin - fold_lin
+    lo, hi = (np.dstack([H._sample1(np.ascontiguousarray(off[..., c]), x, y)
+                         for c in range(3)]) for x, y in grid["sides"])
+    side = grid["side"][..., None]
+    fold_lin = fold_lin + (1.0 - side) * lo + side * hi
     weight = grid["weight"][..., None]
     return ship_lin * (1.0 - weight) + fold_lin * weight
 
