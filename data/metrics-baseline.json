@@ -259,7 +259,7 @@
   "tip_profile": 1.033158
  },
  "NO": {
-  "cadence": 2.259376,
+  "cadence": 2.511703,
   "crisp_a": 1.012422,
   "crisp_f": 0.974343,
   "crisp_x": 1.015217,
@@ -279,7 +279,7 @@
   "fold_step": 0.561119,
   "fold_unident": 1.0,
   "fold_unres": 0.0,
-  "ghost_rgb": 0.032257,
+  "ghost_rgb": 0.007911,
   "inner_tip": 0.916667,
   "legacy_fold_gap": 1.0,
   "legacy_fold_jag": 37.9,
@@ -288,8 +288,8 @@
   "morph_cadence_err": 0.178728,
   "morph_iou": 0.358839,
   "morph_peak_abs": 28.950903,
-  "no_hole_alpha_err": 25.304375,
-  "no_hole_delta_e": 8.868282,
+  "no_hole_alpha_err": 16.988125,
+  "no_hole_delta_e": 7.630026,
   "rim_layers": 0.765568,
   "rim_layers_orig": 0.159664,
   "rim_layers_per_station": 1.388278,
