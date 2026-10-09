@@ -1607,11 +1607,14 @@ _POINT_KEEP_LIGHT_OFF = {"AppStarting", "Wait"}
                           # release 1.1.0's already; given the light back it
                           # lost the author's dark point (tip contrast 0.30 -> 0.23)
 _POINT_NEST = {"Wait": {(29.0, 13.98): -0.18}, "AppStarting": {(29.0, 13.98): -0.22},
-               "Hand": {(29.0, 13.98): 0.5}}
+               "Hand": {(29.0, 13.98): 0.25}}
                           # logical units across the point's bisector the inner
                           # point sits off it, read by eye at 512 on the canonical
                           # frame (+ toward the bisector's left normal). The rest
-                          # of the points are within 0.1 of their line already
+                          # of the points are within 0.1 of their line already.
+                          # Hand's 0.5 hooked the band's dark line into the lower
+                          # rim at 512; 0.25 leaves the point 0.1 off its line
+                          # (owner, NEXT.md 139)
 _POINT_NEST_ZONE = (0.5, 1.8, 2.5, 8.0)
                           # LU from the point the shift starts, is full from and
                           # to, and is gone by: the outer point stays put, the
