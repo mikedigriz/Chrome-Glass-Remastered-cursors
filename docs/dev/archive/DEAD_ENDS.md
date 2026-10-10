@@ -1,0 +1,1933 @@
+# Dead ends
+
+Approaches tried and rolled back, with what they actually did. Read before
+trying anything: `tools/loop.py diagnose` skips a step whose name is already
+here, which is the only thing stopping a run from spending its third iteration
+rediscovering `_fold_still`.
+
+The first 36 entries are the record from PLAN.md section 5, carried over so the
+loop can see them. Everything after that is written by `loop.py rollback`.
+
+Written in English to match the code these names live in.
+
+`tip_contrast` was renamed `tip_extreme_contrast` on 2026-08-21 (NEXT.md 41).
+Entries below keep the old name, which is the name the run that wrote them used;
+the formula did not change.
+
+## Fold and the dividing line
+
+- `_flatten_rim` (PLAN.md 1) Plateau along the contour. Lifted the author's thin outline to full opacity and drew a second bright facet down the whole silhouette.
+- `_fold_still` (PLAN.md 2) High frequencies replaced by the cycle mean. The mean of a moving line is a smear: every fold it touched went soft and jitter rose from 0.19 to 1.15-1.74 px at 256.
+- `anisotropic_smooth_along_fold` (PLAN.md 3) Direction estimated from the picture, so the estimate followed the jitter and smoothed the fold itself.
+- `author_colour_mid_band` (PLAN.md 4) Substituting the author's frame into the middle band. That band is empty in the original.
+- `_lerp_warp_blend` (PLAN.md 5) Mixing warped and unwarped gave a second ghost line inside.
+- `_even_rim` (PLAN.md 6) Averaging along the rim. The line became continuous and faded almost to nothing: bright breaks lift the mean.
+- `_even_rim_median` (PLAN.md 7) Median instead of mean. Level held, the border turned into a saw.
+
+## Points
+
+- `_tip_warp` (PLAN.md 8) Radial magnification around the point. Pulled the fold in but dragged the highlight past the apex, reading as a second, offset point.
+- `_tip_boost` (PLAN.md 9) Local contrast at the point. There is no weak fold there, there is none at all, so raising contrast etched out what little existed.
+- `_tip_pinch_flat` (PLAN.md 10) Pinch onto a flat edge colour. The core closed but left a smear where the inner line should be.
+- `_tip_pinch_r7` (PLAN.md 11) Geometric wedge of radius 7 logical units, a quarter of the cursor. Ate half the glass and dissolved the dividing line. This is the one that read as deformed.
+- `_tip_warp_outside_freeze` (PLAN.md 12) Sampling radius outside the frozen disc. Points beat against the cycle.
+
+## Black slots
+
+- `global_black_lift` (PLAN.md 13) Warm halo around every dark area.
+- `relative_ink_suppression` (PLAN.md 14) Only lightens; the shape stays wrong. On the arrows it takes the fold off the top edge and flattens the glass.
+- `_lift_blacks_mul` (PLAN.md 15) Multiplying RGB multiplies the channel difference too on near-black pixels: the slot came back as red and blue confetti.
+- `_lift_blacks_linear` (PLAN.md 16) Linear lift to 0.55 of the author's floor. Bleached the top ridge, the glass turned to plastic.
+- `top_hat_luma` (PLAN.md 17) The slot went, and saturated colours shifted hue: a purple cast along the fold on the yellow UpArrow.
+- `morph_close_colour` (PLAN.md 18) Closing without protecting the rim ate the author's outline.
+- `morph_close_guard_08` (PLAN.md 19) With a 0.8 unit rim guard the slot returned: it lies in the same 0.4-1.2 unit band as the outline.
+
+## Bevel and the distance field
+
+- `distance_min_filter` (PLAN.md 20) Step exactly 1 in eight directions. The field is octagonal and stepped, and its gradient draws diagonal hatching.
+- `chamfer_reverse_bug` (PLAN.md 21) Backward pass read the row above. Horizontal banding.
+- `bevel_no_mean_subtract` (PLAN.md 22) One-sided light raised the glass by a dozen levels.
+- `bevel_smooth_box` (PLAN.md 23) Raising `_BEVEL_SMOOTH` under a box blur turned ripple into a coarser staircase, not into a line.
+
+## Colour and sheen
+
+- `sheen_gain_13` (PLAN.md 24) Per-channel multiply in linear light on saturated orange crushed the blacks and shifted the tone.
+- `_detail_match` (PLAN.md 25) No effect at all: the `want <= have` condition held everywhere.
+- `freeze_lines_following_contrast` (PLAN.md 26) Bought 0.4 levels of range and put the jitter back on the top ridge.
+
+## Handwriting, frames 3-5
+
+- `handwriting_geometric_bevel` (PLAN.md 27) The medial axis of the pen transition branches, dark ridges run down the barrel and read as scratches. Damaged the good frames next to them too.
+- `handwriting_darkness_clamp` (PLAN.md 28) Cracks go, plate borders stay as grey facets, the sheet is still cracked.
+
+## Tools and measurement
+
+- `imagedraw_floodfill` (PLAN.md 29) Silently did nothing.
+- `gaussianblur_mode_f` (PLAN.md 30) `GaussianBlur` does not accept mode `F`.
+- `metrics_by_threshold_and_bbox` (PLAN.md 31) Measured their own edge anti-aliasing.
+- `density_moving_region` (PLAN.md 32) The region being averaged over moved with the thing it was measuring.
+- `_deltas_absolute_alpha` (PLAN.md 33) An absolute alpha 200 cut on glass peaking at 190 declared a live animation still.
+- `morph_iou_vs_lanczos` (PLAN.md 34) Compared against a blurred Lanczos reference, which overlaps itself better than the real frames do.
+- `flicker_false_alarm_sampling` (PLAN.md 35) Sampling frames 0, 4, 9, 13, 18, 22 hit different morph frames modulo a 27-frame cycle.
+- `fold_points_alpha_08` (PLAN.md 36) Selecting fold rows by `alpha > 0.8 * max` cut out the interior itself. The measurement returned zeros on every cursor and the straightening had never worked at all until this was found.
+
+## Shipped, then measured out (2026-08-07)
+
+Both of these were in the pipeline, not in a branch. They are here because the
+loop has to know not to reach for them again.
+
+- `_tip_pinch` Colour near every sharp corner taken to a flat edge colour. Closed the cross-section onto nothing: the seam beside Arrow's tail corners lifted from black to 69 while the lit core fell from 255 to 229, both sliding to the same flat value. Contrast on a background fell 0.325 to 0.207 and 0.347 to 0.267 at the two tail corners, and the point it was added for did not move at all. Same idea as `_tip_pinch_flat` (PLAN.md 10), shipped instead of rejected.
+- `_straighten_fold` Fold warped onto a chord fitted per frame. Cost the point 0.367 to 0.266 of contrast, and was itself a source of the jitter it was aimed at, because the correction was refitted every frame: removing it moved fold smoothness on every interpolated cursor at once (Hand 1.141 to 0.962, Wait 1.215 to 1.047, AppStarting 1.241 to 1.091) and brought every fold about two logical units closer to its point. Mechanism of PLAN.md 3.
+- `still_tip_r_6` The shading frozen to the cycle mean over six logical units around every sharp corner. Added at 4.0, widened to 6.0 to cover what `_tip_pinch` read its edge colour from, and left behind when the pinch went. At that radius the sweep did not reach the points at all: the cycle's swing two units from Wait's apex measured 0.07 luma levels against the author's 10.65, so the tips were dead while every smoothness metric read them as perfect - a still image is smooth. What it was bought for, the point beating as the sweep crosses the narrow wedge, turns out to be smaller than the author's own once measured (0.11 against 0.25 at the apex). Now 1.75, set by matching his swing rather than by eye, and guarded by `tip_sheen`.
+
+## Written, measured, not shipped
+
+- `_smooth_along_fold` Averaging the crease down its own length, along the chord's direction, with a corner exclusion. Not dead end 3: the direction comes from the outline, so it cannot chase the jitter, and it never moves the line. It works on what it aims at - section roughness falls below where it was before any of this (Arrow 98.8 to 41.7, UpArrow 71.9 to 64.4, Wait 70.7 to 58.7). It is off because it costs a few per cent of both things that were actually asked for, every time: Arrow_Down's point contrast 0.208 to 0.199, UpArrow's 0.157 to 0.149, Wait's sheen smoothness 1.047 to 1.165. Widening the exclusion to 7.5 logical units bought all of Arrow's contrast back and none of theirs. Left in hybrid.py, unwired, with the numbers: the trade is a decision, not a discovery.
+
+## The red tip: three ways it cannot be fixed (2026-08-08)
+
+The defect, measured across Wait's point: the master's dark rim does not narrow
+as the wedge narrows. The author's rim is 0.20 logical units wide 1.5 units back
+from the apex and 1.10 at four units back; the master's is 0.90 and 1.20 over
+the same span. Four units back the two agree. At the point the master's rim is
+four times too wide, leaving 0.20 units of lit glass out of 1.48 and pushing it
+onto one flank - which is what reads as the orange stopping short and sitting
+off to the right.
+
+The reason nothing below worked is one number. The brightest pixel of the
+section, read off the colour master before any of our stages, is 53 luma at 1.5
+units back, 117 at two, 151 at three and 218 at six. Our alpha there is 190-205
+and the shipped frame matches the master to the level. The net painted the tip
+as ink. There is no lit glass at the point to move, sharpen or re-centre.
+
+- `tip_relief_from_bevel` Flat edge colour plus the analytic bevel, in the pinch's place. The bevel is mean-removed over the whole mask, so near a thin wedge its rim term dominates and the point went darker still: contrast 0.207 to 0.183 on Arrow, 0.144 to 0.080 on UpArrow.
+- `_taper_tip_rim` Fetch the colour from depth d*2 and place it at depth d, narrowing the rim while leaving the outline itself untouched (the displacement vanishes at the edge, so it cannot eat the author's own outline the way PLAN.md 18 and 19 did). It barely moved the rim - 1.12 to 1.08 at 2.5 units, nothing at 1.5 - because the whole wedge is dark there and the fetch lands on a medial axis that is itself inside the rim. Cost contrast anyway: 0.328 to 0.281.
+- `_author_tip` The last 2.5 units of each point taken from the author's own colour, the way Handwriting's middle frames are. It does narrow the rim (0.90 to 0.56 at 1.5 units), and it costs 48 per cent of the point's contrast: 0.328 to 0.172 on Arrow, 0.208 to 0.123 on Arrow_Down. His colour is 32 pixels, and a point is the smallest feature in the drawing.
+
+What is left is the route that already works elsewhere: draw the shading at the
+points analytically, as `_SYNTH_BEVEL` does for the seven geometric cursors,
+where tip_convergence measures 0.00. That is not a correction, it is the stage 5
+fork in PLAN.md - flatter glass, and a change of look for the whole set.
+
+## Re-running the upscale: measured, and it is not the fix (2026-08-08)
+
+Both weights files were fetched and run against the same input, and the wedge's
+section at the point compared with the author's:
+
+- `RealESRGAN_x4plus_anime_6B` (what ships) sharpest step across the section 102 luma at 2.5 units back from Wait's apex.
+- `RealESRGAN_x4plus` (general, num_block=23) the same structure, marginally softer: 79. Correlation with the author's own profile 0.64 against 0.63. It also carries the chroma noise this repo already rejected it for.
+
+Neither model is the problem, and neither is the x4 pass: the bright ribbon is
+already in `src/ai` at 128px, so it comes from the 32-to-128 upscale, and
+regenerating that would move `traced.json` and every silhouette with it.
+
+More to the point, the premise was wrong. The author's own native 32px art has
+the same structure - at his y=5 the row reads 29, 112, 120, 66, 38, 23: a narrow
+bright core with dark shoulders, and a 91-level step between two adjacent pixels.
+The "smooth gradient" it was being compared against was his frame stretched with
+Lanczos, which turns that step into a ramp. That comparison is invalid for the
+same reason `morph_iou_vs_lanczos` (PLAN.md 34) was, and `orig_frame`'s own
+docstring says so.
+
+Judged at his resolution instead, the remaster sits 5.3 luma levels from him on
+average - which is where the real defect turned out to be, and it is fixed in
+`_match_author_at_tips` rather than in the upscale.
+
+- `_match_author_at_tips` The author's level restored at the points as a low-frequency correction: his 32px frame minus ours downsampled to it, carried back up and applied inside a disc around each traced corner. By construction it cannot invent or soften detail, and frozen to frame 0 it costs nothing temporally. It works on what it aims at - the one-sided gap along the inner flank drops from 44 luma levels to 28 - and it improves four cursors' point contrast (Arrow_Down 0.208 to 0.250, UpArrow 0.157 to 0.192, Hand 0.108 to 0.182). It is off because of Wait, the cursor it was written for: matching the author there costs 44 per cent of the point's contrast, 0.170 to 0.095. Capping the correction at 10 levels keeps Wait at 0.146 but then the gap it exists to close only goes 44 to 40, which is nothing. There is no setting in between, because on Wait the two are one axis: his tip is darker than ours, so matching him is darkening, and darkening a tip is exactly what lowers its contrast on a dark background. That is a choice between faithful and crisp, not a defect with a fix, so it is the owner's to make and not a thing to ship quietly. Two collateral failures it caused on the way are worth keeping: fitted per frame it flickered (fold smoothness 0.974 to 1.009 on Wait), and applied to the synthetic-bevel cursors it subtracted their analytic relief, since there the render already is the author's colour (SizeNS point contrast 0.079 to 0.040, below the author's own).
+
+## A hole in the gate, found by the above
+
+`tip_contrast` and `tip_sheen` have a floor, not a ceiling, and every other
+check here only consults the baseline once a value has already missed its
+threshold. So Wait losing 44 per cent of its point contrast passed silently:
+0.095 still clears the author's 0.066. Both are now ratcheted against the
+baseline whatever they read, with five per cent of slack. Verified by replaying
+the exact number the gate let through.
+
+## The line that slides right (2026-08-08)
+
+The complaint, and it is real: on Wait the dividing line runs from the upper
+point downward and drifts right. Four measurements were tried before one held.
+The dark seam's own path, the left edge of the lit region, and the seam's
+position as a fraction of the wedge all gave different and mutually
+contradictory numbers - the first because the tracked span was a third of the
+line, the second because it caught the silhouette's edge, the third because the
+tracker went bimodal again. None of them should have been trusted, and the first
+of them was reported before it was checked.
+
+What holds: the boundary of the lit sheet, read as a fraction of each row's
+interior with the rim excluded, against the author's own at 32px. He puts it at
+0.20, 0.17, 0.24, 0.25, 0.25, 0.28 going down from y=8 to y=13. The remaster has
+it at 0.97, 0.99, 0.86, 0.72, 0.66, 0.38. The lit sheet is squeezed into a strip
+along the top edge near the point and only opens out further down, and that is
+the slant the eye reads as the line sliding right. Consistent on Arrow, Hand and
+UpArrow, which share the silhouette.
+
+- `_match_author_level` The author's levels restored across the whole glass, not just at the points: his 32px frame minus ours downsampled to it, capped at 12 levels, smoothed by 1.2 logical units on the way back up, frozen per cycle, skipped where the colour is already his. It fixes what it aims at - the shift's middle rows go from +0.62 to +0.21 on Hand and +0.47 to +0.31 on Arrow - and it improves the colour of every cursor it touches (Arrow's Delta-E 2.70 to 2.34, UpArrow's 3.84 to 2.99, Wait's 4.06 to 3.59) while leaving the points alone (Arrow 0.328 to 0.327, UpArrow 0.157 to 0.179). It is off for two reasons. Wait loses 16 per cent of its point contrast, which is the same unavoidable trade as everywhere else here: his tip is darker than ours. And the crease metrics regress on five cursors - fold curvature 0.21 to 1.95 on Wait, brightness step along the crease 3.5 to 10.2 on AppStarting. That second one could not be pinned down: the seam is 80 luma levels deep and the correction is 12, which cannot move a minimum that deep, and on frame 0 the curvature reads 0.11 to 0.23 rather than 1.95 - so the regression comes from frames and sizes where the tracker loses the seam, not from a line that bent. Repairing the tracker in order to clear a number that blocks a change of mine is not a thing to do, so the change stays off and the choice is the owner's.
+
+**Now on.** The owner asked for the shifted line to be beaten and allowed the
+drawing to be departed from where something has to be drawn in. Both objections
+above were dealt with rather than waived. The point contrast is no longer traded:
+`_draw_tip` builds the apex from the distance field, so Wait's tip does not
+depend on the correction at all. The crease regression was the smoothing being
+too short - the bilinear lattice from the author's 32 pixels still had a tail at
+1.2 logical units for the tracker to walk. At 3.0 the curvature is back at
+baseline everywhere and the brightness step is better than baseline on Help
+(12.3 against 16.1) and UpArrow (7.8 against 10.0).
+
+Two knobs were tried and rejected with numbers: lowering `_LEVEL_CAP` to 8, 5 or
+3 does not touch the step and costs colour (Arrow 2.62 to 2.83), and skipping the
+morphs makes them worse, not better (Handwriting 35.2 to 36.5, its Delta-E 6.39
+to 6.63).
+
+What is still paid: Handwriting's brightness step along the crease, 21 to 35.
+Neither stage explains it alone - 21 with both off, 44 with the levels only, 36
+with the drawn tip only - so it is their interaction, and no knob removes it.
+Named as a regression, not filed as noise.
+
+- `_tip_beat` as a scalar. The drawn tip needs the frame's own beat carried in or
+it goes dead (the sweep's swing at the apex falls from the author's 10.6 levels
+to 5.3). Carrying it as one average level for the whole disc makes the disc pump:
+temporal_fold 1.027/1.053/1.091 on Wait, Hand and AppStarting against
+0.972/1.016/0.990 with the tip left alone. Carried as the field it is, it costs
+nothing.
+
+- `want` read off the live frame. The drawn wedge's amplitude was taken from the
+glass behind the point in the frame being rendered, which multiplies a shape that
+never moves by a number that pulses: temporal_fold 1.149 on Wait against 0.972
+untouched. Frozen to the cycle mean it reads 0.963, below baseline.
+
+- Narrowing the whole band toward the point so the built divider reaches the
+  apex. The colour of each sheet is sampled at the band's own edge, so a band
+  squeezed into the narrow wedge samples the crease itself and smears its
+  darkness across the glass as a dark whisker. Clamping the *sampling* distance
+  alone, with the band, the crossover and the core left at full width, is the
+  version that works - it is what removed the grey blot the far sample dragged
+  in off the outer bevel.
+
+- Wiping the leftover sculpted crease above where the rebuild starts, to kill
+  the burr on the inner tip. The burr was never the leftover: it was the built
+  straight line crossing the real crease where the real one bows outside a
+  2.5-unit band. Widening the band to 4.0 removes it outright. The wipe stays in
+  place because it does smooth the junction, but it is not what fixed this, and
+  at 2, 4 and 7 units of smoothing the burr did not move at all.
+
+- Allowing the drawn point to sit above the colour it replaces. Meant to keep
+  the relief while cutting the bloom; measured, the allowance costs the point
+  instead - UpArrow 0.170 at zero, 0.141 at ten levels, 0.112 at twenty. The
+  clamp was never eating relief, it darkens the point, and a darker point reads
+  harder against every background.
+
+- Reading the fold metrics off a baseline recorded on a different size ladder.
+  Not a code fault and not a render regression: --ratchet without --full records
+  32/64/128/256 while --check --full measures 32..512, and scale_drift alone
+  differs 0.1337 against 0.1409 between the two. It presents as every one of the
+  sixteen cursors regressing by the same amount at once, which is the tell. The
+  render is deterministic - two runs agree to the last digit.
+
+- Clamping the drawn point per pixel so it can never sit above the colour it
+  replaces. It was added against a white bloom at the apex, and it did hide it -
+  but the bloom's real cause was the drawn disc's own edge landing across the
+  point, which _DRAW_TIP_FEATHER at 3.0 fixed properly. Left in afterwards the
+  clamp darkens whichever flank the drawn wedge is brighter on, and on an arrow
+  that is always the left one, so the lit core at the tip slid from the author's
+  4.70 to 5.63 - the tip visibly leaning right, which is exactly what the owner
+  reported. Removing it reads 4.62 and doubles Wait's point contrast, 0.078 to
+  0.169. Shaving only the top of the excess (98th percentile) keeps the bloom
+  guard without the lean.
+
+- Smoothing the drawn tip's base to fight the jitter that removing that clamp
+  exposed. It goes the wrong way: Hand's fold jitter is 1.088 at no smoothing,
+  1.141 at 0.6 and 1.146 at 1.2. The base is not what varies frame to frame.
+
+- Freezing the peak-shave threshold over a sheen cycle. Measured first, and the
+  measurement killed it: the threshold sits around 145 levels on Wait and 77 on
+  Hand, high enough that the shave touches almost nothing, so its per-frame
+  travel cannot be what moves the picture.
+
+**Standing rule, learned three times over.** Any quantity fitted to the frame
+being rendered becomes a jitter source, even when the picture looks unchanged:
+`want` read off the live frame (temporal 1.149 against 0.972), `_tip_beat`
+carried as one scalar for the disc (1.027/1.053/1.091 against 0.972/1.016/0.990),
+and the fold offsets fitted per frame, which is what retired _straighten_fold in
+the first place. Check any new constant for frame dependence before looking
+anywhere else.
+
+- **`_draw_tip`, the whole stage.** Shipped for a while and defended through four
+  rounds of tuning because tip_contrast rose with it. It rose because the stage
+  made the point *brighter* than its surroundings, and contrast against a
+  background is what that metric measures - so the number went up while the eye
+  saw a bloom, then a glint, then a tip that looked bent toward the bright spot.
+  Every complaint about the points traced back to it.
+
+  The measurement that should have been made first: what level does the point
+  actually want? The author's own 32px frame puts Wait's apex at 14 and 24 luma
+  on the two top rows. The master alone gives 49 and 48. With the tip drawn it
+  reads 56 and 49 - brighter than the uncorrected master, i.e. the stage was
+  fighting the level correction rather than helping it. Removing it leaves 37
+  and 36, and the jitter that had been traded against tip sharpness (Hand 1.088)
+  comes back on its own to 1.017.
+
+  Lesson worth more than the stage: when a metric rewards a change the eye keeps
+  rejecting, check what the metric is made of before defending the change again.
+
+- Raising `_LEVEL_CAP` to reach the tip. The cap was never the limit: 12 to 90
+  moves Wait's apex from 61 to 58. Nor is the smoothing of the sharp term (0.5
+  to 0.05 moves 37 to 36), nor the coverage gates, which pass at 0.35..0.79
+  there. What is left is the resolution of the reference itself - the correction
+  is fitted on the author's 32px grid and cannot be sharper than one of his
+  pixels.
+
+- **Treating the author's 32px tip level as a target.** His apex reads 14 luma
+  where the remaster reads 71, and three separate stages were built to close
+  that gap - a drawn tip, a no-brighten clamp, a sharp local level match. Each
+  one lowered the number (71 to 56 to 37) and each one was rejected on sight by
+  the owner, who had already called the un-corrected 71 version "almost
+  perfect". At sixteen times the scale a dark apex in his art is a shortage of
+  pixels, not a decision to reproduce. His frames stay the reference for
+  position and shape; they are not a reference for the level at a point.
+
+- **The whole line of render-side fixes for the red cursor's tip lean.** Five
+  rounds, five rejections. Every one had a mechanism and numbers behind it and
+  every one made something else worse in the eye. The lean is in the master -
+  the upscale sculpts the apex - and correcting a master defect by painting over
+  it downstream has now failed enough times to count as settled. If it is worth
+  another attempt, it is at the upscale, not in hybrid.py.
+
+## Tempering `_match_author_level`, and `_LEVEL_CAP` as a tip knob (2026-08-12)
+
+- **Tempering `_match_author_level` along with the other two.** The three stages
+  were halved together because they were isolated together, not because they
+  cost the same. Measured separately: at 1.0 this one takes the wedges from
+  sixteen gate failures to fourteen (`fold_jag` leaves Arrow/Hand/Arrow_Down,
+  AppStarting's `fold_luma_step` 9.03 -> 6.63), and it moves the tail corner the
+  owner reported by 0.06 and 0.07 levels on average - against the 6.15 levels
+  tempering all three bought back there. It was paying the fold's bill for a
+  corner it does not touch. Reverted to full strength; `relight` and `sat` stay
+  at 0.5, they are the two that actually reach the corner.
+
+- **`_LEVEL_CAP` as a way to reach the apex.** The apex sits 30-odd levels
+  brighter than the author's and the cap is 12, so raising it looks like the
+  obvious lever. It is not: the correction is blurred over `_LEVEL_SMOOTH` (4.5
+  logical units) and the measured disc is 1.5, so what lands at the apex is its
+  neighbours, not the apex. 12 -> 24 -> 36 pulls UpArrow up (0.049, 0.054,
+  0.057) and pushes Hand down the whole way (0.062, 0.053, 0.045), and at 36 it
+  opens a new `tip_contrast` failure on Wait. Whole-glass corrections cannot
+  address a point defect. (It is a real point defect all the same - see the
+  correction below.)
+
+- **`_tip_relight`'s lateral confinement, its `taper_frac`, and
+  `_edge_shadow_declutter` as suspects for the apex contrast.** All three were
+  introduced in the same commit as the temper and all three were checked by
+  isolation. Lateral reach to infinity and `_edge_shadow_declutter` off each
+  move `tip_contrast` by less than 0.005 on every wedge; `taper` 5.0 -> 0 gets
+  Hand from 0.062 to 0.086 and UpArrow not at all. Swapping the whole of the old
+  `_tip_relight` back in reaches 0.120 and 0.099. Resolved: on Hand it is
+  `taper_frac` and the `_band_level` anchor together (0.062 -> 0.086 -> 0.121
+  reverting them one line at a time); on UpArrow it is none of the three - it is
+  the trough -> step parameter swap that came with the crack fix, and raising
+  the step's `diff` from 18 to 55 does not move it at all. Both causes are the
+  price of another accepted fix, so there is no free recovery here.
+
+  Method note: reverting `taper_frac` by setting `taper` near zero measures the
+  wrong thing - `taper_frac` also scales `width` and `hw`, so the constant
+  changes three places at once. Patch the one line.
+
+- **Reading the apex `tip_contrast` failures as a stale ratchet.** They are not.
+  `hybrid.py` from `02363b2` reproduces the recorded baseline exactly
+  (0.215 / 0.165 / 0.220 / 0.061), so the drop is a real regression in
+  `5a5f363`, and restoring it is not the rejected "match the author's dark
+  apex" direction - the old values sit well above his. See NEXT.md item 15.
+
+## The dark outline along the edge: three levers, all measured, all worse (2026-08-12)
+
+Owner report: a dark line like an outline, a couple of millimetres thick, most
+visible at large sizes. Real and localised - it sits 0.68 logical units in from
+the traced edge, 0.2..0.8 units wide, down to 22..29 luma composited on grey.
+
+**It is in the master, not in `hybrid.py`.** `src/ai512/cur__Arrow__0.png` reads
+a darkest pixel of 1 with 0.42% of the cursor below 70 luma, before any stage in
+this file runs; the shipped 512 render reads 22 and 0.50%. The pipeline lightens
+it slightly. It shows only at large sizes because downsampling to 32 averages the
+halo away - at 32 we read a darkest pixel of 100 against the author's 106, and
+neither has anything below 70. Wait is the exception and must be left alone: its
+darkness is the author's own (29 against his 29, 7.8% against his 7.4%).
+
+- **`_EDGE_SHADOW_D_LO` 0.7 -> 0.2.** Removes the line nearly completely (Arrow
+  342 dark pixels -> 0, Hand 102 -> 0). Gate 14 -> 16..17: Help picks up a
+  `tip_contrast` failure of its own (0.159 -> 0.125) and its engraved groove
+  opens (`fold_gap` 0.125 -> 0.375), AppStarting's `fold_luma_step` doubles,
+  Hand's `fold_jag` 45 -> 69. The 0.7 floor is what keeps the max filter off the
+  edge; the line sitting at 0.68 is a two-hundredth of a unit outside the band
+  written to remove it, and closing that gap costs the band's whole purpose.
+- **The master unsharp's `dark` 0.45 -> 0.** Shaves about a third (Arrow darkest
+  22 -> 31, share 0.50% -> 0.32%) and nothing at 0.25. Gate 14 -> **28**: Help's
+  `fold_gap` 0.125 -> 4.750, Handwriting's `fold_luma_step` 5.3 -> 18.2, Wait
+  gains `jitter_unmeasured`. The darkening half of the overshoot is what holds
+  every fold line and engraved detail together - attenuating it dissolves the
+  drawing. This is the same knob the `_master_raw` call already sets to 0.45 on
+  purpose; 0.45 is not a leftover, it is the setting.
+- **Regenerating the upscale.** Already settled above (2026-08-08): both weight
+  files give the same structure, the artefact enters at the 32-to-128 stage, and
+  redoing that moves `traced.json` and every silhouette with it.
+
+Left alone. Every downstream lever pays more in fold and engraving than it buys
+at the edge, which is the same conclusion this file already reached for the tip
+lean - a master defect does not have a downstream fix.
+
+## `density_%`: three anchors for the alpha level, all worse (2026-08-12)
+
+The standing block nobody had touched - sixteen cursors of sixteen over the 2.0
+tolerance, worst Cross 6.16%. Diagnosed, not fixed.
+
+**The drift is made by the correction, not by the alpha.** Measured over the
+metric's own region, `_up_alpha_raw` is already scale-consistent: Arrow 0.10%,
+SizeNESW 0.57%, IBeam 0.66%, Cross 1.47%, all inside tolerance. The scalar level
+correction in `_up_alpha` takes Arrow from 0.10% to 2.50%. It holds the
+mask-weighted mean, and the mask's soft edge carries a share of that mean that
+collapses with size - a large fraction at 32, a sliver at 384 - so holding the
+whole-mask mean forces the interior up at the small end.
+
+- **Anchoring on solid pixels (`m > 250`) instead of the whole mask.** Helps the
+  thick cursors (Arrow 2.50% -> 1.20%, Help 2.29% -> 1.55%) and hurts the thin
+  ones (SizeNESW 3.20% -> 5.36%, Cross 6.16% -> 7.03%), because at 32px the
+  threshold only picks a thin cursor's brightest core - the anchor region itself
+  becomes size-dependent. This is the trap `_density_points` documents, walked
+  into from the other side.
+- **Anchoring on a region fixed once in logical units at `_LEVEL_REF`.** Worse
+  everywhere: worst 6.16% -> 7.38%, every cursor up.
+- **Dropping the correction altogether.** Density worst 6.16% -> 3.91%, still
+  over tolerance, and `scale_drift` worst 0.068 -> 0.172, through its own 0.10
+  threshold. So the correction is still earning its keep on coverage even after
+  the `_deburr` fix removed the other source.
+
+The two metrics are one axis under a scalar: coverage is held by moving the
+level, and moving the level is what density measures. Per rule 7 in NEXT.md a
+scalar cannot fix a distribution - if this is worth another pass it needs a
+per-pixel correction in the manner of `_THIN_LEAN`, not another anchor.
+
+**Both halves settled elsewhere (2026-08-20).** `density_%` was not an anchor
+problem at all: the rim was carrying `cov^2` because the alpha map was box-
+averaged across the silhouette's edge and then multiplied by the coverage-
+weighted mask a second time (NEXT.md 35). And the anchor that did need moving
+was a different quantity - not the level's consistency across the ladder, which
+these three attempts were chasing, but its absolute distance from the author,
+which none of them measured, because the reading itself compared our 128 median
+against his 32 one (NEXT.md 37). Neither is evidence about the other.
+
+## Wait's split apex: two more render-side attempts (2026-08-13)
+
+NEXT.md item 7 settles this as a master defect - the network invented a crease
+at an apex where the author's own 32px art has one smooth peak. Two levers that
+did not exist when that entry was written were tried against it, and neither
+touches it.
+
+- **Putting the three sheen cursors back on the trough.** `_TROUGH_PARAMS` was
+  written to flatten this band ("they carry no fold here at all"), and
+  `5a5f363` swapped them to a `diff` step that paints one, so restoring the
+  trough looked like the obvious undo. Rendered side by side at 512 on grey, the
+  bright sliver and the dark band beside it are identical under both. It also
+  costs UpArrow's fold badly (`fold_luma_step` 13 -> 19, `fold_jag` 78 -> 98).
+
+- **Releasing `_fold_keepout` near the apex so `_edge_shadow_declutter` can
+  reach the crack.** Principled on paper: the keepout holds the max filter off
+  ±0.8 units around the chord, the crack sits there, and per NEXT.md item 1 the
+  three sheen cursors carry no real fold near the apex to protect. Ramping the
+  keepout in from t=0 over t=0.25 and t=0.45 changes the render by nothing the
+  eye can find.
+
+  The measurement says why. Cross-sections at t=0.10/0.15/0.20 read one
+  continuous bright core (91..147 luma) flanked by darker facets on both sides -
+  there is no narrow dark line *across* the wedge for a max filter to bridge.
+  The two "petals" are separated along the wedge, not across it, and
+  `_edge_shadow_declutter` is keyed to distance from the outline, so it cannot
+  address that shape at all.
+
+- **`taper` as the seam between the painted apex facet and the master's body.**
+  Third attempt at Wait's split, from the cross-section finding that the two
+  petals are divided along the wedge rather than across it: `_tip_relight` ramps
+  in over `taper` logical units from the point, so a mismatch where its
+  influence ends would read as exactly that seam, and the boundary would then
+  move with the constant. Rendered at taper 2.0, 5.0 and 9.0 the bright sliver
+  and the dark band beside it do not move at all. The division is in the master,
+  as item 7 says; three render-side levers have now missed it.
+
+- **`_tip_realign` (2026-08-13), a fourth lever, on UpArrow rather than Wait.**
+  `_tip_realign` (NEXT.md 23.5) fixes a *lateral offset* - the master's fold
+  runs parallel to the chord, shifted sideways, and sliding it back onto the
+  chord before `_tip_relight` reads it removes the ghost second line on
+  Arrow/Hand/Arrow_Down/Wait/AppStarting. UpArrow was measured at only 0.05
+  units of that offset - next to nothing - and stayed a closed loop after the
+  fix. Cross-sections at t=0.12/0.16 explain why: 113, 42, 194, 149, 20, 88 -
+  a genuine bright core with dark flanks on *both* sides, the same "two
+  petals" shape as Wait's, not a single line sitting in the wrong place.
+  Sliding a shape sideways cannot fix a shape that is wrong to begin with.
+  Same root cause as this entry, same verdict: baked into `src/ai512`, out of
+  render code's reach.
+
+- **Regenerating `src/ai512` with a different fill of the transparent zone
+  (2026-08-13), to un-flatten UpArrow's apex.** The best remaining theory after
+  four render-side misses: `upscale_lib.bleed_extend` inpaints the transparent
+  margin with TELEA before the RGB-only net sees it, and a soft inpainted
+  gradient wrapped around a sharp point is exactly the thing that would make a
+  network round it off. Reran the 128 -> 512 pass on UpArrow's own base three
+  ways: the shipped TELEA inpaint, a nearest-visible-pixel clamp (so the
+  wedge's own colour runs straight past its point instead of dissolving into an
+  average of both flanks), and no fill at all.
+
+  All three come out the same. Cross-section maxima down the chord, stations
+  0.25..2.5 logical units from the point: TELEA `112 113 114 115 117 118 120
+  121 235`, nearest `113 114 115 116 117 118 120 121 237`, raw `116 116 118 118
+  120 121 122 122 238`. Two levels apart, same flat slab, same cliff. Side by
+  side at 5x the three crops are indistinguishable. It is how the net reads
+  this wedge, not what surrounds it - and the same net, fed Arrow_Down's
+  near-identical 128 base (`110 111 113 116 114 150 153 210`), keeps the ramp
+  (`107 108 109 113 140 190 216`). Only the hue differs between them.
+
+- **Blending the 128px base back into the master around the point
+  (2026-08-13).** The ramp the net dropped is still in its own input, so
+  reading the master back toward `_base128` in a disc around the traced point
+  looked like recovering data rather than inventing it - and near the point the
+  master is a flat slab, so there is no network detail to lose. It does restore
+  the ramp on paper (`144 150 146 172 193 199 204` against `146 145 144 203`),
+  and it looks worse: the 128 base upsampled is soft, and what arrives is the
+  lit facet dissolving into a glow around the point instead of converging. Blur
+  is on the owner's own reject list. `_tip_advance` (NEXT.md 23.6) reaches the
+  same station by resampling the master's own pixels, which keeps the edge.
+
+- **Scaling the master about the traced point to advance the lit facet
+  (`_tip_advance`, 2026-08-13).** The fifth lever on UpArrow, and the one whose
+  geometry was actually right: the wedge is a cone with its apex on the traced
+  point, so a radial scale about that point maps each flank onto itself and
+  moves only what lies along the axis. It does what it says - the facet's step
+  goes from 2.25 logical units to 1.67, where the healthy wedges start theirs,
+  the profile takes the right shape, and no other cursor changes by a level.
+
+  It also drags the master's dark rim in with the facet. A radial contraction
+  compresses tangentially by the same factor, so the rim arrives at the point
+  narrower, denser and darker, sitting on both flanks of the lit facet as a
+  hard shadow that was not there before (max darkening 43 levels; on a signed
+  difference map the red line hugs the blue region on both sides). The owner
+  saw it on the first crop. Same trade as `_draw_tip` and
+  `_match_author_at_tips`: one defect removed, another drawn.
+
+  `tip_contrast` objected too (0.049 -> 0.032 against a 0.046 floor, and
+  1.15/1.20/1.25 give 0.041/0.040/0.045, so no factor clears it), but that is
+  not what decided it - the shadow is.
+
+  **Closed from the other side (2026-08-20).** Every lever here, this one
+  included, tried to move or smooth UpArrow's own shading. Across the wedge two
+  units from the point UpArrow reads 115 95 104 97 82 and Arrow_Down reads
+  123 88 72 96 225: the crease is in both, the lit facet only in the donor, so
+  the facet is *missing* and there is nothing to move. Arrow_Down is drawn on
+  the same traced outline, so its luminance transplants without registration -
+  see `_apex_borrow` and NEXT.md 36. The conclusion recorded here, that anything
+  further belongs upstream of `src/ai512`, was wrong: it belongs to a neighbour.
+
+- **Three narrower shapes for the tail notch (2026-08-13).** All three were
+  tried before `_notch_from_author` settled on a plain deviation cap over a
+  disc, and each looked like it should cost less.
+
+  *A keep-out strip along the chord* - cap the deviation only where the crease
+  has already left the chord, so the part the fold tracker reads is untouched.
+  It does keep every tracker row (Wait `fold_gap` stays 0.875, AppStarting keeps
+  its size), and the hook is still plainly there on the crop: it starts inside
+  the strip, at s = -0.20 by t = 0.93, and only reaches -0.90 by t = 0.97.
+  Worse, correcting right up against a protected strip puts a step at the
+  boundary - AppStarting `fold_luma_step` 10.97 -> 25.37, UpArrow 30.3 -> 46.1.
+
+  *Capping only the positive deviation* - the thing the eye picks out first is
+  a bright rim curling along the top edge of the tail spike, so pull down only
+  what the render made brighter than the author. It changes almost nothing: at
+  cap 25 every fold number is the baseline to three decimals except UpArrow's
+  jag, and the crop still has the curl. The rim is within 25 levels of his own
+  paint - it is not a level error, it is an edge in the wrong place.
+
+  *Adding back the difference blurred at 0.7-1.0 logical units* - move the
+  local mean toward the author while leaving every high frequency the render
+  has, so the crease keeps its gradient and only its position shifts. A
+  displaced edge makes a dipole in the difference, and a blur that wide cancels
+  it: at sigma 1.0 / cap 25 nothing moves at all, at 0.7 / 10 the numbers move
+  a little and the crop is unchanged.
+
+- Two ways of re-weighting `_up_alpha`'s level normaliser (2026-08-13), both
+  aimed at `density_%`, which misses its 2.0 target on all sixteen cursors.
+  Printing the ladder makes it one defect rather than sixteen: 32 sits +1.7 to
+  +4.7 per cent above the cursor's own mean and 64 upward is a gentle 1 per cent
+  decline. The normaliser holds the *mask-weighted* mean equal across the ladder
+  and the mask's antialiased rim is one device pixel wide - a whole logical unit
+  at 32, a sixteenth at 512 - so at 32 the rim carries a large share of the
+  weight and the scalar pushes the interior up to compensate. `density` measures
+  the interior.
+
+  *Weighting on solid pixels only* (mask at 255, full mask as fallback below 16
+  solid pixels). Right in principle, and it overcorrects where it matters: a
+  thin cursor's solid interior at 32 is a handful of unrepresentative pixels.
+  The wedges improve slightly (2.50 -> 2.12) and the thin ones collapse -
+  SizeAll 3.55 -> 18.07, SizeNS 2.51 -> 10.32, SizeWE 2.66 -> 10.06, IBeam
+  4.98 -> 7.37.
+
+  *Switching the normaliser off altogether.* This is the one worth knowing
+  about, because it works on the metric it was aimed at and fails on the other
+  side of the same trade. `density_%` collapses - Arrow 2.50 -> 0.10, Help
+  2.29 -> 0.09, Cross 6.16 -> 1.47, IBeam 4.98 -> 0.66, twelve of sixteen under
+  target - and `scale_drift` goes from 0.011..0.068 to 0.124..0.172 against a
+  threshold of 0.10, so all sixteen fail it instead. That is the normaliser's
+  own docstring measured from the other end: it trades 0.15 logical units of
+  coverage drift for 2..4 per cent of interior level. Coverage drift is the
+  cursor changing size with the size it is drawn at, which the eye sees;
+  2.5 per cent of interior opacity, on an eroded interior, it does not.
+
+  So the sixteen `density_%` debts are one deliberate trade, not sixteen
+  defects, and the 2.0 target is unreachable while `scale_drift` is held under
+  0.10. Whether they should be reclassified from debt to accepted is a
+  bookkeeping call for the owner, not a rendering fix.
+
+## Медиана по дуге не отделяет полосу от складки, потому что полосы нет
+
+Замысел: паразитная тёмная полоса идёт **вдоль** контура на постоянной
+глубине, а складка его **пересекает**, значит в координатах (длина дуги,
+нормаль) они разделяются медианой по дуге, и тогда `_fold_keepout` со всем его
+побочным ущербом (до 22.7% подавленного дефекта на Help, у острия и у выемки)
+становится не нужен. Дальше - минимальная поправка, убирающая внутренние
+минимумы профиля: `min(накопленный максимум слева, справа)`.
+
+Собрано целиком (`_rim_monotone`, станции каждые 0.25 единицы, профиль 0..2.5
+шагом 0.05, медиана по дуге ±3 единицы, сплат обратно по тем же лучам).
+Результат: **ноль изменённых пикселей**, числа до процента совпали с рендером
+вообще без стадии.
+
+Причина не в реализации. Медиана по дуге срезает дипы **вместе** со складкой:
+усреднённый профиль Arrow идёт 135 → 145 → 149 → 188 → 186 → 165 → 157 и
+внутренних минимумов не имеет вовсе, заполнять нечего. То есть дипы стоят на
+отдельных станциях, а не тянутся полосой на постоянной глубине - посылка
+разделимости неверна.
+
+Замер, из которого посылка выводилась («на Arrow 68 станций из 280 становятся
+монотонными»), считал монотонность **после** медианы и сравнивал с сырым
+профилем. Это не «полосу видно, складку нет», это «медиана сгладила и то и
+другое». Отдельно ранее отвергнут и глобальный радиальный профиль: полоса
+разной глубины на разных рёбрах, среднее по всем станциям её не видит.
+
+Что при этом видно в профилях и осталось незакрытым: на клиньях гребень на
+глубине ~1.0 стоит на 188-221 уровня против авторских ~150, а на части станций
+там же провал до 59 с обрывом в 130 уровней на соседнем отсчёте. Дефект - не
+только лишний тёмный слой, но и пересвеченный гребень рядом с ним. Автор
+держит дип на 12 станциях из 248 (Arrow), мы - на 240 из 280.
+
+`_edge_shadow_declutter` оставлен на месте: он единственный, кто эти 240
+станций хоть сколько-то чинит (76% против 82% без него на Arrow, 67% против
+80% на Hand, 69% против 84% на NO).
+
+---
+
+## Спрямление рёбер: хорда не отличает пилу от дуги
+
+Проверено 2026-08-15 и **закрыто как отдельный подход**. Проход спрямления в
+`trace.py` (`straighten_runs`) сажает вершины прогона на подогнанную
+ортогональной регрессией прямую. Отбор прогонов только по допуску от хорды
+(«вершина не дальше 2.5 eps») **портит верность оригиналу**, и вот почему.
+
+У Cross, IBeam и SizeAll лучи в авторском 32px растре нарисованы **вогнутыми**.
+Прямая поверх вогнутой руки ложится снаружи всех авторских пикселей, то есть
+проход не убирает дрожание, а надувает силуэт. IoU нашего 32px против `src/orig`:
+
+| курсор | база | только допуск хорды | с проверкой на дугу |
+|---|---|---|---|
+| Cross | 0.8898 | 0.8729 | 0.8898 |
+| IBeam | 0.8261 | 0.8116 | 0.8261 |
+| SizeAll | 0.8438 | 0.8359 | 0.8438 |
+
+Проверка хорды спрашивает «насколько далеко вершина», но никогда «с какой
+стороны». Разрез Дугласа-Пекера пополам не спасает: получаются две хорды, каждая
+поверх своей половины дуги.
+
+**Что не работает и проверено.** Мерить знакопеременность от **подогнанной**
+прямой: TLS центрирует свои остатки по построению, и дуга балансирует вокруг
+своей подгонки не хуже пилы - читается 1 для всего, ноль отвергнутых прогонов.
+
+**Что работает.** Знакопеременность от **хорды** (`_balance`, порог
+`STRAIGHT_BALANCE = 0.4`): пила кладёт одинаковую массу по обе стороны хорды,
+дуга лежит целиком по одну сторону.
+
+Цена признака: выигрыш по `edge_straight` rms ужимается с 0.156 → 0.130 до
+0.156 → 0.147. Стрелочные курсоры (8 из 16) сохраняют почти всё, 0.118 → 0.106;
+вогнутые остаются нетронутыми, как и должны.
+
+**Инструмент.** Вопрос «спрямлять или нет» решается не `edge_straight`, а IoU
+силуэта на 32 против `src/orig`: прямизна и верность автору здесь в прямом
+противоречии, и одна метрика на это не отвечает. Второй, независимый от рендера
+инструмент - расстояние от вершины до плотной цепочки границы 128px: до 2.5 eps
+его максимум не сдвигается ни на одном курсоре, на 3.0 ломается.
+
+## Симметрия: приколотый апекс и остриё, которое держит не силуэт
+
+Усреднение контура с его же отражениями (`trace.symmetrize`) стоило
+`tip_contrast` на SizeNS 0.037 -> 0.021 при поле 0.055. Напрашивалось объяснение
+«апекс размазали»: апекс не трассированная вершина, а пересечение двух
+подогнанных боковин, то есть уже самая точная точка контура, и усреднять её с
+зеркалом можно только во вред.
+
+**Не подтвердилось.** Приколол апексы (вносят вклад в чужое среднее, сами не
+двигаются) - глазом стало **хуже** обоих вариантов: апекс остаётся на старом
+косом месте, боковины выравниваются, и остриё уезжает с оси. `tip_contrast` при
+этом не восстанавливается.
+
+**Где потеря на самом деле.** Разложил композит на множители в круге 1.5
+единицы вокруг острия SizeNS, притяжение 0.0 против 1.0:
+
+| | альфа в точке | яркость | ширина поперёк биссектрисы 0.25/0.5/1.0/2.0 |
+|---|---|---|---|
+| 0.0 | 0.616 | 112.7 | 0.130 0.370 0.810 1.680 |
+| 1.0 | 0.604 | 119.3 | 0.130 0.370 0.810 1.570 |
+
+Геометрия стоит на месте: альфа, ширины клина и угол не двигаются. Уходит
+**яркость** - 112.7 -> 119.3 при фоне 128, то есть тень под остриём вдвое
+слабее. Тёмное ядро лежит в AI-мастере, оно к силуэту не привязано, и сдвиг
+контура на 0.2 единицы выводит остриё из-под него. Это сцепка на стороне
+рендера, вектором она не решается.
+
+Поэтому SizeNS и SizeWE **меряются, но не правятся**: `analyze.SYMMETRY` шире
+`trace.SYMMETRY` на эти два курсора. Свип притяжения 0.0/0.35/0.5/0.7/1.0:
+SizeNS теряет остриё монотонно (0.037/0.030/0.028/0.025/0.021) и уже на 0.35 не
+проходит; порога, где симметрия даётся даром, нет. На 0.5 обе оси SizeNS
+садятся ровно на авторскую асимметрию (lr 27.9 против его 27.7, ud 4.5 против
+4.2) - то есть цель плана достигается, но платится остриём.
+
+Cross, SizeAll и IBeam ведут себя обратно: остриё там **растёт** с притяжением
+(Cross 0.053 -> 0.058, SizeAll 0.043 -> 0.049), IBeam почти не двигается.
+
+## Устаревший traced.json: фоновый прогон, который считался мёртвым
+
+Коммит `449ecbb` положил `trace.py` с `STRAIGHT_BALANCE = 0.4` и `traced.json`,
+собранный при `0.30`: свип, запущенный фоном и признанный мёртвым по пустому
+`Get-Process python`, дописал файл уже после. Проверка «байт-в-байт с коммитом»
+ничего не поймала - сравнивались выход свипа с самим собой.
+
+Разошлись 10 курсоров из 16, 3-5 вершин на курсор, до 0.27 логической единицы.
+`metrics-baseline.json` был снят поверх этого файла, поэтому в гейте потом
+всплыли четыре «регрессии» на курсорах, которых симметрия не касается вовсе
+(Arrow_Down, UpArrow, SizeWE).
+
+**Проверка, которая ловит это.** Не сравнение файла с коммитом, а
+воспроизведение: `git show HEAD:trace.py > _tmp.py && python _tmp.py` и диф
+результата с `HEAD:traced.json`. Ровно то, что делает CI. Своё же значение
+константы в диффе кода при этом выглядит правильным - смотреть надо на выход.
+
+## Перенос формы кромки: три способа положить поправку обратно (2026-08-19)
+
+Все три о том, как из посчитанных по лучам поправок собрать картинку. Механизм
+один и тот же, числа - `rim_layers` на Arrow при базе 0.719.
+
+- **Рассыпать по своим же лучам с нормировкой по весу**: 0.65. Работает, но лучи
+  идут через 0.25 единицы, отсчёты по лучу через 0.125, и на 512 между ними
+  остаются целые пиксели, которых не коснулся никто. Сырых провалов в сечении
+  становится вдвое больше (Arrow_Down 458 -> 1184), сама гофра и есть слой.
+- **То же, но с размытием числителя и знаменателя перед делением**, чтобы дырки
+  заполнились интерполяцией: **0.80**, хуже, чем без переноса вовсе. Размытие
+  идёт и по глубине - по единственной оси, о которой вся поправка.
+- **Приколоть отсчёт на контуре к нулю** («контур стоит на месте»): на первый
+  взгляд безобидно, на деле ставит обрыв в 16 уровней там, где мастер и
+  аналитика расходятся сильнее всего - у самой кромки. Профиль после этого не
+  меняет форму, а просто опускается полосой, и её края - два новых провала.
+
+Живой способ - поле: пиксель берёт свою глубину из `_edge_distance_at` и секцию
+ближайшей станции, интерполируя только по глубине.
+
+## Перенос формы вдоль складки не мирится с переносом поперёк кромки (2026-08-19)
+
+Развилка 1 из NEXT.md, раздел «Перенос формы кромки». Эталон яркости вдоль
+излома строится так же, как поперёк кромки, и переносится за тот же проход.
+Механизм рабочий: при потолке 18 уровней разрыв складки у UpArrow (`fold_gap`
+2.75 / 2.00 / 2.92 на 128 / 256 / 384) сходится к 0.50 / 0.38 / 0.67 - лучше
+базы. Той же поправкой `fold_luma_step` у Arrow идёт 4.2 -> 15.9, `fold_jag`
+53.9 -> 86.3, у Hand то же самое. Потолок 6 и 3 гасят обе стороны сразу.
+
+Причина не в величине: аналитика вдоль складки несёт собственную амплитуду, и
+там, где мастер уже нарисовал линию верно, любая её доля - чистая порча. Код
+оставлен в дереве выключенным (`_FOLD_XFER = set()`), с числами.
+
+## Ближайшая станция как способ чтения поправки (2026-08-19)
+
+Продолжение предыдущего раздела, найдено глазами, а не числом. Поле поправки,
+взятое от **ближайшей** станции, разбивает стекло на ячейки Вороного: каждая
+печатает свою секцию, границы ячеек - прямые, и на 512 при увеличении 4x
+поправка видна плоскими фасетками с прямыми швами. Хуже всего у остриёв и в
+узких местах, где ячейки расходятся веером.
+
+`rim_layers` при этом **лучше** (Help 0.314 против 0.333 у смешанного варианта):
+фасетка сама по себе монотонна вдоль луча, а метрика считает провалы вдоль луча.
+Числу нечем это увидеть. Смесь по станциям с весом по дуге фасетки убирает.
+
+Отдельно: у самой точки поправку надо гасить. Нормали соседних станций там
+пересекаются, секции расходятся, и смесь печатает в острие тёмный клин.
+
+## Равномерный вынос трассированного контура наружу
+
+Контур измеримо вдавлен внутрь своего же источника на 0.14-0.24 логической
+единицы (NEXT.md 28.1). Соблазн - вынести его наружу по нормали на константу и
+забрать `delta_e` у NO и IBeam. Не работает: вдавливание неравномерное. На
+`d=0.05` `delta_e` улучшается у тринадцати из шестнадцати, но IoU падает у
+четырёх (NO -0.022, Cross -0.019, SizeNS -0.011, Handwriting -0.009) - у них
+силуэт относительно автора и так не тонкий. Гейт валится.
+
+Отдельно: проверять такое на четырёх курсорах бесполезно. На выборке
+Arrow/Help/NO/IBeam `d=0.05` выглядел бесплатным - обе метрики росли у всех
+четырёх. Полный прогон это опроверг.
+
+Что осталось живым - не двигать вершины, а убрать причину: жёсткий порог
+`max(30, min(0.45*peak, 55))` по мягкому краю. Трассировка по уровню 0.5
+(marching squares) ставит вершину в геометрически верное место сама, без
+константы.
+
+## Трассировка по уровню альфы вместо внутренних пикселей границы
+
+Каждая точка сырой цепочки сносится по нормали на уровень `alpha == thresh`.
+Геометрически правильно (у Arrow средний снос 0.48 пикселя наружу, лестница
+исчезает), но в лоб не работает по двум причинам.
+
+Первая: углы классифицируются по той же цепочке, а `CORNER_KEEP_DEG` настроен на
+лестницу. Гладкий контур не даёт резкого поворота в окне, флаг угла не ставится,
+`straighten_runs` сливает прогоны через бывший угол. Cross теряет луч
+(delta_e 4.03 -> 15.05, IoU 0.918 -> 0.480), SizeNESW тоже, у NO по кольцу
+тёмный шов.
+
+Вторая, важнее: даже там, где силуэт не пострадал (шесть однокомпонентных, IoU
+-0.009), остриё Arrow становится темнее - на апексе тёмная шапка. При этом
+`rim_layers` улучшается вдвое (Arrow_Down 0.745 -> 0.322, UpArrow 0.755 -> 0.377).
+Метрика хвалит то, что глаз бракует, ровно как в разделах про подвыборки.
+
+Третий вариант - снимать лестницу только с неугловых прогонов, после
+классификации углов, с зоной покоя вокруг каждого флага - собран и замерен тоже.
+Силуэты выживают (Cross снова с четырьмя лучами, delta_e 4.24), но IoU падает у
+одиннадцати из шестнадцати, у однокомпонентных ровно на -0.023, а `rim_layers`
+идёт вразнобой: IBeam и UpArrow лучше, Help и SizeNESW хуже. Вывод: выигрыш по
+`rim_layers` во втором варианте держался на скруглении углов, а не на снятии
+лестницы. Все три варианта закрыты (NEXT.md 28.2, 28.3).
+
+## Перестройка граней поверх ободка кромки
+
+Стадия структурных граней (`_facet_split`) собирала статистику двух поверхностей
+по внутренности (`ed > 0.35`), а накладывала результат на всю зону острия. У
+острия клин узкий, ободок занимает почти всю его ширину, и внутреннее стекло
+затирало ободок - тот самый, который и несёт контраст острия против рабочего
+стола. Итог: `tip_contrast` Arrow 0.129 -> 0.083, Arrow_Down 0.092 -> 0.060,
+UpArrow 0.048 -> 0.027 при авторских 0.084 / 0.088 / 0.085. Лечится не подбором
+перцентиля, а тем, что ободок вообще не отдают этой стадии (`_FACET_KEEP_RIM`,
+NEXT.md 30.3).
+
+## Структурные грани на Arrow_Down и UpArrow
+
+Девять вариантов (перцентиль 25/20/15 на keep 0/0.25/0.4) замерены на обоих.
+Ни один не окупается. Arrow_Down: лучший контраст граней у острия 1.72 при
+телесном 2.72, и при этом `tip_contrast` 0.0845 против авторских 0.0879. UpArrow:
+грани 0.93 -> 1.22 при телесном 1.33, `tip_contrast` 0.048 -> 0.041 при том, что
+он и так вдвое ниже авторского 0.085. У этих двух дефект острия не в разделении
+поверхностей, а в самом ободке. На Arrow та же стадия работает (NEXT.md 30.3).
+
+## `_tip_glass` before the size ladder: three placements, all worse (2026-08-20)
+
+Plan item 8. The premise was the one `_up_alpha_native` was built on - a stage
+derived afresh at every rung gives a different answer on each - so the point's
+glass should be put in once, canonically, and scaled with everything else.
+
+Measured on what the item is about: the shipped frame's alpha near Arrow's apex,
+sampled in logical units along the A-J chord, spread across the eight rungs from
+32 to 512. As shipped that is 50.9% of the mean at 0.15 units in, 31.2% at 0.5,
+17.4% at 1.0, 5.7% at 1.5.
+
+- **The floor laid once at native and resampled** (inside `_up_alpha_native`,
+  after the level anchor). Worse everywhere: 59.5%, 36.6%, 18.2%. The vector
+  mask is redrawn crisp on every rung and this floor exists to fill it; laid at
+  512 and box-averaged down, it loses the point's glass again at exactly the
+  sizes that needed it - the apex reads 116.4 at 32px against 133.3 shipped.
+- **Canonical reference level, floor still laid per size.** Worse: 52.9%,
+  33.2%. The per-size sample was not drift. It reads the glass level on the rung
+  it is filling, and 214.3 at 32 against 202.1 at 512 is that map's own level at
+  that point; freezing it to the native value only lowers the small end.
+- **The stage moved inside `_up_alpha`, ahead of `_hold_coverage`,** so the
+  coverage hold accounts for what the tip adds. The one placement with a
+  structural argument, and it buys nothing: 50.6% against 50.9%, delta_e 2.925
+  -> 2.921, while Arrow's `scale_drift` doubles, 0.0034 -> 0.0072.
+
+`_tip_glass` is already where it belongs, and for a reason worth keeping: a
+floor that fills a crisp mask has to be laid on the same grid the mask is drawn
+on. What still varies along the ladder at the point is coverage - one logical
+unit of shape under an edge one device pixel wide - and no alpha stage reaches
+that.
+
+Collateral worth knowing: `_up_alpha` returns early at `size == _LEVEL_REF`, so
+a stage appended to its tail silently skips 128. The first run of the third
+attempt did exactly that and put a hole at that one rung (apex 54.8 against 154.2
+either side of it). Commented at the return.
+
+## Handwriting 3-6: три способа положить донорский цвет, два хуже (2026-08-21)
+
+Все три об одном - кадры 3-6 берут высокие частоты у кадров 2 и 8. Числа по
+Handwriting при базе `fold_gap` 0.50, `fold_luma_step` 3.33, `fold_wander` 0.20,
+`fold_jag` 43.3, `delta_e` 3.55.
+
+- **Донор целиком, вместо мастера.** Кадр получает чужую складку и чужой
+  уровень: `delta_e` 3.55 -> 8.80, `fold_gap` 0.50 -> 4.38, `fold_luma_step`
+  3.3 -> 32.1. Разделение частот (низкие свои, высокие донорские) убирает
+  ровно это: `delta_e` возвращается к 3.82.
+- **Подгонка по четырём опорным точкам** (`_landmarks`: остриё, два хвоста,
+  выемка) вместо вторых моментов. Казалось точнее - обе точки хорды складки
+  входят в набор. На деле хуже моментов: `fold_gap` 3.75 против 1.50,
+  `fold_luma_step` 56.07 против 18.10, при почти том же IoU силуэта (0.959
+  против 0.963). Код снят.
+- **Полоса отчуждения только для тёмной половины детали**, чтобы блики у
+  складки остались. `fold_wander` 0.93 против 0.20: светлая грань рядом с
+  изломом уводит гребень, за которым идёт трекер, не хуже тёмной. Полоса
+  гасит обе половины.
+
+Отдельно, и это не про донора: подмена цвета на мастере (512) вместо
+отгружаемого размера сама по себе стоит `fold_wander` 0.33 против 0.20 при
+нулевом заимствовании. Между мастером и кадром лежит вся цепочка стадий, и
+авторский цвет, пропущенный через неё, - уже не авторский цвет. Подмена
+осталась там же, где её делал `_BROKEN_COLOUR`, в `frame_image`.
+
+## Клин: гашение тела по поперечнику сечения (2026-08-21)
+
+Модель `q = w/2r`, тело гаснет при `q <= 1`, плавно до 2.25r / 2.5r / 3r. Идея
+верная по физике и неверная по факту: закон уже соблюдается обеими сторонами,
+тело появляется примерно при `w = 2r` и у автора, и у нас, отличается только
+сама `r` (авторская 1.32-1.34, наша 1.0, у Arrow 0.25 - её съедает
+`_facet_split`).
+
+Прогнано всё равно, с авторской `r`. `tip_profile` UpArrow 0.42 -> 0.29..0.30,
+Arrow 0.50 -> 0.24, Arrow_Down 0.95 -> 0.41; `tip_extreme_contrast` 0.077 ->
+0.039, 0.129 -> 0.087, 0.099 -> 0.039. Глазами на 32 и 48 остриё тупеет.
+
+Причина в цвете, на который гасится тело: это наша же кромка, а её светимость
+около острия 121-128 при сером фоне 128. Гашение на неё стирает остриё. Любой
+вариант этого механизма требует сначала починить уровень кромки, а если его
+починить, механизм уже не нужен - см. NEXT.md 43, вариант E.
+
+---
+
+## `_LEVEL_SMOOTH` и `_LEVEL_CAP` не берут смещение уровня от переноса материала
+
+Замысел: пересветление Handwriting[4] на ~2 L не снимается авторским уровнем,
+потому что `_LEVEL_SMOOTH` 4.5 логической единицы шире, чем карандаш в
+поперечнике, и коррекция гасится об маску на мелкой фигуре. Значит достаточно
+сузить сглаживание, а при нужде поднять `_LEVEL_CAP`.
+
+Проверено 2026-08-21, при впущенном в стадию Handwriting (без впуска стадия на
+256 не вызывается вовсе, и первая лестница мерила отключённую функцию - см.
+NEXT.md 47). Лестница плоская:
+
+| smooth | cap | dE[4] | знаковый dL |
+|---|---|---|---|
+| 4.50 | 12 | 4.57 | +1.77 |
+| 2.00 | 12 | 4.56 | +1.75 |
+| 0.75 | 12 | 4.57 | +1.74 |
+| 2.00 | 24 | 4.51 | +1.67 |
+| 0.75 | 40 | 4.56 | +1.65 |
+
+Причина не в ширине и не в пределе. `_match_author_level` считает поправку как
+разность автора и **сырого мастера** (`ours32` собирается из `_master_rgb`), а
+прибавляет её к `rgb`, уже прошедшему `_material_layer`. Сдвиг, внесённый
+переносом, в разность не попадает ни при каких настройках сглаживания. Стадию
+чинить не надо - её опора на мастер намеренная, коррекция заморожена на цикл
+ради sheen-анимации. Адрес - сам перенос, он не должен двигать среднее.
+
+Закрыто там же 2026-08-21: перенос починен со своей стороны (NEXT.md 48), и
+`_LEVEL_SMOOTH`/`_LEVEL_CAP` остались нетронутыми, как и следовало.
+
+---
+
+## Зонный temper: полная сила `_tip_relight` внутри его собственной полосы
+
+Замысел: ширину перехода складки задаёт не `_tip_relight`, а AI-мастер, который
+рисует складку разрывом. Стадия способна разрыв заменить, но `_TEMPER_K["relight"]
+= 0.5` подмешивает половину сырой кромки обратно под нарисованный пандус.
+Глобальная единица отменяет старое решение целиком, поэтому: пусть стадия сама
+возвращает поле своей территории (`along * lateral * mask`), а `_temper` смешивает
+по нему - полная сила внутри полосы, штатные 0.5 снаружи. Владение приходит от
+стадии, а не от нарисованной рядом второй маски, чтобы две почти одинаковые полосы
+не разошлись через несколько коммитов.
+
+Проверено 2026-08-21, на `tools/fold_tracker.py`, три процесса на конфигурацию
+(контроль воспроизвёл отгруженные числа до цифры).
+
+**Что подтвердилось.** Ширина перехода становится физической величиной и начинает
+сходиться в логических единицах:
+
+```
+Arrow s @ 128 / 256 / 512
+legacy   0.200 / 0.065 / 0.050    идёт за шагом пикселя
+zonal    0.600 / 0.500 / 0.500
+author   0.600 / 0.600 / 0.600
+```
+
+Вместе с ней notch садится в авторский диапазон (Arrow 7.2 -> 4.8 при авторских
+4.3; UpArrow 11.9 -> 3.9 при 5.0), rms падает вдвое (5.6 -> 3.7), unresolved
+10 -> 6. Хвостовые углы, ради которых `_LEGACY_TEMPER` заводили, не двигаются
+вообще: в дисках `_TIP_DISC` вокруг вершин из `analyze.corners()` обе хвостовые
+вершины Arrow побитово те же (0.00 среднего и 0.00 максимума), у UpArrow максимум
+0.33 уровня. Двигается только вершина острия, `own = 0.88`.
+
+**Почему отвергнуто.** Despite substantially better fold-profile metrics, the
+rendered inner tip is visibly destroyed. Светлая внутренняя грань со своим
+отдельным остриём и тёмная линия, отделяющая её от внешнего силуэта, смываются
+в одну гладкую заливку - тот же провал, за который `52f5e06` вернул половинную
+силу.
+
+Два уточнения, чтобы причина не была приписана не тому:
+
+- территория, сужённая собственным `taper_frac` стадии, не помогает: внутреннее
+  остриё живёт дальше 5 логических единиц, где `taper_frac` уже равен единице;
+- при штатном `edge = 0.12` смыв тот же, а `s` остаётся 0.400 / 0.130 / 0.080.
+  Значит смывает не ширина пандуса, а полномочия.
+
+**Что именно тут тупик.** Тупик - конкретная территория, а не идея владения.
+`band = along * lateral * mask` ограничивает полномочия вдоль хорды и поперёк
+неё ничем: стадия получает полную силу на всём сечении, включая полосу, где
+живёт внутреннее остриё.
+
+Первая редакция этой записи утверждала, что внутренняя грань лежит в тех же
+пикселях, что и переход складки, и потому пространственно они неразделимы. Это
+неверно, и проверено измерителем `--inner` 2026-08-22: разделитель и гребень
+стоят на своей координате `n`, а переход - на своей, и зазор между гребнем и
+центром перехода растёт от 0.35 логической единицы при t = 0.20 до 3.1-3.5 при
+t = 0.45 (Arrow, Arrow_Down, UpArrow одинаково). Тесно им только у самой
+вершины - там же, где смыв и виден сильнее всего. Территория с окном по `n`
+здесь не пробовалась и остаётся открытым маршрутом.
+
+**Архитектурный вывод.** Возвращаться к `temper = 1` - глобальному или зонному
+по одному лишь `t` - не надо: у `_tip_relight` две плоские грани и зарубка, а
+нарисовано там больше, и полная сила над всем сечением стирает разницу. Дальше
+имеет смысл либо территория, вырезающая полосу внутреннего остриё по `n`, либо
+модель, которая сама умеет представить и широкий переход, и отдельную
+внутреннюю грань. Проверять обе только парой: профиль складки и `--inner`
+вместе, поодиночке они уже один раз соврали.
+
+И отдельно про приборы: `s`, notch и rms не являются достаточным acceptance. Они
+меряют поперечный профиль и не проверяют сохранность внутренней грани. Здесь все
+три сказали «лучше» про исчезновение детали, как до них `tip_contrast`
+(0.049 -> 0.074) и градиентная резкость (0.32 -> 0.43) на том же дефекте.
+
+**Что его ловит в гейте (дописано 2026-08-22).** `inner_tip` - тот самый
+второй класс приёмки, вынесенный отдельной метрикой и намеренно не свёрнутый в
+общий счёт складки. На базовой линии `main`: Arrow 0.750 -> 0.250,
+Arrow_Down 1.000 -> 0.750, UpArrow 1.000 -> 0.750, Hand 0.667 -> 0.333,
+Wait 0.417 -> 0.167, AppStarting 0.250 -> 0.000. Шесть курсоров из шести, что
+эту деталь имеют. Гейт FAIL (16); складочные числа при этом частью улучшились,
+так что поймал вариант именно второй класс, а не первый.
+
+---
+
+## Изотропный низкочастотный фильтр как способ расширить складку
+
+Замысел: разрыв рисует мастер, значит разделить профиль по масштабу -
+`broad = lowpass(profile)`, `structure = profile - broad` - положить обратно
+только широкую часть, а высокочастотный остаток вернуть там, где он несёт
+внутреннее остриё (полоса 0.6-1.4 логической единицы от контура). Полномочий
+`_tip_relight` не трогать вовсе, стадия отдельная и идёт по всей длине хорды.
+
+Проверено 2026-08-22, `_fold_broaden`: маскированное гауссово размытие сигмой
+0.50 LU по полосе +-3 LU от хорды, остаток возвращается до 1.60 LU от контура
+со спадом 0.50, уровень снимается взвешенным средним как в `_material_detail`.
+
+**Что подтвердилось.** Ширина перехода становится настоящей величиной, и это
+первый раз, когда критерий выполнен целиком:
+
+```
+s @ 128 / 256 / 512      unresolved из 20     автор
+Arrow       0.600 0.600 0.600        0            0.60
+Arrow_Down  0.900 0.600 0.600        0            0.60
+UpArrow     0.600 0.600 0.600        0            0.75
+```
+
+`p10` поднялся с 0.020 до 0.580, двугорбость исчезла. Ступень при этом цела:
+Arrow -48.1 против -48.3, Arrow_Down -110.8 против -108.9, UpArrow -72.5 против
+-75.3. Внутреннее остриё сохранено окном по кайме: Arrow 8/12 против 9/12,
+остальные один в один.
+
+**Почему отвергнуто.** На глаз грань складки исчезает, а корпус курсора
+становится мягким градиентом - стрелка читается надутой. Изотропное размытие не
+различает переход поперёк складки и структуру вдоль неё, а полоса +-3 LU
+покрывает почти весь корпус, так что низкочастотной стала вся середина глубже
+2.1 LU от контура, где окно остаток уже не возвращает.
+
+Заодно стёрта зарубка: 7.2 -> 1.7 у Arrow, 17.3 -> 3.5 у Arrow_Down, 11.9 -> 3.6
+у UpArrow при авторских 4.3 / 4.8 / 5.0. Она и давала prominence старому
+трекеру, поэтому `fold_unmeasured` на четырёх курсорах в этом прогоне - дефект
+рендера, а не каприз прибора. Гейт FAIL (8), у Arrow_Down `fold_jag` 17.7 -> 72.3
+и `fold_luma_step` 4.75 -> 21.5.
+
+**Что именно тут тупик.** Не разделение на broad и structure - оно работает.
+Тупик - двумерный фильтр по площади как его исполнение: у него нет нужного
+владения, он покупает ширину перехода ценой продольной структуры и граней
+корпуса. Операция должна быть направленной и локальной - только вдоль нормали и
+только в окрестности перехода, с буквальным контрактом «вне окрестности кадр не
+меняется».
+
+И четвёртый раз подряд приборы сказали «лучше» про худшую картинку: `s` показал
+авторскую ширину, детектор внутреннего остриё показал сохранность, а размякший
+корпус не заметил никто. Кроп смотреть до чтения таблиц.
+
+**Что его ловит в гейте (дописано 2026-08-22).** Новый контракт складки
+отвергает этот вариант, но ровно одним числом - `fold_notch`. Замерено на
+базовой линии `main`: Arrow 1.218 -> 0.196, Hand 0.570 -> 0.212, AppStarting
+0.683 -> 0.283, Wait 0.498 -> 0.384 (доля от авторской глубины, порог 0.40),
+FAIL (4). По остальным семи он от локальной перестановки ступени неотличим:
+ширина 0.600 у обоих, сходимость по размерам 1.0 у обоих, доля неразрешённых
+станций 0 у обоих, амплитуда ступени и остаток совпадают до десятых, внутреннее
+остриё сохранено у обоих. То есть зарубка - единственная измеримая жертва
+изотропного размытия, и порог по ней не подгонка под кандидата, а
+единственная граница между «складка с зарубкой» и «складка без неё».
+
+## Насыщенность красного у NO по отдельности (2026-08-22)
+
+Прежний вывод «красный пересвечен» не был ошибкой: замер верный, кольцо
+действительно нарисовано насыщеннее авторского. Ошибкой была попытка исправить
+это отдельным множителем внутри старой геометрии. Штрих шириной два пикселя
+почти весь состоит из края, а край у нас недокрыт, и фон разбавляет цвет ровно
+настолько, насколько цвет пересвечен: две ошибки гасят друг друга в композите.
+Поэтому любая половина в одиночку делает `delta_e` хуже - покрытие само по себе
+7.749, цвет сам по себе 7.653 при 6.413 за «ничего не делать», и только пара
+даёт 5.768. Не оптимизировать их независимо; владелец у alpha и цвета кольца
+теперь один (`_no_ring`), и включаются они атомарно.
+
+## Складка и полоса на кромке: перенос радиального профиля закрыт полностью (2026-08-29)
+
+Перенос формы радиального профиля (`corr(u) = (b(u) - b(e)) - (m(u) - m(e))`,
+`_rim_transfer` в `hybrid.py`) работает **только в откалиброванном месте** -
+в конце девятистадийного пайплайна, где стоит сегодня, включён на четырёх
+курсорах (Arrow, Help, NO, AppStarting), гейт на них зелёный.
+
+Ветка (а) - починить складку тем же переносом, построив эталон профиля вдоль
+излома (`_fold_transfer`/`_FOLD_XFER`) - построена и отвергнута 2026-08-19
+(NEXT.md 25, "Развилка 1"). Общий потолок не примиряет UpArrow (нужен
+сильный перенос, `fold_gap` 2.75 -> 0.50 на потолке 18) с Arrow/Hand (там
+мастер уже прав, тот же потолок ломает `fold_step` втрое, 4.20 -> 15.9).
+Ни слабый, ни сильный потолок не годится обоим сразу. Код в дереве, вшит в
+пайплайн, выключен (`_FOLD_XFER = set()`).
+
+Ветка (б) - перенести тот же код выше по цепочке, на выход `_master_raw`
+(`art/ai512`), вместо позднего места вызова - **тоже построена и отвергнута
+2026-08-29** (NEXT.md 58, инструмент `tools/ai512_xfer.py`, не в дереве -
+результат воспроизводится по описанию). `rim_layers`, прочитанный прямо на
+мастере до рендера, хуже почти на каждом кадре из 52 проверенных, включая
+все четыре курсора, где перенос сегодня зелёный на конце пайплайна (Arrow
+0.827 -> 0.932, Help 0.644 -> 0.835). Глазами то же самое: на Help кромка не
+утончилась, а утолщилась, и добавился новый серый мазок у крючка «?».
+
+Причина - `_rim_transfer` не переносимая функция чистого излучения. Её пять
+уточнений (NEXT.md 25: глубина окна, якорь на гребне аналитики, масштаб по
+подъёму мастера, размытие по дуге, отступ у остриёв) откалиброваны под
+конкретный вход - композит в конце девятистадийного пайплайна, а не под
+сырой мастер сразу после unsharp+declutter. Тот же код на другом входе - не
+«та же поправка раньше», а другое преобразование над другими данными, и оно
+не воспроизводит выигрыш даже там, где на позднем входе он доказан числом
+и глазом.
+
+**Все варианты постобработки для маршрута 1 (складка и полоса на кромке)
+закрыты.** Не пробовать больше ни общий потолок на `_fold_transfer`, ни
+перенос кода `_rim_transfer` на другую точку пайплайна или на мастер -
+обе формы вопроса заданы и отвечены. Единственное, что осталось нетронутым -
+не постобработка уже сгенерированного `art/ai512`, а сам апскейл: другая
+подготовка или маскирование входа для Real-ESRGAN, чтобы сеть не рисовала
+двойной слой на кромке с самого начала. Это отдельный будущий эпик - веса,
+`tools/upscale512.py`, пересчёт всех 58 мастеров - не ветка этой задачи, и
+без отдельного решения владельца не начинается.
+
+## Заполнение поперечника у остриёв SizeAll не поднимает `tip_profile` до 0.9 (2026-08-30)
+
+Маршрут 2 (`docs/dev/STATUS.md`, "Остриё"), сужен владельцем до одного
+курсора - SizeAll, `tip_profile` 0.693, единственный держится ниже порога
+0.9. Контракт: только четыре терминальных остриях, силуэт/альфа/hotspot/
+древки/центральное отверстие не трогать, переход в логических единицах,
+минимальный кандидат без перебора параметров, приёмка >=0.9. Разбор
+целиком - NEXT.md 59.
+
+**Кандидат 1 (радиальный вес от угла, `reach` взят геометрически по
+`_edge_distance_at`, `rim=1` в `_bevel_shading`, среднее пересчитано)**:
+`tip_profile` 0.693 -> **0.819**. Ближе всего к порогу, но не дотянул.
+
+**Кандидат 2 (вес по сечению вдоль медианы угол-центр, по прямому разбору
+владельца - радиус не то же самое, что толщина сечения)** в буквальном
+прочтении (`|q| <= h(s)`) математически самопротиворечив: у вершины
+`h(s) -> 0`, и ширина зоны капа стягивается к нулю ровно там, где кап
+нужнее - эффект неотличим от базы (0.6926536731634**17**, до последней
+цифры совпадает с непатченным деревом). Рабочая замена (`|q| <= RIM_W`,
+существующая константа вместо вырождающейся `h(s)`) даёт локализованный,
+корректно ограниченный эффект (2516 видимых px, все у остриёв, не у
+отверстия и не у древков), но слабее кандидата 1: **0.693 -> 0.756**.
+
+**Оба кандидата ниже приёмки. Маршрут 2 для SizeAll закрыт без третьего
+варианта**, по прямому условию владельца ("если минимальный кандидат не
+улучшает одновременно вид и tip_profile, маршрут закрыть без перебора
+параметров"). Результатом остаётся кандидат 1 (0.819) - выше базы, ниже
+порога, в дерево не переносится. Ни один из кандидатов не оставлен кодом
+в `hybrid.py` - только одноразовые патчи поверх `_bevel_shading` в этой
+сессии, результат воспроизводится по описанию в NEXT.md 59, повторного
+инструмента в дереве нет.
+
+Не пробовать больше в эту сторону: два разных прочтения формулы "контур
+заполняет поперечник" (по расстоянию до угла, по сечению вдоль медианы)
+дали два разных, но оба недостаточных числа - дальнейшее варьирование
+формы затухания без изменения самой модели `_bevel_shading` (двухчленная
+dot-light/rim, `_BEVEL_LIGHT` фиксированный) вряд ли даст качественно
+другой результат.
+
+## Затухание бевела у остриёв (маршрут 3) выравнивает перекос, опуская обе стороны (2026-08-30)
+
+Последний остававшийся адрес для фотометрической асимметрии SizeNS/SizeWE
+(`STATUS.md` 3, разбор происхождения - NEXT.md 46: всю разницу делает
+`_BEVEL_LIGHT = (-0.6, -0.8, 0.55)`, нижнее остриё отвёрнуто от света,
+разброс 22 уровня там, где у автора асимметрии нет). Правка трогает все
+семь `_SYNTH_BEVEL`-курсоров, поэтому запускалась отдельным решением
+владельца.
+
+Fade перекос почти снимает: **SizeNS 21.2 -> 2.4**. Но механизм не тот,
+который нужен - он затемняет и **правильное** остриё тоже: **140.2 ->
+120.8 при авторских ~151**. То есть две стороны сходятся не к автору, а
+друг к другу, обе ниже авторского уровня; метрика симметрии зеленеет за
+счёт общего провала яркости, а не за счёт подъёма отставшей стороны.
+
+Расплата по соседним метрикам, все в минус:
+
+| метрика | курсор | было | стало |
+|---|---|---|---|
+| `tip_profile` | SizeNS | 0.97 | **0.69** |
+| `tip_profile` | SizeAll | 0.69 | **0.50** |
+| `tip_extreme_contrast` | SizeWE | 0.106 | **0.087** |
+
+SizeAll здесь особенно показателен: тот самый курсор, ради которого шёл
+маршрут 2 (см. выше), от маршрута 3 становится **хуже** - 0.693 -> 0.50,
+дальше от приёмки, чем был. Два маршрута тянут в разные стороны.
+
+Экспериментальный код удалён, рендер побитово совпадает с `4053dba`,
+`selftest` PASS, полный ratchet-гейт PASS (bad 0, прежние 16 долгов, нового
+долга нет).
+
+**Маршрут 3 закрыт.** Не пробовать снова затухание бевела у остриёв как
+средство от асимметрии SizeNS/SizeWE - направление проверено на всех семи
+курсорах и стоит дороже, чем даёт. Симметрия остаётся открытым долгом без
+известного адреса со стороны рендера: `SYM_PULL` в `trace.py` готов и на
+0.5 сажает обе оси SizeNS на авторскую асимметрию, но включать его нечем,
+пока затенение острия не следует за силуэтом - а способ научить его этому
+и был единственным кандидатом, который только что провалился.
+
+## `_fold_restep` на NO: касательная грани цепляет соседний круг (2026-08-30)
+
+`_fold_restep` (раздел 61) распространён на Help и Handwriting без проблем,
+но на NO ломает `fold_step` (0.439 -> 0.387 при пороге 0.45). Подозрение -
+прибор занижает широкие переходы - проверено и снято двумя независимыми
+способами, разбор целиком в NEXT.md 62.
+
+Синтетический tanh постоянной амплитуды на ширинах 0.02/0.15/0.60, прогнан
+через сам `foldfit.measure`: расхождение 0.4% на самой широкой, и то в
+другую сторону (завышает, не занижает). Прямой замер facet-уровней на
+реальных кадрах NO, минуя поиск ширины (`_robust_line` за пределами
+`GUARD`, тот же код, что и сам прибор использует для детренда) - падает
+так же, как и `fold_step`, на тех же кадрах: кадр 2 при 512 - фитированный
+step 66.7 -> 40.6 (-39%), независимый -55.1 -> -42.5 (-23%); кадр 3 при
+128 - фитированный 74.8 -> 53.9 (-28%), независимый -72.6 -> -41.9 (-42%).
+Оба метода согласны: регрессия настоящая, не артефакт измерения.
+
+Причина видна глазами и геометрически: дальний конец хорды складки NO
+(19.5, 19.0) лежит вплотную к кругу запрещающего знака (центр 15.93,
+16.02). У Arrow тот же конец хорды упирается в пустое тело клина; у NO -
+в соседнюю фигуру. `_fold_restep` строит касательную грани по пикселям вне
+`GUARD=1.0` от центра перехода, ничего не зная про круг - на кадрах, где
+круг близко (2, 3 из четырёх несущих хорду), часть опорных точек касательной
+берётся с грани круга, а не клина, и экстраполированный уровень уезжает.
+`_RESTEP_PROTECT` защищает от контура силуэта самого клина, но не от
+посторонней фигуры внутри того же кадра - контракт раздела 51 такой случай
+не предусматривал, потому что ни один из шести `_WEDGE_TIPS` его не имеет.
+
+**NO закрыт как реальная регрессия.** Не порог, не known-issues, не
+baseline-исключение - причина в самой стадии, и решать её означало бы
+учить `_fold_restep` отличать соседнюю фигуру от продолжения своей же
+грани, что не входило в контракт раздела 61 и не пробовалось. NO остаётся
+вне `_FOLD_RESTEP_ON` до отдельного решения по этому конкретному адресу.
+
+**Адрес отработан, маршрут закрыт, диагноз выше исправлен (дописано
+2026-09-01).** Круг ни при чём. `_ring_fit` возвращает None на всех четырёх
+кадрах, несущих хорду (0-3): знак там ещё сплошная заливка без дырки, и
+центр 15.93, 16.02 принадлежит кадрам 7-10, где хорды уже нет. Загрязняет
+не контур круга, а материал знака как таковой, и различает его не геометрия,
+а цветность - знак одного красного, стекло серое. Замерено на 512 по
+`_ring_pointer`-калибровке (`a > 40`, `_RING_GREY`, `_RING_FADE`): станций,
+у которых материал знака попадает в окно подгонки, 0 на кадрах 0 и 1, 10 из
+96 на кадре 2 и 9 на кадре 3, все при t >= 0.80. Это ровно те два кадра,
+чей step обвалился, и ровно тот конец хорды. Причинная связь сходится.
+
+Keep-out написан: чужой материал как поле авторитета на той же калибровке,
+без единой новой константы, из авторской art, а не из кандидата - выбрасывает
+такие отсчёты из подгонки и гасит коррекцию поверх знака, чтобы не оставить
+шва. Он работает: NEXT.md 62 мерил стадию без защиты как 0.439 -> 0.387, с
+защитой выходит 0.438, то есть все -12% загрязнения отыграны.
+
+**И именно поэтому маршрут закрыт.** Отыграв загрязнение, стадия не даёт
+цели: `fold_step` 0.440 -> 0.438 против порога 0.45. `_fold_restep` к этому
+долгу отношения не имеет, а платить за него пришлось бы двумя метриками,
+которые у отгружаемого NO в норме: `fold_notch` 0.875 -> 0.202 при пороге
+0.40 и `fold_s_wide` 1.722 -> 2.778 при пороге 2.00. Выигрыш есть только у
+`fold_unres` 0.167 -> 0.000, `fold_unident` 0.900 -> 0.800 и `fold_curv`
+0.275 -> 0.200. На кропе 512 (ship, кандидат и `15x diff`, кадры 2 и 3)
+видно то же, что говорит `notch`: у NO складка нарисована, а стадия
+подменяет её своей реконструкцией и размывает, плюс крапчатый след на
+границе keep-out у дальнего конца. Прибор и глаз здесь согласны.
+
+Не пробовать «включить `_fold_restep` для NO» снова без нового кандидата
+на саму стадию: причина, названная как блокирующая в 2026-08-30, устранена
+и проверена, и стадия всё равно не окупается. Долг `fold_step` у NO
+принадлежит амплитуде рендера, а не этой стадии. Код keep-out в дерево не
+взят - он не имеет эффекта ни для одного курсора из `_FOLD_RESTEP_ON`
+(`_NO_RING` содержит только NO), а мёртвый код в рендере не место.
+
+**Переоткрыт и закрыт 2026-09-24 (NEXT.md 93).** Амплитуду чинит не restep,
+а `_fold_profile_from_author` перед ним, как у Help. Keep-out нужен обоим, и
+не по его знаку, а по объединению его и нашего (`_sign_owned`): его знак
+меньше нашего, и keep-out по нему одному оставлял restep на нашем контуре
+знака - те самые бусы, что здесь названы крапчатым следом.
+
+## Выключить `_fold_restep` ради зарубки: закрыт как регрессия (2026-09-01)
+
+Наблюдение, с которого начали: NO со стадией выключенной держит `fold_notch`
+0.875, а все три notch-долга стоят на курсорах, где стадия включена - Hand
+0.302, Wait 0.287, Handwriting 0.228. Отсюда кандидат: выключить стадию.
+Проверено изолированно на Hand, 27 кадров на 128/256/512, остальные стадии
+`_WEDGE_TIPS` не тронуты (разбор с числами в NEXT.md 74).
+
+Критерии заданы до прогона: `fold_notch >= 0.40`, ни одного нового FAIL и ни
+одного ухудшения храповика, кроп визуально не хуже.
+
+Первый взят: зарубка возвращается, 0.302 -> 0.621. Остальные два провалены.
+`fold_unres` 0.000 -> 0.200 при пороге 0.10, `fold_s_conv` 1.500 -> 2.400 при
+1.60, `fold_s_thin` 0.964 -> 0.417 при 0.50, храповик `fold_unident`
+0.600 -> 1.000 - то есть без стадии ширину не опознаёт ни одна станция, а
+медиана `s` на 128 падает с 0.60 до 0.40. На кропе 512 видно, что именно
+возвращается: жёсткая пиксельная кромка AI-мастера, которую сама докстрока
+стадии меряет как переход шириной 0.02 логической единицы. `unres`,
+`s_thin` и `s_conv` - три проекции одной этой кромки.
+
+**Закрыт.** Стадия покупает авторскую ширину и платит за неё зарубкой; без
+неё возвращается дефект, ради которого она написана. Wait и Handwriting по
+этому маршруту не проверялись намеренно: результат одного Hand общего корня
+не доказывает, а маршрут закрыт уже на нём.
+
+Что из этого следует и чего не следует. Гипотеза «notch-долг есть цена
+`_fold_restep`» подтвердилась (NEXT.md 75-77: авторская черта реальна и
+переживает квадратичный детренд у Hand, Handwriting, NO и Wait). Но лечение
+«выключить» недоступно. Единственный оставшийся адрес - notch-член внутри
+самой стадии, и он открыт, а не решён: кандидата нет, oracle он не проходил.
+Не возвращаться к отключению стадии ни на одном курсоре без кандидата,
+который держит ширину.
+
+## Повторный `_fold_restep` после lightanim: закрыт на проверке идемпотентности (2026-08-30)
+
+Гипотеза: `fold_unres`/`fold_s_thin` у AppStarting и Wait (циклический,
+общий для обоих остаток - NEXT.md 63) вызван порядком стадий -
+`_fold_restep` строит канонический кадр, а `lightanim.anim_frames_lighting`
+после этого перекладывает по кадру световое поле независимо от геометрии
+складки. Кандидат: применить `_fold_restep` второй раз, к освещённому RGB,
+перед `_compose`.
+
+Контракт требовал сначала проверить идемпотентность: повторный
+`_fold_restep` на каноническом кадре при нулевом световом поле не должен
+заметно менять изображение или fold-метрики. Проверено на AppStarting,
+Wait, Hand (512px, канонический кадр каждого пропущен через `_fold_restep`
+второй раз, без какого-либо света):
+
+Изображение прошло - диф-карта при усилении ×15 едва различима, на глаз
+кадры неотличимы (`.metrics` не в дереве, разбор с числами в NEXT.md 64).
+Метрика не прошла: `s` у AppStarting перескочил соседнее деление сетки
+`S_GRID` (0.325 → 0.25, -23%), у Hand - тоже (0.600 → 0.900, +50%),
+`notch` сдвинулся на 15-25% у всех трёх - от одного лишнего вызова той же
+функции на её же собственном выходе, без единого нового пикселя света.
+
+Причина, по всей видимости - собственная чувствительность фита:
+`_fold_restep` пересобирает профиль билинейным разбрызгиванием по сетке
+0.05 LU, и остаточный субпиксельный шум от первого прохода, невидимый
+глазом, второй фит уже читает как другую ширину.
+
+**Закрыт на шаге 1, без перехода к применению после света и без подбора
+`_RESTEP_WIDTH`** - ровно по условию, которое было поставлено заранее.
+Функция не держит собственный выход стабильным даже без нового возмущения,
+значит накладывать её поверх произвольного светового поля - не
+контролируемая правка. Не пробовать эту конструкцию снова без того, чтобы
+сначала сделать сам фит `_fold_restep` устойчивым к повторному применению -
+это отдельная задача, не входившая в контракт этого раздела.
+
+Отвергнут именно порядок «restep дважды» (канон уже с restep, поверх него
+свет, поверх света ещё restep). Другая перестановка - канон без restep,
+затем свет, затем restep один раз после освещения - не проверялась и не
+отвергнута; это отдельная дорогая перестройка стадий (`lightanim.py`'s
+`canonical_frame`/`_setup`/`master_light` сейчас рассчитаны на уже
+освещённый канон), отложена, не закрыта.
+
+Циклический остаток AppStarting/Wait (NEXT.md 63, пункт 1) остаётся не
+адресованным.
+
+## Точечное исключение `(Handwriting, 5)` из `_edge_shadow_declutter` (2026-08-30)
+
+Локализация (NEXT.md 65) нашла у Handwriting[5] два независимых изгиба:
+один унаследован от `_material_layer` (t≈0.81, уже в допуске - `curv=0.575`
+без второго), другой (t≈0.41-0.45) вносит единственная стадия из
+одиннадцати между `_material_layer` и `_fold_restep` -
+`_edge_shadow_declutter`, потому что `_fold_keepout` держит её по
+перпендикуляру к прямой хорде, а не к форме реальной черты кадра.
+
+Глобальная правка `_fold_keepout` под запретом - он общий с `_edge_comb`,
+задел бы контур намного шире одного кадра. Испытан точечный oracle: новая
+`_EDGE_SHADOW_EXCEPT = {("Handwriting", 5)}`, короткое замыкание в начале
+`_edge_shadow_declutter` (`if (name, idx) in _EDGE_SHADOW_EXCEPT: return
+rgb`), полный гейт до решения принимать правку или нет.
+
+`fold_curv` действительно ушёл из долга (2.000 → 0.775, цель `≤0.9`), но
+`fold_s_conv` перескочил из долга (1.600) в **FAIL** (2.400 при пороге
+1.6): без порчи от declutter на 512 подгонка ширины на 128 сдвинулась на
+соседнее деление `S_GRID` (`s` 0.25 на 128 против 0.60 на 512) - то же
+явление дискретной сетки, что уже закрыло повторный `_fold_restep` после
+lightanim. `fold_rms` и `inner_tip` тоже просели, не гейтятся, но лучше не
+стали. Ни один другой курсор не сдвинулся - утечки исключения за пределы
+одного кадра не было.
+
+**Закрыт как локальный конфликт двух требований одной стадии на одном
+кадре**, до визуальной проверки на возврат тёмной дорожки/двойной кромки
+не дошло - FAIL дисквалифицировал правку раньше. Правка отменена
+(`git checkout` на `cgr/hybrid.py`), в дереве не осталось следа. Не
+пробовать точечное исключение этой стадии снова без криволинейного
+`_fold_keepout`, который следует форме черты, а не прямой хорде - это
+отдельная, дорогая переделка, затрагивающая `_edge_comb` заодно, и
+владелец её явно отложил, а не поручил.
+
+## Глобальный `_RESTEP_REACH=6.0` (2026-08-30)
+
+Локализация (NEXT.md 67) нашла у Help причину `fold_unres`: `_fold_restep`
+ищет центр перехода только во «внутреннем» окне, отступающем `1.45`
+единицы от краёв валидного участка, а настоящий перелом на хвосте Help
+(`t≈0.62-0.85`) сидит на `n≈-2.6..-3.7` - при `_RESTEP_REACH=4.0` это за
+пределами окна. Поиск слепнет к нему и цепляется за шум в 1-2 уровня.
+
+Испытан единственный кандидат: поднять `_RESTEP_REACH` с `4.0` до `6.0`
+глобально, без пер-курсорного значения и без подбора. Внутренний аудит
+(сравнение подгонки при `reach=4` и `reach=6` без рендера, по всем 12
+`(курсор, кадр)` из `_FOLD_RESTEP_ON`) показал шесть клиньев и
+Handwriting[0] чистыми, Help - именно ожидаемое восстановление, но и
+Handwriting[5] (уже принятый долг, разделы 65-66) сдвигается на том же
+проблемном участке.
+
+Полный рендер и гейт подтвердили: `Help fold_unres 0.190 → 0.000`, без
+единой Help-регрессии - но добавились три новых FAIL, которых при
+`reach=4` не было: `Handwriting fold_s_conv` 1.600→1.846 (порог 1.6),
+`Handwriting fold_curv` 2.000→2.075 (хуже уже принятого долга), `Wait
+fold_s_thin` 0.431→0.413 (хуже уже принятого долга). Handwriting - тот же
+сдвиг, что предсказал внутренний аудит: расширенный reach находит более
+сильный, но по-прежнему не собирающийся в `0.6` LU край на уже испорченном
+участке. Wait - иначе: ни один центр не прыгнул мимо допуска, но новые 2
+хвостовые станции (`t≈0.958/0.968`, за пределами измеряемого
+`foldfit`-диапазона `T_HI=0.92`) входят в multiscale-агрегат и на четверть
+сдвигают худшее отношение ширины.
+
+**Отклонён: условие «ни одного нового FAIL» не выполнено.** Переснять
+baseline под эти три числа отдельно отклонено владельцем - было бы
+списанием измеренных регрессий, а не принятием улучшения. Пер-курсорный
+`_RESTEP_REACH` только для Help не пробовался - вышел бы за согласованный
+контракт единственного глобального кандидата и повторил бы риск точечного
+исключения, уже отклонённый у Handwriting (`_EDGE_SHADOW_EXCEPT` выше).
+Правка отменена (`git checkout`), baseline не менялся. Не пробовать этот
+глобальный кандидат снова без отдельного решения о пер-курсорной геометрии
+той же стадии - при единственном общем значении Help и Handwriting[5]
+конкурируют за один и тот же параметр в противоположные стороны.
+
+Help закрыт как локальный конфликт, тем же способом, что NO и Handwriting.
+
+## `_fold_restep` один раз после света, канон без restep (2026-08-30)
+
+Раздел 64 закрыл только «restep дважды» (канон уже с restep, свет, ещё
+restep поверх) и явно оставил непроверенной другую перестановку: канон
+**без** restep, свет, restep **один раз** после - её и испытали (NEXT.md
+68), протоколом владельца: сначала изолированный oracle, go/no-go до
+рефакторинга production-кода.
+
+Oracle-скрипт (не закоммичен) взял канонический кадр до `_fold_restep`
+(тот же приём, что в разделах 65/67), заново собрал световой цикл теми же
+функциями `lightanim.py`, применил `_fold_restep` один раз к каждому из 27
+освещённых кадров, посчитал fold-метрики тем же способом, что
+`_step_multiscale` (128/256/512, худший случай), для AppStarting, Wait и
+Hand как обязательного зелёного контроля.
+
+Результат хуже, чем «restep дважды»: `Wait fold_unres` 0.25→**0.30** - не
+улучшение, а регресс; `Hand fold_s_conv` (контроль, был чистым 1.00)
+уходит на 1.505; `AppStarting fold_s_conv` взлетает до **6.044** при
+пороге 1.6 - почти вчетверо. Временные метрики (`cadence`, `ghost_rgb`,
+сглаженность зоны `fold`) почти не сдвинулись - порча целиком в подгонке
+поперечника, не в анимации. Визуально начало/середина/конец цикла
+неотличимы от реального продукта - тот же паттерн «изображение проходит,
+метрика нет», что и в разделе про «restep дважды»: дискретность `S_GRID`
+не видна глазом.
+
+**Oracle не прошёл собственный go/no-go, к рефакторингу не перешли.**
+Условие «оба курсора должны улучшиться» и условие «без нового FAIL у
+Hand» оба нарушены. Причина та же дискретная сетка ширины, что у
+«restep дважды», только перестановка стадий (не повтор вызова, а другой
+цвет на входе) задевает её сильнее. Не пробовать оставшиеся варианты
+порядка стадий для этой пары без нового кандидата - обе проверенные
+перестановки отклонены, циклический остаток AppStarting/Wait остаётся
+полностью не адресованным.
+
+## Полупрозрачная кромка пяти стрелок: срез, выравнивание полосы мастера, уровень по стороне (2026-09-19)
+
+Запрос владельца: у Arrow, Arrow_Down, UpArrow, AppStarting, Wait кромка
+то обрывается, то даёт наплыв. Принято `_even_blade` (перерисовка
+полупрозрачной полосы по расстоянию до контура на нативной карте, сужение
+к выпуклым остриям). По дороге закрыты:
+
+- **Срез юбки (G):** силуэт по краю AI-альфы вместо векторной маски.
+  Чёткий силуэт убивает полупрозрачное «лезвие», которое владелец хочет
+  сохранить. Отклонён владельцем.
+- **Выравнивание тёмной полосы мастера (R):** глубина полосы к медиане,
+  форма усредняется вдоль стороны. Плавный переход у углов от своей
+  глубины к общей рисует ровно те наплывы, которые убирали; на 256 видно
+  у правого и нижнего углов и у выемки.
+- **Перерисовка после `_hold_coverage`** (подмена `_up_alpha` целиком):
+  кромка на размерах до 96 теряет удержание покрытия, `scale_drift`
+  0.006 -> 0.160. Место стадии - нативная карта, до ресемпла.
+- **Полоса полной ширины до самого острия:** полосы двух сторон сходятся
+  на последней единице, остриё становится прозрачным: альфа в диске 2 LU
+  0.73 -> 0.63, `tip_sheen` AppStarting 31.1 -> 26.9 (FAIL храповика).
+  Лечится сужением ширины к остриям (`_BLADE_TAPER`), не уровнем.
+- **Уровень полосы по стороне** (сглаженная плотность мастера, 2 и 4 LU),
+  чтобы вернуть `delta_e`: возвращает лесенку 32px автора, ради удаления
+  которой всё и делалось, и `delta_e` Arrow становится хуже, а не лучше:
+  3.28 и 3.68 против 3.17 без него (база 2.99). Рост `delta_e` на
+  0.15..0.23 у пяти курсоров - цена ровной кромки, а не дефект стадии.
+
+## Рваная обводка на 48/64: box везде и отсечка Lanczos (2026-09-19)
+
+У Wait и AppStarting на 48/64 авторская тёмная обводка рвётся на
+чёрные и рыжие отрезки. Бисект стадий на Wait 64 (каждая стадия
+выключена по очереди, сравнение с кадром 512, усреднённым до 64) ничего
+не дал: ни одна стадия ошибку на кромке не снижает. Альфа совпадает с
+эталоном (0.004), вся ошибка в цвете `_master_rgb`: Lanczos 512 -> 64
+звенит на обводке шириной в два пикселя. Принято: цвет мастера ниже
+`_MASTER_BOX_BELOW` (128) уменьшается по площади. Закрыты:
+
+- **Box на всех размерах:** на 256, где меряются острия, Lanczos даёт
+  резкость, а не разрывы. Box там роняет `tip_extreme_contrast` Arrow
+  0.222 -> 0.148 (Arrow_Down, Hand так же) и `fold_notch` NO
+  0.898 -> 0.348.
+- **Lanczos с отсечкой по диапазону исходника под пикселем** (по видимым
+  пикселям, по каналам в линейном свете): кромка 4.94 -> 4.91, то есть
+  почти ничего, а остриё Arrow 0.222 -> 0.170. Отрезки - звон внутри
+  диапазона цветов, а не выброс за него.
+- **Веса итоговой альфой вместо `m_a`:** при box даёт ещё 0.05, не стоит
+  отдельной правки. HAMMING почти как box (3.19 против 3.08), BILINEAR
+  и BICUBIC хуже (4.01, 4.30).
+
+
+## Тёмная обводка на 32-96: сдвиг порога и нормировка поля (2026-09-20)
+
+`_rim_transfer` читает сечение по лучу 0.5..1.0 LU внутрь контура и
+отбрасывает станцию, чей луч вышел из силуэта (`mask >= 250`). Проверка
+идёт в аппаратных пикселях: на 32 всё окно уже пикселя, станций не
+остаётся, `keep.sum() < 8` возвращает кадр как есть. Средняя поправка по
+размерам: 0.00 на 32, +0.20 на 48, +2.06 на 64, +10.81 на 96, +10.90 на
+128. Ободок продукта на малых размерах был не тот, что на 256. Принято:
+поле стадии считается на `_RIM_XFER_REF` (512) и уменьшается по площади
+для размеров ниже `_RIM_XFER_MIN` (128) у `_RIM_XFER_BORROW` - Arrow, Help,
+AppStarting. Ошибка на кромке против эталона 512-box на 32/48/64/96:
+AppStarting 5.8/6.0/6.2/6.1 -> 4.2/3.9/3.6/2.8, Arrow 6.1/5.9/5.5/4.0 ->
+3.8/2.7/2.5/2.2, Help 5.6/4.5/3.4/3.4 -> 4.8/3.6/2.0/1.5. Закрыты:
+
+- **NO вместе со всеми:** его кадэнс морфа читается на 32, где стадия
+  молчала, поэтому любое поле его двигает: 0.2017 -> 0.2029 при храповике
+  0.2024. Это 0.6% бюджета, из которого 4.6% уже потратил box-ресемпл
+  цвета, а `data/metrics-baseline.json` с тех пор не обновлялся. Ободок NO
+  стоил бы 7.8/7.6/7.3/5.5 -> 7.1/5.6/4.4/2.5 и ждёт работы по NO, где
+  кадэнс можно перемерить, а не подпихнуть.
+
+- **Порог 256 (занимать и на 96, и на 128):** ошибка на кромке 128
+  падает (AppStarting 5.58 -> 3.01), но складка NO теряет разрешение:
+  `fold_unres` 0.200 -> 0.333 при пороге 0.1 - долг, который и так
+  открыт. Размеры, которые читает анализатор, оставлены со своим полем.
+- **Опора 256 вместо 512:** слабее на обоих концах: AppStarting 32/48/64
+  4.64/4.72/4.65 против 4.22/3.89/3.61, NO 7.78/6.65/5.69 против
+  7.05/5.62/4.41. Arrow одинаково.
+- **Нормировка поля по уменьшенному покрытию** (делить на box маски,
+  умножать на маску размера): сдвигает ошибку на 0.01 - поле и так
+  нулевое вне силуэта.
+- **Выключить стадию ниже 128 совсем** (проверено до разбора причины):
+  на 32 не меняет ничего, потому что стадия там и так молчит, а 48-96
+  делает хуже.
+
+
+## Пятна на тёмном ободке анимаций: темп по старому свету, KT4 (2026-09-23)
+
+`lightanim._lit` гасит пиксель в f = 1 + dy/y раз, где dy - потеря света
+окрестности (мастер размыт на `_MASTER_UNIT`), а y - яркость одного
+пикселя. На тёмном ободке f упирается в `_DIM_FLOOR` пятнами размером с
+размытие: чёрно-синие пятна у хвостовых углов AppStarting (кадры 22-25) и
+Wait (21-25), чёрная шапка на остриях хвоста (12-16), у Hand толстая
+чёрная полоса вдоль нижней кромки крыла (9-13). Принято: `_dim_ref`,
+знаменатель y^0.25 * y_n^0.75 там, где пиксель темнее окрестности
+(`_DIM_SHARE` = 0.75), темп цикла считается с тем же правилом. Альфа не
+меняется, код побайтово равен обёртке `litfix` (кадры и фазы
+AppStarting/Wait/Hand на 64 и 256).
+
+Против снимка HEAD `fold_rms` 42.99 -> 35.69, 40.98 -> 35.30, 19.26 -> 16.55
+(AppStarting/Wait/Hand), `tip_wobble` Wait 0.271 -> 0.216, Hand 0.371 ->
+0.312, `cadence` AppStarting 1.079 -> 1.035, Wait 1.061 -> 1.039. Храповик
+не пропускают четыре записи:
+
+- `tip_sheen` AppStarting 30.77 -> 29.05, Hand 32.74 -> 30.95 (-5.5% при
+  допуске 5%). Размах в диске у острия включал мигание пятен. У автора
+  10.65, остаётся в 2.7 раза больше; застывшее остриё, от которого метрика
+  стережёт, даёт 0.07.
+- `inner_tip` Wait 0.167 -> 0.000 на 512. Провал на фазах 4-6 есть уже у
+  HEAD: ключ рендера на фазе 5 держит разделитель на 12 станциях из 12,
+  продукт - на 2-3. Разделитель заливает прибывающий свет (сложение
+  размытого поля), Lγ меньше гасит тёмный разделитель и добивает до нуля.
+  Глазами кадры HEAD и Lγ на фазе 5 не различаются. Это открытый дефект
+  модели света, а не этой правки.
+- `fold_unident` Hand 0.55 -> 0.65: максимум по 27 кадрам. На HEAD он от
+  кадра к кадру ходит 0.25-0.55, шаг прибора 0.05, пики у Lγ на кадрах 11
+  и 14.
+
+Закрыты:
+
+- **Темп по старому свету** (фазы как у HEAD, меняются только пиксели):
+  `cadence` AppStarting 1.079 -> 1.118, Wait 1.061 -> 1.141, `tip_wobble`
+  хуже, а Hand `fold_unident` всё равно 0.60.
+- **KT4 вместе с Lγ:** на углах ничего не даёт (до 20 уровней против 64-77
+  у Lγ), у вершины на ключах 512 немного подсвечивает грань до
+  разделителя. Цена - шесть подмен стадий и рендер, который читает
+  геометрию пары детектором анализатора (`foldfit`, `contours`). Не встроен.
+
+
+## Чёрная шапка на остриё хвоста: ограничитель звона света (2026-09-23)
+
+AppStarting/Wait на кадрах 8-15: остриё хвоста уходит в яркость 8-10, у
+автора на тех же фазах минимум 21-24, у ключей рендера 14-27. Причина -
+`periodic_at`: тригонометрическая интерполяция через девять ключей звенит там,
+где ключи меняются резко. Яркость острия по ключам относительно канона
+3.05, 1.67, 1, 0.76, 1.01, 1.41, 2.36, 3.66, 6.2; на фазе 2.64 поле Wait
+опускается до -0.0143 при ключах 2 и 3 в 0 и -0.008, в 1.8 раза ниже обоих.
+`_LIGHT_GAIN` 2.0 и `_DIM_FLOOR` делают из этого чёрное пятно. На 256 оно
+видно, на 48-64 это один пиксель, почти неотличимый. Закрыты:
+
+- **Своё усиление уходящего света** (0.725 и 0.85 от 2.0): остриё на
+  кадрах 9-11 10 -> 15/11, 8 -> 11/9 - потеря там многократно больше
+  собственного света, упор в пол остаётся.
+- **Поле в пределах двух соседних ключей** (по пикселю и каналу): шапка
+  уходит (Wait кадры 9-10: 10 -> 21/17, доля стекла темнее 20 у AppStarting
+  1.23% -> 0.07%), но уходит и движение, которое звон добавлял. Живость
+  AppStarting (движение цикла к движению ключей, цель не ниже 0.9) 0.914 ->
+  0.857 при ограничении с обеих сторон, 0.887 только снизу, почти столько же
+  только на пикселях темнее окрестности. Wait и Hand проходят (0.928,
+  0.934). Попутно `tip_wobble` +0.01..0.015 у всех трёх, `fold_curv`
+  AppStarting 0.10 -> 0.20. Допуск перелёта подбирать под порог - подгонка.
+
+- **Интерполяция в логарифме яркости** (`master_light` отдаёт log(M +
+  `_EPS`), `periodic_at` возвращает exp; там та же последовательность почти
+  треугольная: 1.12, 0.51, 0, -0.27, 0.01, 0.34, 0.86, 1.30, 1.82): шапка
+  уходит так же, темп ровнее (peak/mean AppStarting 1.027), но живость
+  AppStarting 0.884, Wait 0.929, Hand 0.948. Движение, которое теряют оба
+  пути, - это сам звон: он водил продукт сверх пути через ключи, а движение
+  ключей включает и разнобой сети между ними, который продукт замораживает
+  намеренно. Пока цель 0.9 считает звон движением, шапку без нарушения
+  цели не снять.
+
+**Закрыто 2026-09-24 (NEXT.md 97)** тем же ограничителем, но только в диске
+1.0-1.75 LU у острых углов (`_field_at`), плюс степенное усиление уходящего
+света на тёмном стекле там же (`_point_dim`). Живость AppStarting 0.907. По
+дороге отброшены:
+
+- **Пол из ключей рендера** (кадр не темнее канона, умноженного на
+  размытую яркость двух соседних ключей к канону, в диске): Wait 4 -> 20.8,
+  AppStarting 7 -> 30.7, но у Hand `tip_sheen` -21%: его острия ключи
+  освещают сильнее, чем продукт с усилением 2.0, и пол съедает размах. С
+  гейтом «только где продукт у `_DIM_FLOOR`» остриё 13.0, но глазами шов:
+  светлое остриё под тёмной полосой там, где гейт закрывается.
+- **Степень во всём диске**, на всех углах: хвост как у итога, но Hand
+  `tip_sheen` 30.95 -> 26.98. Просадку дают крылья и вершина, не хвост: у
+  них пол - тусклая копия светлого стекла, а не чёрное.
+- **Без усиления уходящего света в диске**: хвост Wait 19.7, как у ключей,
+  но `tip_sheen` Wait -14.7%, AppStarting и Hand тоже ниже храповика.
+- **Степень по всему курсору**: живость Wait 0.878, AppStarting 0.852,
+  Hand 0.844.
+  Взята 2026-10-01 (NEXT.md 121): на тот день живость Wait 0.982,
+  AppStarting 0.943, Hand 1.201, а линейная форма клала выемку Hand
+  на пол.
+
+## NO[5] `delta_e`: цвет, шаблоны кольца и перечёркивания, авторская альфа (2026-09-24)
+
+Кадр 5 5.54 при цели 5.0 (NEXT.md 94). Ошибка сидит в знаке, в покрытии и
+в цвете сразу: оракул с его альфой 3.88, с его цветом 2.91. Закрыты:
+
+- **Шаблон кольца на 4-6.** По альфе фит видит указатель под знаком как
+  кольцо, по красному материалу центр верный, но шаблон всё равно хуже:
+  кадр 5 6.00-6.67, кадр 6 5.14 -> 5.21. У автора кольцо 4-5 некруглое
+  (rms 0.21 и 0.16).
+- **Шаблон перечёркивания.** Хуже на всех кадрах, кадр 5 5.59: резкий край
+  против его мягкого.
+- **Цвет знака** плоским `_RING_RGB` или его цветом по кадру: 5.38 и 5.30,
+  плюс региональный chroma-match 5.40 (NEXT.md 70).
+- **Его альфа в зоне знака** через Lanczos: 4.71, но знак на 512 размыт,
+  на белом ореол. Порог взят ценой ремастера, отклонено глазами.
+
+Не пробовать снова без нового мастера кадров 4-6 или некруглой модели знака.
+
+
+## Разделитель Wait на фазах 4-8: доля приходящего света (2026-09-24)
+
+`inner_tip` Wait по кадрам на 256: на t15-t24 (фазы 4.5-8) разделитель
+держат 3-5 станций из 12, ключи 4 и 5 держат 11-12. Профиль поперёк на
+станции 0.195: у канона от ободка к разделителю спад 87 -> 76, потом гребень
+150. На фазе 5 продукт идёт 120 -> 127, то есть подъёмом, а ключ 5 держит
+104 -> 96. Причина: приходящий свет размыт на 2.75 LU и ложится на
+разделитель шириной 0.3-0.4 LU почти как на гребень рядом, а у гребня его
+больше. Уходящий свет на тёмном пикселе уже берёт долю (y/yn)^0.75 через
+`_dim_ref`, приходящий добавляется целиком. Закрыты:
+
+- **Та же доля для приходящего света** (окрестность `_MASTER_UNIT`):
+  `inner_tip` Wait на кадрах 5-14 поднимается до 1.0, но живость Wait 0.69,
+  AppStarting 0.70, Hand 0.87. Приходящий свет на тёмном стекле и есть
+  основное движение, которое считает цель.
+- **Только тонкие тёмные линии** (окрестность в один пиксель сглаживания;
+  `_smooth1` на 256 округляет и 0.35, и 0.5 LU до r=1): живость Wait
+  0.846, AppStarting 0.845. «Темнее ближней окрестности» - это половина
+  текстуры, а не только линии.
+
+- **Свет по краям канона** (направленный фильтр, q = a·I + b по окну
+  `_MASTER_UNIT`, I - яркость канона): разделитель на фазах 6-8 всё равно
+  теряется, `inner_tip` Wait по кадрам 18-24 0.25-0.42. Гейт FAIL на обоих
+  eps: `temporal_fold` AppStarting 1.238 (3e-3) и 1.166 (1e-2) при цели
+  1.16, Hand 1.263 и 1.265 при 1.19. Свет, прилипший к нарисованным краям,
+  дёргается вместе с ними от кадра к кадру.
+
+Глазами на 512 разделитель на t16-t17 виден, только бледнее. Главное отличие
+от ключей 4-5 в ободке: он освещён оранжевым вместо тёмно-коричневого, и это
+прямое следствие `_LIGHT_GAIN` 2.0. Метрика сглаживает профиль и тонкую
+линию теряет. Свет с учётом краёв канона тоже закрыт (выше), так что со стороны
+модели света адреса больше нет: не пробовать без нового способа
+отделить линию от блика, который не шевелит складку.
+
+## Стамеска на остриях: чем сводить ободок в точку (2026-09-24)
+
+Ободок пяти стрелок - полоса тусклого стекла постоянной глубины 0.7 LU и
+за ней тёмная линия мастера (раздел о тёмной обводке, 2026-08-12). Две
+такие полосы у острого угла смыкаются в 2.0-2.75 LU за точкой: кончик до
+туда весь ободок, тело начинается своей второй вершиной. На 128 и крупнее
+это плоская фаска, у автора - один мягкий пиксель. Принято
+`_point_converge` (NEXT.md 98): диск острия читается по его лучам,
+rho(r) = r + 2.5 (1 - r/8)^2. По дороге закрыты:
+
+- **Радиальное увеличение, rho = T r** (T = `_BLADE_TAPER` = 3, охват 6):
+  углы сохраняются, поэтому вложенная вершина только подъезжает, на 512
+  она остаётся почти в единице от точки. То же семейство, что `_tip_warp`
+  из PLAN.md 8, с тем же итогом.
+- **Отображение готового кадра вместе со светом** (премультиплицированно,
+  свет от плоского канона): вместе со стеклом уезжает свет острия, темп
+  AppStarting 1.035 -> 1.136, Wait 1.039 -> 1.115, дрожание острия 0.286
+  -> 0.348, живость AppStarting 0.877. Свет - поле в пространстве, двигать
+  надо стекло.
+- **R1 по углу контура**, 0.7 / sin(theta/2): угол у вершины, снятый с
+  трассировки на 2 LU, 52-63 градуса, R1 выходит 1.33-1.51, короче
+  фактического смыкания 2.0-2.75. Стамеска остаётся наполовину.
+- **R1 = 2.0**: хвост (14,29) у UpArrow и Arrow_Down смыкается на 2.75,
+  там скачок яркости по биссектрисе остаётся 23-46 уровней на 1/8 LU.
+- **Охват 5-6 LU**: сжатие у точки втрое и больше, живость AppStarting
+  0.888-0.894 при пороге 0.9. На 8 LU - 0.915, на 10 - 0.930, но диск
+  хвоста подходит к выемке на 0.8 LU.
+
+Цена принятого варианта: храповик видит её как спад, но спадом она не
+является: `tip_sheen` AppStarting 29.05 -> 14.88, Wait 22.59 -> 11.59
+при авторских 14.66 и 10.65 (цель 0.75 авторского). Вдвое выше автора его
+держал именно тусклый кончик: приходящий свет на тёмном ободке даёт
+размах 22-26 уровней в 0.5-2 LU от точки против 10-14 на теле. У серого
+Arrow контраст острия живёт в ободке, а не в теле, которое на сером фоне
+почти фон: `tip_extreme_contrast` 0.222 -> 0.154 (автор 0.084), у хвоста
+(14,29) ободок светлее тела, 188 против 155.
+
+## Стамеска у семейства стрелок: чем отличить остриё (2026-09-24)
+
+`_point_converge` без ограничений на Hand, Help, Handwriting и NO убирает
+стамеску на всех остриях, но в переходных ключах Handwriting портит два
+места. Вершина ключа 3 тупая, ребро ломается в 1.4 LU от неё: получается
+тёмный клин по верхнему ребру и синий мазок. Угол (7.25,13.5) ключа 6 -
+плечо с вырезом в 1.25 LU: тёмная полоса длинного ребра гнётся дугой в
+угол. Принят порог угла на сглаженном контуре (NEXT.md 99). По дороге
+закрыты:
+
+- **Охрана по маске**: брать прочитанное с весом маски силуэта в точке
+  чтения. Ключ 3 чинит (фон мастера за силуэтом больше не читается), ключ
+  6 нет. С порогом угла не нужна, а на кромке пяти стрелок она смешивала
+  бы прочитанное со своим.
+- **Маска по всему отрезку чтения** (минимум в четырёх точках): ключ 6
+  без изменений. Луч там не выходит из стекла, гнётся сама полоса.
+- **Диск не шире половины пути до соседнего угла**: ключ 6 без
+  изменений, дело не в перекрытии дисков.
+- **Прямизна рёбер у угла**: трассировка идёт пиксельной лесенкой,
+  повороты ±30-37 градусов чередуются и у Arrow. Отклонение цепочки от
+  прямой в 4.5 LU у хороших остриёв доходит до 0.51-0.69, у плохих
+  0.56-1.59. На сглаженном контуре то же самое: вершина Help 0.66, угол
+  ключа 6 0.70.
+- **Сводить только там, где стамеска есть** (скачок `tip_nest` по
+  биссектрисе самого кадра): угол ключа 6 читает 112, но через него идёт
+  складка, а не вложенная вершина.
+
+Угол на сглаженном контуре в 1.5 LU разделяет чисто: острия 50-75
+градусов, плечи 87-90. На 3 LU вершина ключа 3 уже 61, тупая только сама
+точка, поэтому угол снимается близко к ней.
+
+## Трещина у "?" Help: где кончается складка (2026-09-24)
+
+Стадия `_fold_restep` доходила до конца хорды, а складка Help кончается
+раньше, у стыка с "?". Как найти её конец:
+
+- **Порог силы края** (станция слабее доли медианы - не складка). С обоих
+  концов режет первые станции у острия на Arrow_Down, UpArrow и
+  AppStarting (-4..-98 при медиане 250-620). Там стадия продлевает складку
+  к вершине по сглаженным соседям, срез укоротил бы её на 0.25-0.5 LU.
+  Только с дальнего конца: при доле 0.1 уже трогает концы NO 0-3 и
+  Handwriting 1-2, с 0.15 последнюю станцию UpArrow, с 0.25 AppStarting.
+- **Якорь на самой сильной станции**, обрыв на первой смене знака: на
+  входе стадии складка Help читает -510, а складка знака -440, почти
+  столько же. На уже прогнанном кадре складка мягче (-100), и сильнейшей
+  становится станция 89 на "?": обрезка не срабатывает. На переходном
+  ключе Handwriting 3 обрыв приходится на шум в середине (|g| 10-40).
+- **Обрыв в обе стороны от якоря**: на 128 у Handwriting 1 шумовая смена
+  знака у острия снимает стадию почти со всей складки, край снова
+  лестница мастера.
+- **Хорда Help до другой точки**: `_fold_chord` читают foldfit,
+  анализатор и трекер, правка сдвинула бы все метрики складки Help.
+
+Держится прогон одного знака с наибольшей суммой |g|: складка длиннее
+любого чужого края, даже если один из них круче неё.
+
+## Ровная полоса кромки: что не сработало (2026-09-25)
+
+`_even_band` (NEXT.md 103) - кандидат R, переделанный под причину
+отказа 2026-09-19. По дороге:
+
+- **Только сглаженный ход без охраны выемки.** Выпуклые углы чистые, а у
+  выемки, где кончается складка, нормали станций сходятся, и ремап рисует
+  двойные линии и штрихи. Гашение у выемки 1-3 LU их снимает, 1.5-4 LU
+  не лучше.
+- **Без охраны выпуклых углов.** Стадия лезет в сведённую точку:
+  `tip_profile` Arrow 0.669 -> 0.594, Arrow_Down 1.966 -> 1.631,
+  `tip_extreme_contrast` Arrow 0.154 -> 0.135, UpArrow 0.195 -> 0.183.
+- **Зона острия из v8** (у внутреннего острия полоса выровнена, но цвет
+  свой): `inner_tip` Arrow 0.417 при гейте 0.5, и неровной остаётся ровно
+  та треть верхней стороны, ради которой всё делалось.
+- **Окно среднего меньше** (1.0-2.0 LU вместо 3): `inner_tip` 5/12 при
+  любом. Разделитель у вершины теряется не от ширины окна: на части
+  стороны его нет, и среднее делает его везде мелким (провал 15-36 -> 5-7
+  уровней на t 0.39-0.45).
+- **Вес линии только для тёмного контура** (как в v8, порог 10): серые
+  курсоры до него не доходят. Держит порог 4 и потолок 10 на любой полосе.
+- **Уровень станции по автору** вместо своего: не нужен, уровень мастера
+  по станциям идёт с авторским на 32. Своя яркость со сглаживанием 0.5 LU
+  вместо 1: `delta_e` AppStarting 5.031, всё ещё выше 5.0; держит
+  сохранение среднего цвета сечения.
+
+Грабли: обёртка-кандидат поверх `frame_image` давала Arrow на 512 в
+зависимости от того, рендерился ли до этого 256, и полный гейт кандидата
+читал `tip_nest` Arrow 10.3. Стадия в коде от порядка не зависит (3.67).
+Встраивая обёртку, сверять кадры со свежим процессом, а не с тем, что
+насчитал гейт.
+
+## Пятнистые серые клинья: что не сработало (2026-09-25)
+
+`_bevel_colour` (NEXT.md 104) выравнивает растянутый цвет автора вдоль
+сторон. До него пробовалось:
+
+- **Гладкая подгонка цвета по клину** (poly2 и край, через бокс к авторским
+  32 px). На 512 чище всего, что получилось. Но на 32 теряет его пиксели
+  (средняя разница 1.1 -> 1.9 уровня), так что нужна только сверху, а на 256
+  `delta_e` растёт до 5.87 (IBeam).
+- **Подгонка остатка после фаски с нормалью фаски в базисе.** `delta_e` всего
+  +0.3..0.7, но гейт даёт 7 FAIL. Острия теряют контраст: `tip_profile` Cross
+  0.882, IBeam 0.889, SizeNESW 0.742, `tip_extreme_contrast` SizeWE 0.083.
+  Складка SizeAll становится бритвой: `fold_s_thin` 0.25, `fold_s_conv` 1.667,
+  `fold_notch` 0.357.
+- **Пятна у острых углов в базисе.** Хуже: `tip_profile` Cross 0.077.
+  Сглаживание нормалей 0.6 и 1.0 LU размывает складку SizeAll: `fold_curv`
+  0.95 и 1.05, `fold_s_wide` 4.2.
+- **Подгонка карты альфы.** Пятна почти не несёт, а дырку SizeAll заливает:
+  дырка живёт в альфе, не в контуре.
+- **Сигма вдоль дуги больше 1 LU.** 2 LU: `delta_e` IBeam 5.44, SizeNS 5.15.
+  1.5 LU: IBeam 4.88. Гладкий тренд по клину отдельно от свёртки даёт не больше
+  0.17 `delta_e` и не стоит кода.
+- **Поле без дырки SizeAll.** Лучи у кольца остаются волнистыми.
+- **Вход выравнивания на 64-256 px.** На 96-128 клинья остаются крючками.
+
+## Полоса кромки для Help и Handwriting (2026-09-25)
+
+`_even_band` (NEXT.md 103, 105) на Help и Handwriting не взят:
+
+- **Help.** Складка упирается в "?", и стадия её гнёт: `fold_curv` 0.300 ->
+  0.975, `inner_tip` 0.667 -> 0.333, `fold_unident` 0.476 -> 0.619. Причина
+  была в хорде: с хордой Arrow до крючка (NEXT.md 108) полоса взята, 109.
+- **Handwriting.** Контур морфится. На кадрах, где указатель сжимается
+  (кадр 4), у выемки линия двоится волной, `fold_s_wide` 1.0 -> 4.5,
+  `fold_s_conv` 1.5 -> 7.2. Двоят кадры морфа (`_MATERIAL_BASIS`): полосы в
+  их цвете нет. На кадрах мастера полоса взята, NEXT.md 112.
+
+## Горб кромки Help: неполные варианты (2026-09-25)
+
+К NEXT.md 108, взяты все три шага вместе. По отдельности:
+
+- **Только ровное лезвие.** Гейт PASS, `delta_e` +0.28, но лезвие идёт по
+  старой пиле, и горб контура у правого острия остаётся на 256 и 512.
+- **Контур Arrow со своей хордой Help.** `fold_s_wide` 1.5 -> 4.17 и
+  `fold_s_conv` 1.0 -> 2.78, обе выше цели. Рендер тут ни при чём:
+  профили сечений складки у базы и нового рендера совпадают до 1-2 уровней.
+  Сечение у верхней кромки начинается в тёмном разделителе (119-137
+  уровней), и `_robust_line` то берёт эти отсчёты в грань, то выкидывает.
+  У базы без одного крайнего отсчёта наклон грани 11.4 -> -5.8; у нового
+  рендера этого отсчёта в сечении нет, и станция читает ширину 2.5 вместо
+  0.9. Узкие 0.9 базы держались на одном пикселе. Неустойчив фит из-за
+  хорды: складка лежит в 1.5-2 LU от неё, а штраф тянет центр к хорде.
+  Без прижатия углов то же самое.
+- **Хорда Arrow до его выемки (19.5, 19.0).** Складка в норме
+  (`fold_jumps` 9 -> 2), но хорда уходит под крючок, и `_fold_restep`
+  дорисовывает складку на 72.6 уровня в "?" за её концом (t 0.79):
+  внутренняя линия крючка бледнеет, грань слева от него светлеет.
+- **Хорда Arrow до выемки без прижатия контура.** `inner_tip` 0.667 ->
+  0.417, FAIL.
+
+## Нитки у вершины NO (2026-09-26)
+
+Кадры 0-3 NO - указатель Hand, и у вершины те же следы мастера, что были у
+Handwriting (NEXT.md 113): по верхней кромке тёмная полоса, по левой две
+параллельные нитки. Минимум на сером в 3 LU от острия на 256 37-55, но p1
+уже 69-84: единичные пиксели, не линия, как у Handwriting. Кадры 4-10 у
+вершины светлые (110+). Оба средства стоят внутреннего клина, гейт по NO:
+
+- **`_tip_relight` со ступенью Hand.** На 0.5 `inner_tip` 0.667 -> 0.333,
+  `fold_curv` 0.125 -> 0.300; на 0.35 и 0.25 `inner_tip` 0.500. Нитки
+  светлеют, но ступень гасит и разделитель клина: одна из двух ниток слева он
+  и есть.
+- **`_even_band` на всех кадрах.** На кадрах с кольцом кладёт цвет кольца на
+  кромку указателя: розовый блик на кольце и красный штрих слева на кадре 10.
+- **`_even_band` на кадрах с хордой (0-3).** На 512 клин цел на всех 12
+  станциях всех кадров (было 8-11), но на 256 кадр 0 теряет разделитель на
+  шести станциях: провал -1..-3 уровня вместо 7-16, не на грани порога 5,
+  как у Help (NEXT.md 109). `inner_tip` 0.667 -> 0.500.
+
+## Ободок под светом и кончик крыла (2026-10-01)
+
+К NEXT.md 122. Не взято:
+
+- **Шаг сохранения суммы в `_point_along`.** Одна итерация ван Циттерта:
+  c + (c1 - mean_w(c)) возвращает интегральную темноту кончика крыла на
+  светлом фоне, но и бусины: `point along` 5.88-7.09 при цели 5.0.
+- **Зажим звона только по цветности** (зелёный пиксель хвоста AppStarting
+  96): двигал до 68 уровней на соседних пикселях.
+- **Усиление 1 в полосе ободка** вместо `_LIGHT_GAIN`: размах ободка на 32
+  падал ниже автора.
+- **Доля прихода света на всех размерах.** На 256 живость AppStarting 0.77
+  при цели 0.9: развёртка по тёмным граням там и есть движение цикла.
+  Оставлено ниже 128.
+- **Доля прихода у самих остриёв** (`_POINT_UNIT`, 1-1.75 LU): стороны у
+  нижнего острия AppStarting на 64 лежат в 2.4-3.9 LU и уходили на 44
+  уровня под ключи. Взято 3-4.5 LU.
