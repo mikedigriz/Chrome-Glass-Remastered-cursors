@@ -32,7 +32,17 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 import analyze as A  # noqa: E402
-import hybrid as H  # noqa: E402
+import foldfit as F  # noqa: E402
+from cgr import hybrid as H  # noqa: E402
+from cgr import vectorlib as V  # noqa: E402
+from cgr import product as P  # noqa: E402
+from cgr import build as B  # noqa: E402
+
+# the checks plant defects by switching the chain's stages, which still draw
+# the animations: the cursors cgr/glass.py draws are read through the chain
+H.GLASS = ()
+from cgr import curlib  # noqa: E402
+from cgr import xcurlib  # noqa: E402
 
 SIZE = A.JITTER_SIZE
 FAILED = []
@@ -42,6 +52,22 @@ def check(label, ok, detail):
     print(f"  {'pass' if ok else 'FAIL'}  {label:28s} {detail}")
     if not ok:
         FAILED.append(label)
+
+
+def skip(label, detail):
+    print(f"  skip  {label:28s} {detail}")
+
+
+def legacy_gone(name, size):
+    """Whether the dark-line tracker can read this render at all.
+
+    It needs a dark line, and since `_fold_restep` the render does not draw one:
+    on Arrow at 256 it resolves two rows of the forty it used to. That is the
+    change being shipped, not a defect, so the three controls built on it cannot
+    run and must say so rather than pass quietly. They are kept because the
+    legacy numbers are still measured and printed - the day one of them starts
+    resolving again is information."""
+    return A.fold_profile(name, 0, size) is None
 
 
 def repoint():
@@ -99,6 +125,10 @@ def test_topology():
 def test_fold_gap():
     """Paint the fold out over a stretch of rows. The line is then in two
     pieces, and the gap between them is the number that has to move."""
+    if legacy_gone("Arrow", SIZE):
+        skip("fold gap", "the dark-line tracker resolves under six rows of "
+             "this render - see legacy_gone")
+        return
     rows, ref = fold_rows("Arrow", SIZE)
     clean = A.fold_profile("Arrow", 0, SIZE)
     lo = rows[len(rows) // 3]
@@ -115,8 +145,10 @@ def test_fold_gap():
     restore = damaged("Arrow", 0, SIZE, wipe)
     try:
         hurt = A.fold_profile("Arrow", 0, SIZE)
-        check("fold gap", hurt["gap"] > clean["gap"] + 0.5,
-              f"{clean['gap']:.2f} -> {hurt['gap']:.2f} logical units")
+        # wiped out of the tracker's reach altogether is the gap seen in full
+        check("fold gap", hurt is None or hurt["gap"] > clean["gap"] + 0.5,
+              f"{clean['gap']:.2f} -> "
+              f"{'unresolved' if hurt is None else '%.2f' % hurt['gap']} logical units")
     finally:
         restore()
 
@@ -125,8 +157,18 @@ def test_fold_wander():
     """Push every other row of the fold sideways by a pixel: a staircase edge,
     exactly. Wander is curvature, so it sees this and a straight fold at any
     angle still reads zero."""
+    if legacy_gone("Arrow", SIZE):
+        skip("fold wander", "the dark-line tracker resolves under six rows of "
+             "this render - see legacy_gone")
+        return
     rows, _ = fold_rows("Arrow", SIZE)
     clean = A.fold_profile("Arrow", 0, SIZE)
+    if clean["rows"] < 10:
+        # since the crease is crisp again (NEXT.md 125) the tracker reads 7 of
+        # forty rows, apart: a stagger on alternate rows is no curvature there
+        skip("fold wander", "the dark-line tracker resolves %d rows, too few "
+             "for a staircase - see legacy_gone" % clean["rows"])
+        return
 
     def stagger(a):
         for y in rows[::2]:
@@ -158,6 +200,10 @@ def test_fold_jag():
     the fold at all. The control was green on an artefact, and it went red the
     moment _fold_track stopped following the tracker off the crease. Damage
     that destroys the track cannot test what the track measures."""
+    if legacy_gone("Arrow", SIZE):
+        skip("fold jag", "the dark-line tracker resolves under six rows of "
+             "this render - see legacy_gone")
+        return
     rows, ref = fold_rows("Arrow", SIZE)
     clean = A.fold_profile("Arrow", 0, SIZE)
     b = max(2, int(round(A._JAG_BAND * SIZE / 32.0)))
@@ -211,6 +257,10 @@ def test_inner_jitter():
     have deleted every row instead of raising the number."""
     name = "Hand"
     clean = A.inner_jitter(name)
+    if clean is None or clean.get("why") is not None:
+        why = "no chord" if clean is None else clean["why"]
+        skip("inner jitter", f"the accepted render is not measurable: {why}")
+        return
     frames = [f.copy() for f in A.product_frames(name)]
     band = A._fold_band(name, A.JITTER_SIZE)
     for i, f in enumerate(frames):
@@ -266,13 +316,398 @@ def test_fold_unmeasured():
                                               ("gap", "luma_step", "wander", "jag", "tip")},
                                     "resolved": [], "per_size": {}},
                      "delta_e": {"mean": 0.0, "p95": 0.0, "frame": 0}}}
-    bad, _, unmeasured = A.gate(rep)
+    bad, _, unmeasured, _ = A.gate(rep)
     check("fold unmeasured", any("fold" in u for u in unmeasured) and not bad,
           unmeasured[0] if unmeasured else "gate passed an unmeasured fold in silence")
     # ...and the same reading, once the baseline has one, is a regression.
-    bad, _, _ = A.gate(rep, {"Arrow": {"fold_gap": 0.5}})
+    bad, _, _, _ = A.gate(rep, {"Arrow": {"fold_cover": 0.8}})
     check("fold unmeasured vs baseline", any("fold_unmeasured" in b for b in bad),
           bad[0] if bad else "gate lost a fold reading without saying so")
+
+
+def _normal_field(name, idx, size):
+    """Signed distance from the fold chord along its normal, logical units.
+
+    The same coordinate foldfit.section samples along, built for the whole
+    canvas at once so a fold of a known shape can be painted onto the glass."""
+    (x0, y0), (x1, y1) = H._fold_chord(name, idx)
+    dx, dy = x1 - x0, y1 - y0
+    ln = math.hypot(dx, dy)
+    ux, uy = dx / ln, dy / ln
+    L = size / V.LOGICAL
+    ys, xs = np.mgrid[0:size, 0:size]
+    return ((xs + 0.5) / L - x0) * (-uy) + ((ys + 0.5) / L - y0) * ux
+
+
+def paint_fold(a, name, idx, size, width, notch=0.0):
+    """Replace the glass with a fold of known width and known notch depth.
+
+    A fitting instrument gets a calibration control, not only a damage control:
+    the question is not whether the number moves when the picture is spoiled but
+    whether it returns the width it was given. Painted in logical units, so
+    reading the same frame at two rungs also asks whether the answer is a width
+    or the pixel pitch - which is the defect this whole contract exists for."""
+    n = _normal_field(name, idx, size)
+    lum = 110.0 + 70.0 * 0.5 * (1.0 + np.tanh(n / width))
+    if notch:
+        lum = lum - notch * np.exp(-(n / 0.3) ** 2)
+    # Geometric, and reaching further in than the section does (which starts at
+    # _FOLD_INSET): an alpha test picks the opaque core only, and the strip the
+    # fit actually reads then keeps the render's own profile underneath.
+    inside = H._edge_distance_at(name, idx, size) > 0.4
+    for c in range(3):
+        a[..., c] = np.where(inside, np.clip(lum, 0, 255), a[..., c])
+    return a
+
+
+def test_fold_width():
+    """The width that comes back has to be the width that was painted, and the
+    same one at 128 as at 256."""
+    for want in (0.15, 0.60):
+        got = {}
+        for size in (128, 256):
+            restore = damaged("Arrow", 0, size,
+                              lambda a, w=want, s=size: paint_fold(a, "Arrow", 0, s, w))
+            try:
+                got[size] = A.fold_step_profile("Arrow", 0, size)
+            finally:
+                restore()
+        ok = all(0.7 <= g["s"] / want <= 1.4 and g["unres"] == 0.0
+                 and g["unident"] == 0.0
+                 for g in got.values())
+        check("fold width %.2f" % want, ok,
+              "painted %.2f, read %.2f at 128 and %.2f at 256, unresolved %.0f%%/%.0f%%"
+              % (want, got[128]["s"], got[256]["s"],
+                 100 * got[128]["unres"], 100 * got[256]["unres"]))
+
+
+def test_fold_soft_l1():
+    """A notch/outlier may lose influence, never disappear from the sample.
+
+    This is the failure mode that blocked the facet-light oracle: the former
+    second pass changed a boolean `keep` mask when a residual crossed a hard
+    cutoff. Soft-L1 must recover the two known facet levels with every point
+    still carrying a strictly positive weight.
+    """
+    n = np.linspace(-4.0, 4.0, 161)
+    phi = 0.5 * (1.0 + np.tanh(n / 0.6))
+    u, v = (1.0 - phi)[None, :], phi[None, :]
+    y = 110.0 * u[0] + 180.0 * v[0]
+    y[len(y) // 2] -= 70.0
+    plain_a, plain_b, _r, _ok = F._solve(u, v, y, None)
+    a, b, res, ok, _score = F._soft_l1_fit(u, v, y, 1.0)
+    weights = 1.0 / np.sqrt(1.0 + (res / 1.0) ** 2)
+    plain_err = abs(plain_a[0] - 110.0) + abs(plain_b[0] - 180.0)
+    robust_err = abs(a[0] - 110.0) + abs(b[0] - 180.0)
+    check("fold soft-L1 keeps all samples",
+          ok[0] and weights.min() > 0.0 and robust_err < 0.15 * plain_err,
+          f"level error {plain_err:.3f} -> {robust_err:.3f}, "
+          f"minimum weight {weights.min():.6f}")
+
+
+def _dipole_case(amp, sign=1.0, column=None, noise=0.0):
+    """A synthetic step carrying `amp` of the dipole, fitted with `column`.
+
+    `noise` is not decoration. Without it the true column fits exactly and
+    scores zero, so every control beats nothing and the comparison proves
+    nothing. The level is comparable with the author's own robust_scale.
+    """
+    n = np.linspace(-4.0, 4.0, 161)
+    dip_x = np.arange(len(F.DIPOLE)) * F.DIPOLE_PITCH + F.DIPOLE_X0
+    shape = np.interp(n, dip_x, F.DIPOLE, left=0.0, right=0.0)
+    phi = 0.5 * (1.0 + np.tanh(n / 0.6))
+    u, v = (1.0 - phi)[None, :], phi[None, :]
+    y = 110.0 * u[0] + 180.0 * v[0] + sign * amp * shape
+    if noise:
+        y = y + np.random.default_rng(20260906).normal(0.0, noise, len(n))
+    col = shape if column is None else np.interp(
+        n, dip_x, column, left=0.0, right=0.0)
+    return F._soft_l1_joint(u, v, col[None, :], y, 1.0)
+
+
+def test_fold_dipole_recovery():
+    """The third column has to give back the amplitude that was painted, and
+    take none when nothing was painted.
+
+    A nuisance parameter that reads high on a clean step would be buying width
+    identifiability with an invention, which is the failure this whole column
+    exists to avoid.
+    """
+    _a, _b, A0, _r, _ok, _s = _dipole_case(0.0)
+    a, b, A, _res, ok, _score = _dipole_case(17.0)
+    check("clean step takes no dipole", float(A0[0]) == 0.0,
+          f"A = {float(A0[0]):.4f} on a step with nothing painted")
+    check("painted dipole comes back",
+          bool(ok[0]) and abs(float(A[0]) - 17.0) < 0.5
+          and abs(float(a[0]) - 110.0) + abs(float(b[0]) - 180.0) < 0.5,
+          f"A 17.0 -> {float(A[0]):.2f}, levels {float(a[0]):.1f}/"
+          f"{float(b[0]):.1f}")
+
+
+def test_fold_dipole_sign():
+    """`A` is non-negative, so the shape can never be installed upside down."""
+    _a, _b, A, _res, _ok, _score = _dipole_case(17.0, sign=-1.0)
+    check("inverted dipole is refused, not flipped", float(A[0]) == 0.0,
+          f"A = {float(A[0]):.4f} where the shape is painted the wrong way up")
+
+
+def test_fold_dipole_controls():
+    """The column must fit the drawn shape, not any smooth shape.
+
+    Mirror and phase-scramble keep the spectrum and destroy the form. Either
+    scoring as well as the real thing would mean the third column is soaking up
+    whatever is there, and the width verdict it buys would be worthless.
+    """
+    rng = np.random.default_rng(20260906)
+    _a, _b, _A, _r, _ok, true = _dipole_case(17.0, noise=2.0)
+    _a, _b, _A, _r, _ok, mirror = _dipole_case(
+        17.0, column=F.DIPOLE[::-1].copy(), noise=2.0)
+    worst = 0.0
+    for _ in range(24):
+        f = np.fft.rfft(F.DIPOLE)
+        f = np.abs(f) * np.exp(2j * np.pi * rng.random(len(f)))
+        q = np.fft.irfft(f, len(F.DIPOLE))
+        _a, _b, _A, _r, _ok, sc = _dipole_case(
+            17.0, column=q / np.linalg.norm(q), noise=2.0)
+        worst = max(worst, float(true[0]) / float(sc[0]))
+    check("mirrored dipole scores worse than the drawn one",
+          float(mirror[0]) > float(true[0]),
+          f"true {float(true[0]):.4f}, mirror {float(mirror[0]):.4f}")
+    check("phase-scrambled dipole scores worse than the drawn one", worst < 1.0,
+          f"best of 24 scrambles scores {worst:.3f} of the drawn shape, "
+          f"1.0 would mean it fits as well")
+
+
+def test_fold_dipole_eligibility():
+    """A cursor the author did not draw the shape on gets no third column.
+
+    Not a preference: AppStarting's frames split on the shared shape, four for
+    and five against, so a fitted column would read half of his drawing upside
+    down. It must come out bit-for-bit as it did before this column existed.
+    Help was the example until its chord ran along its fold (hybrid
+    _FOLD_CHORD_OF); read there, his residual carries the shape like Arrow's.
+    """
+    same = []
+    for t in (0.3, 0.5, 0.7):
+        off = F.measure("AppStarting", 0, 256, A.orig_frame, t, joint=False)
+        on = F.measure("AppStarting", 0, 256, A.orig_frame, t)
+        if off is None or on is None:
+            continue
+        same.append(off["s"] == on["s"] and off["d"] == on["d"]
+                    and off["s_identified"] == on["s_identified"]
+                    and on["A"] == 0.0)
+    check("ineligible cursor reads exactly as before",
+          bool(same) and all(same),
+          f"{sum(same)} of {len(same)} stations unchanged")
+    check("eligibility is decided, not assumed",
+          F.dipole_eligible("Hand") and F.dipole_eligible("Help")
+          and not F.dipole_eligible("AppStarting"),
+          f"Hand={F.dipole_eligible('Hand')}, Help={F.dipole_eligible('Help')}, "
+          f"AppStarting={F.dipole_eligible('AppStarting')}")
+
+
+def test_fold_profile_identifiability():
+    """A flat width profile is an answer of its own, not a winning grid rank."""
+    dummy = np.zeros(1)
+    flat = [(1.0, float(s), 0.0, 0.0, 0.0, dummy) for s in F.S_GRID]
+    clear = [(1.0 + 8.0 * abs(np.log(float(s) / 0.6)),
+              float(s), 0.0, 0.0, 0.0, dummy) for s in F.S_GRID]
+    _j, lo, hi, _tol, identified = F._profile_verdict(flat, 1.0, 100)
+    j2, lo2, hi2, _tol2, identified2 = F._profile_verdict(clear, 1.0, 100)
+    check("flat fold profile is unidentified",
+          not identified and lo == min(F.S_GRID) and hi == max(F.S_GRID),
+          f"interval {lo:.2f}..{hi:.2f}, identified={identified}")
+    check("sharp fold profile is identified",
+          identified2 and F.S_GRID[j2] == 0.6 and lo2 == hi2 == 0.6,
+          f"interval {lo2:.2f}..{hi2:.2f}, winner {F.S_GRID[j2]:.2f}")
+
+
+def test_fold_curv_ignores_unidentified():
+    """Parked fits must not make the identified centre path look straighter."""
+    slots = [
+        {"c": 0.0, "s_identified": True},
+        {"c": 0.0, "s_identified": True},
+        {"c": 0.4, "s_identified": True},
+        {"c": 1.0, "s_identified": False},
+        {"c": 1.6, "s_identified": True},
+    ]
+    all_bends = A._fold_bends(slots)
+    identified = A._fold_bends(slots, identified_only=True)
+    check("fold curv ignores unidentified",
+          np.allclose(np.median(all_bends), 0.2)
+          and np.allclose(identified, [0.4]),
+          f"all median {np.median(all_bends):.2f}, identified {identified}")
+
+
+def test_fold_discontinuity():
+    """A transition under one hardware pixel is the defect the old gate could
+    not name. It must come back as unresolved rather than as a small number.
+
+    Not every station: a step painted with no width at all still reaches the fit
+    through a bilinear sampler, which gives it about 0.08 logical units, and at
+    256 that is over one pixel on the stations where the phase suits it. What the
+    reading has to do is clear the threshold the gate rejects on, with room."""
+    size = 256
+    restore = damaged("Arrow", 0, size,
+                      lambda a: paint_fold(a, "Arrow", 0, size, 0.02))
+    try:
+        p = A.fold_step_profile("Arrow", 0, size)
+    finally:
+        restore()
+    want = 3.0 * A.THRESHOLDS["fold_unres"]
+    check("fold discontinuity", p["unres"] >= want and p["s"] < 0.15,
+          "s %.3f, %.0f%% of stations under one hardware pixel (gate rejects at %.0f%%)"
+          % (p["s"], 100 * p["unres"], 100 * A.THRESHOLDS["fold_unres"]))
+
+
+def test_fold_notch():
+    """Paint the same fold with and without the notch the author draws on it.
+    This is the one reading that separated the isotropic broadener from a local
+    re-step, so it has to be shown to respond to a notch and to nothing else -
+    the width is identical in both halves here."""
+    size = 256
+    out = {}
+    for tag, depth in (("clean", 0.0), ("notched", 14.0)):
+        restore = damaged("Arrow", 0, size,
+                          lambda a, d=depth: paint_fold(a, "Arrow", 0, size, 0.6, d))
+        try:
+            out[tag] = A.fold_step_profile("Arrow", 0, size)
+        finally:
+            restore()
+    check("fold notch", out["notched"]["notch"] > out["clean"]["notch"] + 5.0
+          and abs(out["notched"]["s"] - out["clean"]["s"]) < 1e-9,
+          "notch %.1f -> %.1f levels, width %.2f -> %.2f"
+          % (out["clean"]["notch"], out["notched"]["notch"],
+             out["clean"]["s"], out["notched"]["s"]))
+
+
+def test_apex_flank():
+    """Arrow's flanks run into the hotspot apex as one smooth curve.
+
+    Traced afresh, the flanks within trace.APEX_FLANK of the apex are read as
+    dx/dy (left) and dy/dx (top) per segment: the largest change between
+    neighbouring segments has to stay under 0.15, and the silhouette may lose
+    no more than one square unit. The planted defect is the trace without the
+    pass, the staircase on the left edge (0.26, 0.20, 1.0, 0.25, 0.71) that
+    made a hook 4-7 units under the point (NEXT.md 164)."""
+    from cgr import trace as T                          # noqa: E402
+    reach = T.APEX_FLANK["Arrow"]
+    raw = T.trace_frame("cur__Arrow__0", name="Arrow")
+    raw.pop("_apex")
+    fixed = json.loads(json.dumps(raw))
+    T.straighten_apex_flanks(fixed, reach)
+
+    def stair(fr):
+        poly = fr["polys"][0]
+        n = len(poly)
+        c = min((i for i, v in enumerate(poly) if v[2]), key=lambda i: poly[i][0] + poly[i][1])
+        worst = 0.0
+        for step, (u, w) in ((1, (1, 0)), (-1, (0, 1))):
+            run, k = [poly[c][:2]], (c + step) % n
+            while math.dist(poly[c][:2], poly[k][:2]) < reach + 2.0:
+                run.append(poly[k][:2])
+                k = (k + step) % n
+            sl = [(b[u] - a[u]) / max(abs(b[w] - a[w]), 1e-6) for a, b in zip(run, run[1:])]
+            worst = max(worst, max(abs(q - p) for p, q in zip(sl, sl[1:])))
+        return worst
+
+    def area(fr):
+        p = fr["polys"][0]
+        return 0.5 * abs(sum(p[i][0] * p[i - 1][1] - p[i - 1][0] * p[i][1] for i in range(len(p))))
+
+    s0, s1 = stair(raw), stair(fixed)
+    lost = area(raw) - area(fixed)
+    check("apex flank", s1 < 0.15 and s0 >= 0.5 and abs(lost) < 1.0,
+          "slope step %.2f, area %+.2f LU2; traced without it %.2f" % (s1, -lost, s0))
+
+
+def test_crisp_rim():
+    """The target's rim readings see a blur across and dots along.
+
+    Planted on Arrow's frame 0 at 256 as crisp_ratios reads it: for X a
+    gaussian of 2 px (0.25 LU) over the premultiplied frame - the glass's rim is
+    several pixels wide and its sharpest step is the silhouette, so a one-pixel
+    blur of the colour alone leaves X where it was; for A a dark dot every 6 px
+    over the rim band - the pitch the synthetic in tools/crisp.py read 1.4
+    levels on. A is in debt on the clean frame (above its ceiling), so the dots
+    have to raise it by a third rather than across the ceiling."""
+    from PIL import Image
+    real = H.frame_image
+    clean = A.crisp_ratios("Arrow", [256])["256"]
+
+    def planted(fn):
+        def get(name, idx, size):
+            return Image.fromarray(fn(np.asarray(real(name, idx, size), dtype=np.float64),
+                                      name, size).astype(np.uint8), "RGBA")
+        return get
+
+    def blur(a, _name, _size, sigma=2.0):
+        x = np.arange(-7, 8)
+        k = np.exp(-x * x / (2 * sigma * sigma))
+        k /= k.sum()
+        al = a[..., 3:4] / 255.0
+        pm = np.concatenate([a[..., :3] * al, a[..., 3:4]], -1)
+        for ax in (0, 1):
+            pm = sum(w * np.roll(pm, int(d), ax) for d, w in zip(x, k))
+        al = pm[..., 3:4] / 255.0
+        return np.concatenate([pm[..., :3] / np.maximum(al, 1e-6), pm[..., 3:4]], -1).clip(0, 255)
+
+    def dots(a, name, size):
+        d = H._edge_distance_at(name, 0, size)
+        ys, xs = np.mgrid[0:size, 0:size]
+        hit = (d > 0.3) & (d < 1.2) & ((xs + ys) % 6 == 0)
+        out = a.copy()
+        out[..., :3][hit] *= 0.7
+        return out
+
+    got = []
+    for fn in (blur, dots):
+        H.frame_image = planted(fn)
+        try:
+            got.append(A.crisp_ratios("Arrow", [256])["256"])
+        finally:
+            H.frame_image = real
+    x_ok = clean[0] >= A.CR.X_FLOOR > got[0][0]
+    a_ok = got[1][1] > max(A.CR.A_CEIL, 1.3 * clean[1])
+    check("crisp rim", x_ok and a_ok,
+          "X %.2f -> %.2f blurred, floor %.2f; A %.2f -> %.2f dotted, ceiling %.2f"
+          % (clean[0], got[0][0], A.CR.X_FLOOR, clean[1], got[1][1], A.CR.A_CEIL))
+
+
+def test_fold_jitter():
+    """The same damage test_inner_jitter plants, read by the step-aware fit.
+
+    Both instruments are kept because they fail differently: the dark-line one
+    stops resolving when the render stops drawing a dark line, which reads as a
+    jitter regression on a render whose fold has not moved."""
+    name = "Hand"
+    clean = A.fold_jitter(name)
+    frames = [f.copy() for f in A.product_frames(name)]
+    band = A._fold_band(name, A.JITTER_SIZE)
+    for i, f in enumerate(frames):
+        if i % 3 == 0:
+            f[..., :3][band] = np.roll(f[..., :3], 3, axis=1)[band]
+    key = (name, A.JITTER_SIZE)
+    keep, keep_cycle = A._product_cache[key], A._cycle_cache.pop(key, None)
+    try:
+        A._product_cache[key] = frames
+        hurt = A.fold_jitter(name)
+    finally:
+        A._product_cache[key] = keep
+        A._cycle_cache.pop(key, None)
+        if keep_cycle is not None:
+            A._cycle_cache[key] = keep_cycle
+    # The gate has to fire on it, and the shift has to stand clear of the fit's
+    # own noise. Read on the mean, not on p95: on a crease as sharp as the
+    # master's the fit flips its centre at a few stations while the edge itself
+    # does not move (p95 0.25 clean, read by the steepest pixel 0.00), and that
+    # tail is all a p95 of the clean cycle sees.
+    check("fold jitter", hurt["p95"] > A.THRESHOLDS["fold_jitter"]
+          and hurt["mean"] > 3.0 * clean["mean"]
+          and hurt["stations"] >= A._JITTER_STATIONS,
+          f"p95 {clean['p95']:.3f} -> {hurt['p95']:.3f}, mean {clean['mean']:.3f} "
+          f"-> {hurt['mean']:.3f} logical units on "
+          f"{hurt['stations']} stations, coverage {hurt['pair_coverage']:.2f}")
 
 
 def test_rim_layers():
@@ -383,7 +818,7 @@ def test_straighten_runs():
     stage that exists to remove it to actually remove it - and, just as
     importantly, to leave the two anchors exactly where they were. A pass that
     straightens a corner away would score beautifully on this and be useless."""
-    import trace as T                                   # noqa: E402
+    from cgr import trace as T                          # noqa: E402
     eps = 0.7 / 4.0
     n = 12
     # One straight edge the way a cursor actually holds one: a flagged corner at
@@ -410,52 +845,402 @@ def test_straighten_runs():
           f"corner moved {moved:.2e} logical units")
 
 
-def test_material_basis():
-    """The frames in hybrid._MATERIAL_BASIS carry no material of their own, and
-    the contract is worth a control: a frame listed there must move when its
-    basis moves, and a frame not listed must not move at all.
+def test_outline_borrow():
+    """Help's pointer lies on Arrow's wherever the author drew them as one.
 
-    Not a picture quality check. It exists so that a year from now "let us
-    improve frame 8" cannot quietly change four other frames without anybody
-    noticing which ones, and so that the reverse - a basis frame that has
-    silently started reading from the frames that borrow from it - shows up as
-    a cycle here rather than as a mystery in the render."""
-    name, size = "Handwriting", 128
-    watch = [2, 3, 4, 5, 6, 7]
+    Traced on its own, Help's upper edge ran 0.12-0.30 logical units outside
+    Arrow's, a bump before the right tip at 256 (NEXT.md 108). Read on the
+    vertices of data/traced.json whose author alpha agrees with Arrow's, picked
+    the way trace.borrow_outline picks them; Help traced afresh, without that
+    pass, has to fail the same bound. Read past trace.APEX_FLANK from Arrow's
+    hotspot apex: Arrow's bend there is redrawn after the borrow and Help keeps
+    its own (NEXT.md 164)."""
+    from cgr import trace as T                          # noqa: E402
+    eps = 0.02                                          # traced.json keeps two decimals
+    rings = [([tuple(q[:2]) for q in p], [q[2] for q in p])
+             for p in H.C.TRACED["Arrow"]["frames"][0]["polys"]]
+    apex = min((tuple(q[:2]) for p in H.C.TRACED["Arrow"]["frames"][0]["polys"]
+                for q in p if q[2]), key=lambda q: q[0] + q[1])
+    diff = np.abs(np.asarray(H.original("Help", 0), np.float64)[..., 3]
+                  - np.asarray(H.original("Arrow", 0), np.float64)[..., 3])
 
-    def render():
-        return {i: np.asarray(H.frame_image(name, i, size), dtype=float)
-                for i in watch}
+    def worst(polys):
+        w = 0.0
+        for poly in polys:
+            for v in poly:
+                xi, yi = int(math.floor(v[0])), int(math.floor(v[1]))
+                win = diff[max(yi - 1, 0):yi + 2, max(xi - 1, 0):xi + 2]
+                if (win.size == 0 or win.max() >= T.DONOR_TOL
+                        or math.dist(apex, v[:2]) < T.APEX_FLANK["Arrow"]):
+                    continue
+                _q, d = T._image_of((v[0], v[1]), v[2], rings)
+                if d < T.DONOR_REACH:
+                    w = max(w, d)
+        return w
 
-    repoint()
-    base = render()
-    orig = H._master_rgb
-    for basis, expect in ((2, {2, 3, 4}), (8, {5, 6})):
-        def patched(n, i, s, _b=basis, _o=orig):
-            rgb = _o(n, i, s)
-            if (n, i) != (name, _b):
-                return rgb
-            # A stripe, not a constant: the layer transfers high frequencies,
-            # so a flat offset is exactly the damage it is built to drop, and
-            # the first run of this control passed the offset and read nothing.
-            y = np.arange(rgb.shape[0])[:, None, None]
-            return rgb + 12.0 * ((y // 2) % 2)
-        H._master_rgb = patched
-        repoint()
-        now = render()
-        H._master_rgb = orig
-        repoint()
-        moved = {i for i in watch if np.abs(now[i] - base[i]).max() > 0.5}
-        check("material basis %d" % basis, moved == expect,
-              "moved %s, expected %s" % (sorted(moved), sorted(expect)))
+    clean = worst(H.C.TRACED["Help"]["frames"][0]["polys"])
+    hurt = worst(T.trace_frame("cur__Help__0", name="Help")["polys"])
+    check("outline borrow", clean <= eps < hurt,
+          "%.3f -> %.3f logical units off Arrow's outline traced afresh, bound %.2f"
+          % (clean, hurt, eps))
+
+
+def test_product_cycle_pairs():
+    """A frame and its phase come out of the same call, one for one.
+
+    Cheap, and it is the invariant the whole phase-matched comparison stands on:
+    the moment `phases[t]` stops being the phase of `frames[t]` the gate is
+    marking the render against the wrong part of the author's cycle and nothing
+    else in this file would notice."""
+    bad = []
+    for name in ("Hand", "Wait", "AppStarting", "Handwriting", "Arrow"):
+        for size in (128, 256):
+            f, p = A.product_cycle(name, size)
+            n = A.nframes(name)
+            want = n * H.INTERP_N if name in H.INTERP else n
+            if not (len(f) == len(p) == want):
+                bad.append(f"{name}@{size}: {len(f)} frames, {len(p)} phases, "
+                           f"want {want}")
+            if any(not 0.0 <= x < 1.0 for x in p) or list(p) != sorted(p):
+                bad.append(f"{name}@{size}: phases not increasing inside [0,1)")
+    check("product cycle pairs", not bad, "; ".join(bad) or
+          "frames and phases agree in count and order at every size")
+
+
+def test_author_at_exact():
+    """On a phase the author drew, author_at returns that frame's own reading.
+
+    The interpolation is DC and four harmonics over nine samples, which is a
+    full fit rather than a smoothing, so this has to hold to the last bit - and
+    it is what keeps every unanimated cursor's numbers exactly where they were
+    before the phase machinery existed."""
+    worst, where = 0.0, ""
+    for name in ("Hand", "Wait", "AppStarting"):
+        n = A.nframes(name)
+        for size in (128, 256):
+            for i in range(n):
+                o = A._orig_step(name, i, size)
+                if o is None:
+                    continue
+                for key in A._PHASE_SCALARS:
+                    got = A.author_at(name, size, key, i / n)
+                    d = abs(got - o[key])
+                    if d > worst:
+                        worst, where = d, f"{name}@{size} frame {i} {key}"
+    check("author_at on his own phases", worst < 1e-9,
+          f"worst departure {worst:.2e}" + (f" at {where}" if where else ""))
+
+
+def test_author_at_harmonics():
+    """And between them it is the exact trigonometric fit, not an approximation.
+
+    Fed a signal the fit can represent - DC and four harmonics over nine
+    samples, the same band limit the light itself is built with - it has to
+    reproduce it everywhere, not only on the samples. A cubic or a linear
+    interpolation through the same nine points passes the test above and fails
+    this one by whole levels."""
+    rng = np.random.default_rng(20260822)
+    n, k = 9, A.HARMONICS
+    amp = rng.normal(size=(k, 2))
+    def truth(ph):
+        v = 3.0
+        for m in range(1, k + 1):
+            v += amp[m - 1, 0] * math.cos(2 * math.pi * m * ph)
+            v += amp[m - 1, 1] * math.sin(2 * math.pi * m * ph)
+        return v
+    y = np.array([truth(i / n) for i in range(n)])
+    ph = np.linspace(0.0, 1.0, 101)[:-1]
+    got = A.periodic_at(y, ph, k)
+    worst = float(np.abs(got - np.array([truth(x) for x in ph])).max())
+    check("author_at reproduces a band-limited signal", worst < 1e-9,
+          f"worst departure {worst:.2e} over 100 phases")
+
+
+def test_canonical_phase():
+    """The frame the phase table puts at the canonical phase is the canonical
+    render.
+
+    A sanity check on the whole correspondence, and the only one that ties the
+    phases to pictures rather than to each other. At phase `idx / n` the light
+    residual is zero by construction, so that frame of the loop is the render it
+    was lit from - which means the frame nearest that phase must also be the
+    frame nearest that picture. If the table were shifted, or measured at a
+    different size than the frames, these two would pick different frames."""
+    bad = []
+    for name in ("Hand", "Wait", "AppStarting"):
+        size, n = 128, A.nframes(name)
+        idx = H.CANONICAL[name]
+        frames, phases = A.product_cycle(name, size)
+        want = idx / n
+        by_phase = min(range(len(phases)),
+                       key=lambda t: abs((phases[t] - want + 0.5) % 1.0 - 0.5))
+        canon = A.frame(name, idx, size)
+        # mean, not peak: the loop lands a little off the exact canonical phase
+        # (0.208 against 0.222 on Hand) and at a rim pixel a hundredth of a
+        # cycle of sheen is tens of levels. What the check is about is which
+        # frame, not how close it got.
+        # on grey: RGB under zero alpha is the ghost fill in the loop and
+        # whatever the render left in the canonical frame, and nobody sees it
+        def seen(f):
+            al = f[..., 3:4] / 255.0
+            return f[..., :3] * al + 128.0 * (1.0 - al)
+        d = [float(np.abs(seen(f) - seen(canon)).mean()) for f in frames]
+        by_pixel = min(range(len(frames)), key=lambda t: d[t])
+        # the body pulse is his frame minus his cycle mean, not zero at any
+        # phase: the loop's canonical frame carries it, the still does not
+        tol = 1.5 if name in H._BODY_PULSE else 0.5
+        if by_phase != by_pixel or d[by_phase] > tol:
+            bad.append(f"{name}: phase picks {by_phase}, pixels pick "
+                       f"{by_pixel} ({d[by_phase]:.2f} levels away)")
+    check("canonical frame sits at the canonical phase", not bad,
+          "; ".join(bad) or "all three loops agree with their own phase table")
+
+
+def test_morph_steps_visible():
+    """The morph cadence reads what shows and nothing else.
+
+    Three properties, and each one is a mistake the masked reading could make.
+    RGB under zero alpha must not count, because nobody sees it. Alpha moving
+    on its own must count, because everybody does. And a sequence compared
+    against itself must give exactly zero, or the ratchet has a floor of noise
+    under it."""
+    n, size = A.nframes("NO"), A._MORPH_SIZE
+    rng = np.random.default_rng(7)
+    base = []
+    for i in range(n):
+        f = rng.integers(0, 256, (size, size, 4)).astype(np.float64)
+        f[..., 3] = 0.0
+        f[8:8 + i + 2, 8:8 + i + 2, 3] = 200.0     # a square that grows
+        base.append(f)
+    ghost = []
+    for f in base:
+        g = f.copy()
+        g[..., :3] = np.where(g[..., 3:4] > 0, g[..., :3],
+                              rng.integers(0, 256, g[..., :3].shape))
+        ghost.append(g)
+    flat = []
+    for f in base:                                  # one colour, alpha moves
+        g = f.copy()
+        g[..., :3] = 40.0
+        flat.append(g)
+    still = [base[0].copy() for _ in range(n)]
+
+    def steps(fr):
+        return A._morph_visible_steps("NO", lambda _n, i, _s: fr[i])
+
+    a, b = steps(base), steps(ghost)
+    check("morph steps ignore hidden RGB", float(np.abs(a - b).max()) < 1e-12,
+          "largest difference %.3g over %d steps" % (float(np.abs(a - b).max()), len(a)))
+    fa = steps(flat)
+    # The bar is only "clearly not zero": the square adds a couple of dozen
+    # cells of 1024 per step, so the honest size of the smallest step is
+    # fractions of a level. What is being tested is that it is not zero.
+    check("morph steps see alpha alone", float(fa.min()) > 0.1,
+          "smallest step %.3f with the colour held flat" % float(fa.min()))
+    sa = steps(still)
+    check("morph steps are zero on a still cycle", float(np.abs(sa).max()) == 0.0,
+          "largest step %.3g" % float(np.abs(sa).max()))
+
+
+def test_hole_glass():
+    """The glass behind NO's sign is watched, and by its own reading.
+
+    It has to be: delta_e records that cursor's frame 5, where the sign has no
+    hole at all, so an improvement or a regression on the pointer seen through
+    the ring is invisible to every other number in the file. Both halves are
+    planted separately - opacity and colour - because they have different
+    owners and a reading that only moved on one of them would hide the other."""
+    base = A.hole_glass("NO")
+    check("hole glass reads at all", base is not None,
+          "alpha %.1f, delta_e %.3f" % (base["alpha_err"], base["delta_e"])
+          if base else "nothing measured")
+    if base is None:
+        return
+    # Every frame with a hole, because the reading keeps the worst of them;
+    # and away from his pixels (our glass there is the lighter one, so half
+    # its opacity, and red the sign does not leave on grey glass).
+    k = A.JITTER_SIZE // A._MORPH_SIZE
+    cells = {}
+    for idx in A._HOLE_FRAMES:
+        got = A._hole_cells(idx)
+        if got is not None:
+            cells[idx] = np.repeat(np.repeat(got[0], k, 0), k, 1)
+
+    def half(a, big):
+        a[..., 3][big] *= 0.5
+        return a
+
+    def red(a, big):
+        a[..., 0][big] = np.clip(a[..., 0][big] + 40, 0, 255)
+        return a
+
+    for label, fn, key in (("hole glass sees opacity", half, "alpha_err"),
+                           ("hole glass sees colour", red, "delta_e")):
+        restores = [damaged("NO", idx, A.JITTER_SIZE, lambda a, b=big: fn(a, b))
+                    for idx, big in cells.items()]
+        try:
+            hurt = A.hole_glass("NO")
+            check(label, hurt[key] > base[key] + 0.2,
+                  f"{base[key]:.3f} -> {hurt[key]:.3f}")
+        finally:
+            for r in restores:
+                r()
+
+
+def test_product_manifest():
+    """cgr.product.manifest() against the platform counts already known and
+    documented (BUILD.md's own "17 scheme slots", XROLES' 16 keys,
+    MAC_CURSORS' 14 names) - not a re-derivation, a check that the reverse
+    mapping did not drop or double-count anything."""
+    m = P.manifest()
+    check("18 names total", len(m) == 18, f"got {len(m)}")
+    windows = [n for n, r in m.items() if r["windows"]]
+    linux = [n for n, r in m.items() if r["linux"]]
+    macos = [n for n, r in m.items() if r["macos"]]
+    check("17 names ship on windows", len(windows) == 17, f"got {len(windows)}")
+    check("16 names ship on linux", len(linux) == 16, f"got {len(linux)}")
+    check("14 names ship on macos", len(macos) == 14, f"got {len(macos)}")
+    check("Arrow_Down has no windows slot", m["Arrow_Down"]["windows"] is None,
+          str(m["Arrow_Down"]["windows"]))
+    check("Pin/Person are windows-only", all(
+        m[n]["linux"] is None and m[n]["macos"] is None for n in ("Pin", "Person")),
+          f"Pin={m['Pin']}, Person={m['Person']}")
+    mac_animated = [n for n, r in m.items()
+                    if r["macos"] and r["macos"]["ships_animated"]]
+    check("AppStarting and Wait ship animated on macos", mac_animated == ["AppStarting", "Wait"],
+          str(mac_animated))
+
+
+def test_package_roundtrip_catches_corruption():
+    """check_packages compares decoded package bytes against the canonical
+    render via _rgba_equal/curlib.read_cur/xcurlib.read_xcursor - plant a
+    defect in already-encoded bytes (not in the render) and confirm the
+    comparison catches it, on both codecs that either got new comparison
+    logic (.cur) or a brand new parser (Xcursor). One small cursor, one
+    frame - the corruption is in the bytes, not the art, so nothing here
+    needs a sweep."""
+    name, size = "Arrow", 32
+    img = B.static_image(name, size)
+    hx, hy = B._scale_hot(name, size)
+
+    clean = curlib.write_cur([{"img": img, "hx": hx, "hy": hy}])
+    frame = curlib.read_cur(clean)[0]
+    check("cur clean round-trip", B._rgba_equal(frame["img"], img, mask_rgb_by_alpha=True),
+          "identical bytes must compare equal")
+    # read_cur's AND mask forces alpha=0 wherever encode saw alpha==0, and
+    # forces alpha=255 wherever the decoded XOR alpha itself is 0 - both are
+    # legitimate compatibility paths, not bugs, but they mean a corrupted
+    # byte on a fully-transparent or fully-opaque pixel can silently heal
+    # itself back to the original value. A pixel with 0 < alpha < 255 hits
+    # neither path, and XOR 0xFF (bitwise NOT) never maps such a value to
+    # itself, so this always lands as a real, uncorrected difference.
+    arr = np.asarray(img.convert("RGBA"))
+    edge = np.argwhere((arr[..., 3] > 0) & (arr[..., 3] < 255))
+    y, x = (int(v) for v in edge[0])
+    row_xor = ((size * 32 + 31) // 32) * 4
+    file_row = size - 1 - y                      # _encode_dib writes bottom-up
+    off = 6 + 16 + 40 + file_row * row_xor + x * 4 + 3   # ICONDIR+entry+BITMAPINFOHEADER, +3 = BGRA's A byte
+    bad = bytearray(clean)
+    bad[off] ^= 0xFF
+    bad_frame = curlib.read_cur(bytes(bad))[0]
+    check("cur corruption caught", not B._rgba_equal(bad_frame["img"], img, mask_rgb_by_alpha=True),
+          "a flipped alpha byte must not compare equal to the clean render")
+
+    chunk = B._pack_ximage(size, img, hx, hy, 0)
+    data = B._xcursor([chunk])
+    c = xcurlib.read_xcursor(data)[0]
+    check("xcursor clean round-trip",
+          B._rgba_equal(c["img"], B._xcur_expect(img)) and (c["hx"], c["hy"]) == (hx, hy),
+          "identical bytes must compare equal")
+    # The defect shipped until 2026-09-24: straight RGBA in a premultiplied
+    # format. The old round-trip passed it, because the writer and the reader
+    # agreed with each other and not with the format.
+    arr = np.asarray(img.convert("RGBA"), dtype=np.uint32)
+    straight = ((arr[..., 3] << 24) | (arr[..., 0] << 16) | (arr[..., 1] << 8)
+                | arr[..., 2]).astype("<u4").tobytes()
+    flat_c = xcurlib.read_xcursor(B._xcursor([chunk[:36] + straight]))[0]
+    check("xcursor straight alpha caught",
+          not B._rgba_equal(flat_c["img"], B._xcur_expect(img)),
+          "straight RGBA must not compare equal to the premultiplied render")
+    px = np.asarray(c["img"])
+    check("xcursor stores premultiplied", bool((px[..., :3].max(-1) <= px[..., 3]).all()),
+          "no channel may exceed its alpha")
+    bad_chunk = B._pack_ximage(size, img, hx + 1, hy, 0)   # simulates a packing bug
+    bad_c = xcurlib.read_xcursor(B._xcursor([bad_chunk]))[0]
+    check("xcursor hotspot corruption caught", (bad_c["hx"], bad_c["hy"]) != (hx, hy),
+          "a wrong packed hotspot must not compare equal to the canonical one")
+
+
+def test_hotspot_centre():
+    """A centred cursor's hotspot stays on its centre at every size.
+
+    His hotspot is a pixel at 32, and scaled as if the click meant its top-left
+    corner, Cross, IBeam and the size arrows sat a logical unit up and left of
+    their centre from 48 up, 7 px at 256. For each cursor whose hotspot pixel
+    touches the canvas centre, at every size shipped anywhere: how far the
+    hotspot pixel's centre is from the canvas centre, in pixels, the worst.
+    Half a pixel is all an even size allows. Scaled as a corner it has to
+    fail."""
+    eps = 0.5 + 1e-9
+    names = [n for n in B.STATIC if B._hot_point(n) == (16.0, 16.0)]
+    sizes = sorted(set(B.LINUX_SIZES) | set(B.ANI_SIZES) | set(B.SIZES))
+
+    def worst(scale):
+        return max(abs(h + 0.5 - s / 2) for n in names for s in sizes for h in scale(n, s))
+
+    corner = lambda n, s: tuple(round(h * s / 32) for h in B.hotspot(n))
+    clean, hurt = worst(B._scale_hot), worst(corner)
+    check("hotspot centre", len(names) >= 7 and clean <= eps < hurt,
+          "%.1f -> %.1f px off the centre of %d cursors scaled as a corner, bound %.1f"
+          % (clean, hurt, len(names), eps))
+
+
+def test_deb_alternative():
+    """The .deb registers the theme file that inherits this theme.
+
+    The x-cursor-theme alternative becomes the system's default theme, and
+    libXcursor reads only its Inherits. index.theme inherits Adwaita for the
+    names this theme lacks, and registered in its place the pick resolved to
+    Adwaita outright. Read off the postinst: the file it installs as the
+    alternative, and that file's Inherits. Registering index.theme has to fail."""
+    postinst, prerm = B._deb_scripts()
+    files = B._theme_files()
+
+    def inherits(fn):
+        lines = files.get(fn, "").splitlines()
+        return [ln.split("=", 1)[1] for ln in lines if ln.startswith("Inherits=")]
+
+    def reg(script):
+        var = {ln.split("=", 1)[0]: ln.split("=", 1)[1].strip("'")
+               for ln in script.splitlines() if ln[:4] in ("old=", "new=")}
+        return var.get("new", ""), var
+
+    new, var = reg(postinst)
+    ok = ("--install /usr/share/icons/default/index.theme x-cursor-theme \"$new\"" in postinst
+          and "--remove x-cursor-theme \"$new\"" in prerm and reg(prerm)[0] == new)
+    clean = inherits(os.path.basename(new))
+    hurt = inherits(os.path.basename(var.get("old", "")))
+    check("deb alternative", ok and clean == [B.THEME] and hurt != [B.THEME],
+          "registers %s inheriting %s; index.theme would inherit %s"
+          % (os.path.basename(new), clean, hurt))
 
 
 def main():
     print("negative control: each defect is planted, the metric must see it")
     for t in (test_topology, test_fold_gap, test_fold_wander, test_fold_jag,
               test_temporal, test_inner_jitter, test_delta_e, test_fold_unmeasured,
+              test_fold_width, test_fold_soft_l1,
+              test_fold_dipole_recovery, test_fold_dipole_sign,
+              test_fold_dipole_controls, test_fold_dipole_eligibility,
+              test_fold_profile_identifiability, test_fold_curv_ignores_unidentified,
+              test_fold_discontinuity, test_fold_notch,
+              test_apex_flank, test_fold_jitter, test_crisp_rim,
+              test_product_cycle_pairs, test_author_at_exact,
+              test_author_at_harmonics, test_canonical_phase, test_morph_steps_visible, test_hole_glass, test_product_manifest,
+              test_package_roundtrip_catches_corruption,
+              test_hotspot_centre, test_deb_alternative,
               test_rim_layers, test_edge_straight, test_mirror_asym,
-              test_straighten_runs, test_material_basis):
+              test_straighten_runs, test_outline_borrow):
         t()
     print()
     if FAILED:

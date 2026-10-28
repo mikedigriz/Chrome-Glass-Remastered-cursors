@@ -8,14 +8,14 @@ shading that steps between animation frames, a fold that stops short of the
 point, and a morph that falls apart mid-sequence. Each of those has a number
 here, measured off hybrid.frame_image directly - no dist/ build needed.
 
-    python tools/analyze.py --check metrics-baseline.json    the gate
+    python tools/analyze.py --check data/metrics-baseline.json    the gate
     python tools/analyze.py --baseline base.json             full snapshot
-    python tools/analyze.py --ratchet metrics-baseline.json  move the baseline
+    python tools/analyze.py --ratchet data/metrics-baseline.json  move the baseline
 
 Thresholds are the target. When one does not pass, the fix is the pipeline, not
 the threshold.
 
-metrics-baseline.json is where the set actually stands, and it is committed.
+data/metrics-baseline.json is where the set actually stands, and it is committed.
 A value that misses its threshold but is no worse than that file is debt: it
 gets printed every run and it does not fail the build. A value that moves away
 from the target fails immediately. That is what lets the gate run today - the
@@ -35,8 +35,12 @@ from PIL import Image
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import hybrid as H  # noqa: E402
+import crisp as CR  # noqa: E402
+import foldfit as FF  # noqa: E402
+from cgr import hybrid as H  # noqa: E402
+from cgr import build as B  # noqa: E402
 
 LADDER = [32, 48, 64, 96, 128, 256, 384, 512]
 LADDER_FULL = LADDER
@@ -61,6 +65,12 @@ VALIDATE_SIZES = (32, 64, 128, 256, 512)
 VALIDATE_SIZES_FULL = VALIDATE_SIZES
 _JAG_BAND = 2.0            # logical units either side of the fold a step is looked for in
 _DE_NATIVE = 256           # size the colour is judged at, box-averaged 8:1 down to 32
+_DE_ATTENTION = 0.5        # delta_e a cursor may gain against the baseline before
+                           # the gate says so out loud. Not a threshold: crossing
+                           # it prints a line and changes no exit code. Sized off
+                           # the case that motivated it - Handwriting's +1.13 sat
+                           # under the 5.0 target the whole time, so nothing in
+                           # the gate had a reason to mention it
 _FOLD_ROWS = 6             # rows a fold reading needs before it means anything
 _RATCHET_SLACK = 0.05      # how far a floor metric may slip before it is a regression
 _JITTER_ROWS = 10          # rows carrying at least one step a jitter reading needs
@@ -68,17 +78,37 @@ _JITTER_COVER = 0.60       # ...and the share of neighbouring frame pairs the
                            # tracker has to resolve on them. Both are about
                            # whether the instrument has enough data, never about
                            # what the number came out as
-# Image diagnostics: read off the render, no absolute target. Their zero targets
-# said the fold has to be a mathematically straight line of constant brightness
-# with an identical cross-section on every row - which is not a property of lit
-# glass, and it put thirty-five of fifty-eight debt lines on the board saying so.
-# Nothing to calibrate them against either: fold_profile returns nothing at all
-# on the author's own 32px frames, at every size, for all six wedges. So they are
-# judged against the render that was accepted by eye - the committed baseline -
-# and only a move away from it, past a slack wide enough that the eye would see
-# it first, is a regression.
-_FOLD_DIAG = ("wander", "luma_step", "jag")
-_DIAG_SLACK = 0.20
+# The dark-line tracker's readings. Diagnostic only since 2026-08-22: they are
+# measured, printed and recorded, and they decide nothing.
+#
+# What they measure is a dark line drawn on flat glass, found as the darkest
+# interior pixel of a row with a prominence around it. The author did not draw
+# one. His cross-section is a transition between two facet levels with a shallow
+# notch on it, and measured this way his own frames come back unmeasured at every
+# size on every wedge - so there was never a reference to calibrate these
+# against, and the zeros they were first given (a fold must be a straight line of
+# constant brightness with an identical cross-section on every row) are not a
+# property of lit glass. They were then judged against the committed baseline
+# instead, which pinned the render to the shape the old instrument could see.
+#
+# The step-aware readings below replace them as the acceptance test. These stay
+# because a number that suddenly starts resolving, or moves a long way, is still
+# information - see gate() and docs/dev/DEAD_ENDS.md.
+_FOLD_DIAG = ("gap", "wander", "luma_step", "jag")
+
+# --- the fold read as a step between two facets (foldfit) ---
+_STEP_SIZES = (128, 256, 512)   # rungs a cross-section exists at
+_TIP_SIZES = (256, 512)         # ...and the ones the inner tip is resolvable at.
+                                # At 128 the separator and the ridge are a pixel
+                                # apart and the render that ships scores 1..6
+                                # stations of 12 - that is the raster, not a lost
+                                # feature.
+_STEP_STATIONS_MIN = 6          # stations a summary needs before it means anything
+_STEP_JUMP = 1.0                # logical units of second difference above which
+                                # the centre has not wandered, it has jumped to
+                                # another feature. Counted and printed, not gated:
+                                # the author's own path does this on Arrow at 512
+                                # and on Arrow_Down at every size.
 _SOLID_FRAC = 0.85         # of a frame's own peak alpha: the glass proper
 _GHOST_FRAC = 0.05         # ...and below this, nothing that can be seen
 _FOLD_DEPTH = 6.0          # luma a dip must have to count as a fold and not as flat glass
@@ -94,7 +124,9 @@ THRESHOLDS = {
     "density": 2.0,             # % drift of in-silhouette alpha across the ladder
     "ghost_rgb": 0.5,           # mean RGB delta where alpha < 10 (invisible zone)
     "liveliness_min": 0.9,      # share of the keyframes' own total cycle motion the
-                                # sweep must keep - the guard against damping it flat
+                                # sweep must keep - the guard against damping it flat.
+                                # The lit three are held to the light's own keys;
+                                # light_key_share holds those to the render's
     "liveliness_max": 1.15,     # peak/mean of visible frame deltas: above this the
                                 # sweep visibly hurries and dawdles
     "inner_jitter": 2.0,        # px @256 (a fifth of a logical unit), p95 of the
@@ -108,21 +140,64 @@ THRESHOLDS = {
     # tip_convergence has no threshold - see gate() for why it is diagnostic
     "morph_iou": 1.0,           # min IoU between morph frames, as a share of the
                                 # author's own (1.0 = must be at least as coherent)
-    "morph_peak": 1.0,          # peak/mean of a morph's frame deltas, same basis
+    "morph_peak": 1.0,          # peak/mean of a morph's frame deltas, same basis.
+                                # Diagnostic only since 2026-08-22: not monotone
+                                # in quality, because it is a ratio and its
+                                # denominator falls when a render stops moving
+                                # where the author does not.
+    # morph_peak_abs and morph_cadence_err have no threshold here on purpose:
+    # both are pure ratchets against the baseline, like the tip readings. The
+    # first says the largest single step must not grow, the second that the
+    # cycle must not move further from his. Neither carries an absolute target,
+    # because there is no honest one to write: the remaster's steps run 2-3x his
+    # on every morph (NO 5->6 reads 52.09 against his 14.30), and any constant
+    # picked today would be picked to fit that, which is what a ratchet is for.
     "tip_extreme_contrast": 1.0,  # the most visible pixel at a point, as a share
                                 # of the author's own. tip_profile is reported
                                 # beside it and is not gated - see tip_profile.
-    # --- geometry read at every size, on every frame (validate_multiscale) ---
-    "fold_gap": 0.0,            # logical units of fold missing mid-line. Zero is
-                                # reachable and is the point: a fold either runs
-                                # the length of the crease or it is broken. This
-                                # one is structural, so it keeps an absolute
-                                # target; wander, luma_step and jag no longer do -
-                                # see _FOLD_DIAG.
+    "tip_nest": 20.0,           # levels: the inner point's step, worst corner.
+                                # He reads 4-14, a nested apex 20-110. Recorded,
+                                # not gated: the owner wants the inner point
+                                # nested inside the outer one (2026-10-04)
+    # --- the fold, read at every size on every frame (validate_multiscale) ---
+    # Every one of these is calibrated against the author, because the author can
+    # now be read: the numbers in the comments are his own, measured 2026-08-22
+    # at 128, 256 and 512 on the ten cursors that carry a fold.
+    "fold_cover": 0.40,         # share of stations along the chord that resolve.
+                                # He reads 0.83 on the wedges and 0.50 on SizeAll,
+                                # whose chord runs out of silhouette either end.
+    "fold_unres": 0.10,         # share of stations whose transition is narrower
+                                # than one hardware pixel. His is 0.00 at every
+                                # rung; a render that follows the pixel pitch down
+                                # is drawing the fold as a discontinuity.
+    "fold_s_min": 0.50,         # transition width as a share of his own, and
+    "fold_s_max": 2.00,         # ...the other side: neither a razor nor a smear.
+    "fold_s_conv": 1.60,        # widest over narrowest across the three rungs. A
+                                # width in logical units does not change with
+                                # resolution; his worst is 1.25.
+    "fold_curv": 0.35,          # logical units the centre's path may bend,
+                                # median over stations. His is 0.075..0.175 on the
+                                # wedges; where his own path is noisier than that
+                                # the bound follows him instead - see gate().
+    "fold_step": 0.45,          # step between the two facets, as a share of his.
+                                # This is what stops a wide transition being had
+                                # by flattening both facets into each other.
+    "fold_notch": 0.40,         # notch depth on the transition, as a share of
+                                # his. He draws one 4..5 levels deep (Wait 12) and
+                                # a fold without it is smooth where his is not.
+                                # This is the reading, and the only one, that
+                                # separates the isotropic broadener of 2026-08-22
+                                # from a local re-step: the two agree on width,
+                                # amplitude, residual and inner-tip topology.
+    "fold_jitter": 0.25,        # logical units the transition centre may move
+                                # between two frames of a cycle, p95. A fifth of a
+                                # logical unit, the same figure inner_jitter
+                                # carried as 2.0 px at 256.
     # --- colour and motion ---
     "temporal": 1.0,            # frame-to-frame step over cycle amplitude, scaled so
                                 # a sinusoid sampled n times reads 1.0
     "delta_e": 5.0,             # CIEDE2000 against the author's own 32px frame
+                                # see _DE_ATTENTION for the second, softer guard
     "tip_sheen": 0.75,          # share of the author's own sweep that has to survive
                                 # at the points. Not 1.0: the remaster's silhouette is
                                 # crisp where his is soft, so the disc holds a little
@@ -191,12 +266,37 @@ def nframes(name):
 #   product_frames  exactly what goes into the .ani, the WebP and the .cape.
 #
 # Anything temporal - jitter, smoothness, sheen at the points, cadence, the
-# last-to-first seam - belongs on the third. The animated cursors are lit from
-# one canonical render now (hybrid.LIGHT_ANIM), so their per-phase masters are
-# an intermediate representation and nothing else: after that change every
-# temporal number in this file stayed identical to the last digit, because none
-# of them was looking at the animation.
+# last-to-first seam - belongs on the third, and so does the fold contract. The
+# interpolated three ship 27 frames between the author's nine keys, so
+# frame_image at his phases is an intermediate and not what anyone sees.
+#
+# product_cycle below is the one way in. Three call sites used to assemble the
+# cycle for themselves and they did not all assemble the same one.
 _product_cache = {}
+
+
+HARMONICS = 4   # nine samples carry exactly four: the fit passes through every key
+
+
+def periodic_at(field, phases, k=HARMONICS):
+    """The same band-limited fit as periodic_resample, at arbitrary phases.
+
+    periodic_resample can only land on a uniform grid, because irfft evaluates
+    on one. Written out as a sum of harmonics instead, the fit takes any phase
+    at all - which is what pacing the cycle by its own motion needs."""
+    n = field.shape[0]
+    spec = np.fft.rfft(field, axis=0)[:k + 1]
+    ph = np.asarray(phases, dtype=np.float64)
+    out = np.zeros((len(ph),) + field.shape[1:])
+    for m in range(spec.shape[0]):
+        # every harmonic but DC (and Nyquist, when n is even) stands for a
+        # conjugate pair, hence the two
+        w = 1.0 if m == 0 or (n % 2 == 0 and m == n // 2) else 2.0
+        c = spec[m] * (w / n)
+        ang = (2.0 * np.pi * m) * ph
+        sl = (slice(None),) + (None,) * (field.ndim - 1)
+        out += np.cos(ang)[sl] * c.real[None] - np.sin(ang)[sl] * c.imag[None]
+    return out
 
 
 def product_frames(name, size=None):
@@ -213,6 +313,59 @@ def author_frames(name, size=None):
     """The 2006 cycle, at the same size."""
     size = size or JITTER_SIZE
     return [orig_frame(name, i, size) for i in range(nframes(name))]
+
+
+_cycle_cache = {}
+
+
+def product_cycle(name, size=None):
+    """(frames, phases): the states the product renders, and where each sits.
+
+    One path, so the fold contract, the jitter and the inner tip cannot end up
+    reading three slightly different representations of the same product again.
+    A phase is a cycle fraction in the author's own indexing - his frame `j` of
+    `n` sits at `j / n` - and it is not `t / len(frames)`: the loop is sampled at
+    equal change of the picture, and on Wait that puts a frame three places of
+    twenty-seven away from where its index says it is.
+
+    The three interpolated cursors ship 27 frames between the author's nine
+    keys, each at the phase their pacing puts it (hybrid.anim_phases); all 27
+    are read. Everywhere else the cycle is the author's own frames."""
+    size = size or JITTER_SIZE
+    k = (name, size)
+    if k not in _cycle_cache:
+        n = nframes(name)
+        if name in H.INTERP:
+            frames = product_frames(name, size)
+            phases = [float(p) for p in H.anim_phases(name, size)]
+        else:
+            frames = [frame(name, i, size) for i in range(n)]
+            phases = [i / float(n) for i in range(n)]
+        if len(frames) != len(phases):
+            raise AssertionError(f"{name}: {len(frames)} frames, "
+                                 f"{len(phases)} phases")
+        _cycle_cache[k] = (frames, phases)
+    return _cycle_cache[k]
+
+
+def _cycle_geom(name):
+    """Which authored frame the product's silhouette comes from, or None when
+    each frame of the cycle carries its own.
+
+    The lit cursors compose every frame over the canonical render's alpha, so
+    there is one outline for the whole loop and it is that frame's. On this set
+    the traced outline happens to be identical on all nine anyway (checked at
+    256: the edge distance field differs by 0.0 and the chord is the same
+    object), but the shipped alpha's provenance is the canonical frame and that
+    is what the fit should be told."""
+    if name in H.INTERP:
+        return H.CANONICAL[name]
+    return None
+
+
+def _still(a):
+    """A `get` that hands back one fixed picture whatever it is asked for."""
+    return lambda _name, _idx, _size, _a=a: _a
 
 
 def _moments(al, size):
@@ -265,6 +418,11 @@ _DENSITY_SAMPLE = 384      # size the sampling region is defined at
 _DENSITY_INSET = 3.0       # logical units of margin, to stay well clear of the edge
 
 
+def _alpha(name, size):
+    """Frame 0's alpha, 0..1."""
+    return np.asarray(H.frame_image(name, 0, size), dtype=np.float64)[..., 3] / 255.0
+
+
 @functools.lru_cache(maxsize=None)
 def _density_points(name):
     """Interior sample points in logical coordinates, defined once.
@@ -278,9 +436,9 @@ def _density_points(name):
     s = _DENSITY_SAMPLE
     L = s / 32.0
     m = H._mask(name, 0, s)
-    u = H._up_alpha(name, 0, s)
+    u = _alpha(name, s)
     # Solid mask is not the same as solid glass: SizeAll's traced polygon covers
-    # the star's hollow centre, where the translucency map is what cuts the hole.
+    # the star's hollow centre, where the glass's own alpha cuts the hole.
     solid = ((m > 250) & (u > 0.35 * np.percentile(u, 99.5))).astype(np.uint8)
     for inset in (_DENSITY_INSET, 2.0, 1.0, 0.0):
         inner = _erode_square(solid, int(inset * L))
@@ -292,9 +450,9 @@ def _density_points(name):
 def density(name, sizes):
     """Percent drift of the glass's own opacity across the size ladder.
 
-    Measured on _up_alpha over one fixed logical region, which is where the
-    loss happens: the vector mask is solid there at every size, so anything
-    that moves is the alpha blend being rebuilt per size instead of scaled."""
+    Measured on the shipped alpha over one fixed logical region: the vector
+    mask is solid there at every size, so anything that moves is the glass
+    being drawn heavier or lighter per size instead of scaled."""
     region = _density_points(name)
     vals = {}
     for s in sizes:
@@ -302,7 +460,7 @@ def density(name, sizes):
         # the region down to it: resampling the region blurs its border into the
         # rim and puts a couple of percent of the rim's level back into the
         # reading, which is exactly what this is supposed to be free of.
-        u = H._up_alpha(name, 0, s)
+        u = _alpha(name, s)
         if s != _DENSITY_SAMPLE:
             u = np.asarray(Image.fromarray(u.astype(np.float32), mode="F")
                            .resize((_DENSITY_SAMPLE,) * 2, Image.LANCZOS), dtype=np.float64)
@@ -352,9 +510,19 @@ def interp_uniformity(name):
     vis, gho = d[:, 0], d[:, 1]
     o = _deltas([frame(name, i, JITTER_SIZE) for i in range(nframes(name))],
                 name in H.INTERP)[:, 0]
+    # The same pace at the sizes the .ani ships. The loop is paced per size, and
+    # read at 256 alone the gate passed a cycle whose one step at 48 carried 2.7
+    # times the mean change (NEXT.md 115).
+    win = {}
+    if name in H.INTERP:
+        for s in B.ANI_SIZES_WIN:
+            w = _deltas(H.anim_frames(name, s, True)[0], True)[:, 0]
+            win[s] = float(w.max() / max(w.mean(), 1e-9))
     return {
         "n": len(frames),
         "visible_peak_over_mean": float(vis.max() / max(vis.mean(), 1e-9)),
+        "visible_peak_over_mean_win": max(win.values()) if win else None,
+        "visible_peak_over_mean_by_size": win,
         "ghost_rgb": float(gho.max()),
         "visible_mean": float(vis.mean()),
         # Total motion over the cycle, not per step: the remaster runs 27 frames
@@ -366,6 +534,7 @@ def interp_uniformity(name):
         # - gating a low peak/mean as "dead" was the wrong test.
         "cycle_motion": float(vis.sum()),
         "cycle_motion_keys": float(o.sum()),
+        "cycle_motion_light_keys": None,   # lightanim's keys, gone with it (stage 6)
     }
 
 
@@ -790,6 +959,279 @@ def fold_profile(name, idx, size, get=frame):
     }
 
 
+def _fold_width(got):
+    """The frame's width from every station's interval, not from a median over
+    whoever identified.
+
+    Each station's profile leaves a set of grid rungs it cannot tell apart -
+    `s_lo..s_hi` from foldfit's own verdict. Here every station votes once,
+    spread evenly over that set: one that pins the width puts its whole vote on
+    a rung or two, one that cannot spreads a thin slice over many, and a station
+    whose interval covers the grid adds a constant that cannot move the winner.
+    Nothing is discarded.
+
+    Discarding the unidentified is what this replaces, and it was not a small
+    thing. On Handwriting three to five stations of twenty-four identify, so the
+    frame's width was a median over that handful: swapping one of them moved
+    `fold_s_wide` by a factor of six while a paired station-by-station reading
+    of the same two renders showed the fold not widening at all (NEXT.md 78).
+
+    Measured against the alternatives on the author's own frames rebuilt at
+    known widths, this is the only rule that returns what it was built from at
+    0.15 through 0.9 alike; a centroid of the vote is smoother but drags every
+    width toward the middle of the grid and goes blind to a real regression.
+
+    Identifiability itself is not swept up here - it stays its own number in
+    `unident`, counted exactly as before.
+
+    Returns `(s, s_p10)`, both None when no station resolved.
+    """
+    grid = np.asarray(FF.S_GRID, dtype=np.float64)
+    vote = np.zeros(len(grid))
+    for m in got:
+        lo = m.get("s_lo") or m["s"]
+        hi = m.get("s_hi") or m["s"]
+        inside = (grid >= lo - 1e-9) & (grid <= hi + 1e-9)
+        k = int(inside.sum())
+        if k:
+            vote[inside] += 1.0 / k
+    total = float(vote.sum())
+    if total <= 0.0:
+        return None, None
+    top = np.nonzero(vote >= vote.max() - 1e-12)[0]
+    # Ties: the tied rung nearest the vote's own centre of mass. Taking the
+    # middle of the tied run instead is an asymmetry by construction - on the
+    # two-way tie it always returns the wider rung, and that alone moved
+    # Handwriting's width ratio from 1.25 to 1.50 on a frame whose vote is
+    # skewed low and whose author reads the narrower rung.
+    lg = np.log(grid)
+    centre = float((vote * lg).sum() / total)
+    s_hat = float(grid[top[int(np.argmin(np.abs(lg[top] - centre)))]])
+    cum = np.cumsum(vote) / total
+    return s_hat, float(grid[int(np.searchsorted(cum, 0.10))])
+
+
+_CURV_BENDS_MIN = 3     # bends a frame's path curvature is a median over
+
+
+def _fold_bends(slots, identified_only=False):
+    """Second differences across adjacent, usable fold stations.
+
+    An unidentified fit is allowed to keep its other diagnostics, but it is not
+    evidence for the path of the transition centre.  In particular, a run of
+    fits parked on the same fallback centre must not flatten ``fold_curv``.
+    Missing or unidentified stations split the path; never bridge across them.
+    """
+    bends = []
+    for i in range(1, len(slots) - 1):
+        triple = slots[i - 1:i + 2]
+        if not all(m is not None for m in triple):
+            continue
+        if identified_only and not all(m.get("s_identified", True) for m in triple):
+            continue
+        c = [m.get("c_path", m["c"]) for m in triple]
+        bends.append(abs(c[0] - 2 * c[1] + c[2]))
+    return bends
+
+
+def fold_step_profile(name, idx, size, get=frame):
+    """The fold as a step between two facets, summarised along the chord.
+
+    The acceptance reading since 2026-08-22. fold_profile above looks for a dark
+    line and cannot see the author's fold at all; this fits each cross-section as
+    two facets joined by a transition, which is the thing he actually drew. The
+    fitting itself is in foldfit, shared with tools/fold_tracker.py so that the
+    number a person reads at the command line and the number a commit has to pass
+    are the same number.
+
+    Every quantity here is a summary over stations, and the station set is fixed
+    (foldfit.T_LO..T_HI), so the same point on the chord is read at every size.
+
+    `curv` is the median second difference of the centre's path, not a
+    percentile: a single station where the fit lands on another feature moves a
+    p95 by four logical units, and the author's own frames do that at one rung of
+    Arrow and at every rung of Arrow_Down. Those dislocations are counted
+    separately as `jumps` and printed rather than gated.
+
+    And a median of fewer than `_CURV_BENDS_MIN` bends is not one: it is a
+    single triple, and on a frame with no fold to follow - Handwriting's morph
+    frame 5, where the author identifies five or six stations of twenty-four
+    and one or two triples - that triple spans two different features and
+    read 1.30. Under the minimum the frame has no path reading, his or ours.
+
+    The path is read off `c_path`, the soft minimum over the candidate centres
+    (foldfit._c_path), not off the argmin `c`."""
+    if size < _FOLD_MIN_SIZE:
+        return None
+    slots = FF.track_slots(name, idx, size, get)
+    got = [m for m in slots if m is not None]
+    if len(got) < _STEP_STATIONS_MIN:
+        return None
+    curv = _fold_bends(slots, identified_only=True)
+    jumps = _fold_bends(slots)
+    identified = [m for m in got if m.get("s_identified", True)]
+    s_hat, s_p10 = _fold_width(got)
+    return {
+        "stations": int(len(got)),
+        "cover": float(len(got)) / float(len(slots)),
+        "identified": int(len(identified)),
+        "unident": 1.0 - float(len(identified)) / float(len(got)),
+        "s": s_hat,
+        "s_p10": s_p10,
+        "unres": (float(sum(1 for m in identified if not m["s_resolved"]))
+                  / len(identified) if identified else None),
+        "curv": float(np.median(curv)) if len(curv) >= _CURV_BENDS_MIN else 0.0,
+        "jumps": int(sum(1 for v in jumps if v > _STEP_JUMP)),
+        "step": float(np.median([abs(m["step"]) for m in got])),
+        "notch": float(np.median([m["d"] for m in got])),
+        "rms": float(np.percentile([m["rms"] for m in got], 95)),
+        "c": float(np.median([m["c"] for m in got])),
+    }
+
+
+@functools.lru_cache(maxsize=None)
+def fold_step_orig(name, idx, size):
+    """The same reading on the author's own frame - the standard the render's
+    width, step and notch are shares of. Cached because every size of every
+    frame asks for it once and it does not depend on the render."""
+    p = fold_step_profile(name, idx, size, get=orig_frame)
+    return None if p is None else tuple(sorted(p.items()))
+
+
+def _orig_step(name, idx, size):
+    t = fold_step_orig(name, idx, size)
+    return None if t is None else dict(t)
+
+
+# The author's quantities that are continuous in phase, and may therefore be
+# asked for between the frames he drew. Coverage, resolution, station and jump
+# counts are properties of the instrument on one picture: interpolating them
+# would invent a reading nobody took.
+_PHASE_SCALARS = ("s", "step", "notch", "c")
+
+
+@functools.lru_cache(maxsize=None)
+def _author_cycle(name, size):
+    """His step reading on each of his own frames, None where one did not fit."""
+    return tuple(_orig_step(name, i, size) for i in range(nframes(name)))
+
+
+@functools.lru_cache(maxsize=None)
+def _orig_curv(name, size):
+    """Worst bend in his own centre path at this size, over his whole cycle.
+
+    Over the cycle rather than per frame, because a product frame between two of
+    his has no single frame of his to be compared with, and the question the
+    bound asks - how much does this drawing's fold wander before wandering means
+    something - is about the drawing, not about one phase of it."""
+    v = [p["curv"] for p in _author_cycle(name, size) if p is not None]
+    return max(v) if v else 0.0
+
+
+def author_at(name, size, key, phase):
+    """The author's `key` at an arbitrary phase of his cycle.
+
+    Interpolates the measured author scalar over phase; does not synthesize an
+    intermediate author frame. His nine readings are fitted with DC and four
+    harmonics - a full fit on nine samples, so at a phase he actually drew this returns the number
+    measured on that frame and nothing else.
+
+    Needed because the product does not stand on his phases. Comparing frame
+    `t` of twenty-seven against author frame `t // 3` is what let a candidate be
+    marked down for a notch the author is shallow at three frames earlier."""
+    if key not in _PHASE_SCALARS:
+        raise KeyError(f"{key} is not continuous in phase - see _PHASE_SCALARS")
+    cyc = _author_cycle(name, size)
+    n = len(cyc)
+    if not n:
+        return None
+    ph = float(phase) % 1.0
+    exact = round(ph * n)
+    if abs(ph * n - exact) < 1e-9:              # a phase he drew: no fit at all
+        p = cyc[exact % n]
+        return None if p is None or p[key] is None else float(p[key])
+    if any(p is None or p[key] is None for p in cyc):
+        return None
+    y = np.array([p[key] for p in cyc], dtype=np.float64)
+    return float(periodic_at(y, [ph], HARMONICS)[0])
+
+
+def inner_tip_kept(name, idx, size, get=frame):
+    """Share of stations where the lit inner facet is still its own feature.
+
+    Its own acceptance class, deliberately not folded into the fold reading. The
+    two can move in opposite directions: a change that washes the inner facet
+    into the fold improves the fold's width, notch and residual at once, because
+    a flat field has nothing left to disagree with itself. That is not a
+    hypothetical - it is what happened on 2026-08-21 (DEAD_ENDS.md, "Зонный
+    temper"), and the numbers looked like a success.
+
+    Not judged against the author: his frame is 32px art with no such structure
+    in it. Judged against what this repo has already shipped and accepted by eye,
+    which is what the baseline records."""
+    r = FF.inner_tip(name, idx, size, get)
+    if not r:
+        return None
+    return float(sum(x["ok"] for x in r)) / len(r)
+
+
+_JITTER_STATIONS = 8        # stations carrying at least one frame pair
+
+
+def fold_jitter(name):
+    """How far the transition centre moves between frames, in logical units.
+
+    The step-aware replacement for inner_jitter. Same question, same rules -
+    pairs of neighbouring frames rather than rows resolved in every frame, the
+    loop's own seam included, coverage reported next to the number so a tracker
+    that found three comfortable stations cannot report a still animation - and a
+    different instrument underneath, because the old one is looking for a dark
+    line the author never drew and stops resolving the moment the render stops
+    drawing one either.
+
+    In logical units, not pixels: the stations are the same points on the chord
+    at every size, so there is nothing left that a pixel would be the unit of."""
+    frames, _phases = product_cycle(name, JITTER_SIZE)
+    n = len(frames)
+    if n < 2:
+        return None
+    # Geometry from the canonical frame, pixels from frame i. These cursors are
+    # the ones whose silhouette is frozen, so there is one chord for the whole
+    # cycle and anything that moves is the shading - which is the question. It
+    # also has to be one fixed frame: the cycle that ships is 27 frames long and
+    # only nine of them have a traced outline to ask for a chord.
+    geom = _cycle_geom(name)
+    geom = 0 if geom is None else geom
+    C = np.full((n, FF.STATIONS), np.nan)
+    for i in range(n):
+        slots = FF.track_slots(name, geom, JITTER_SIZE, _still(frames[i]))
+        for j, m in enumerate(slots):
+            if m is not None:
+                C[i, j] = m.get("c_path", m["c"])
+    seen = np.isfinite(C)
+    pair = seen & np.roll(seen, -1, axis=0)
+    cols = pair.any(0)
+    if not cols.any():
+        return {"stations": 0, "pair_coverage": 0.0,
+                "why": "the fit resolved no two neighbouring frames on any station"}
+    step = np.abs(np.roll(C, -1, axis=0) - C)[pair]
+    cover = float(pair[:, cols].sum()) / float(n * cols.sum())
+    out = {
+        "stations": int(cols.sum()),
+        "pair_coverage": cover,
+        "mean": float(step.mean()),
+        "p95": float(np.percentile(step, 95)),
+        "max": float(step.max()),
+    }
+    if out["stations"] < _JITTER_STATIONS:
+        out["why"] = (f"the fit resolved {out['stations']} stations, "
+                      f"fewer than the {_JITTER_STATIONS} a reading needs")
+    elif cover < _JITTER_COVER:
+        out["why"] = (f"the fit resolved {cover:.0%} of the neighbouring "
+                      f"pairs, under the {_JITTER_COVER:.0%} a reading needs")
+    return out
+
+
 def validate_multiscale(name, sizes=VALIDATE_SIZES):
     """Every geometric defect, looked for at every size, on every frame.
 
@@ -821,7 +1263,99 @@ def validate_multiscale(name, sizes=VALIDATE_SIZES):
         tip, _ = tip_convergence(name, size=s)
         worst["tip"] = max(worst["tip"], tip)
         per[str(s)] = {"tip": tip, "frames": {str(i): p for i, p in rows}}
-    return {"worst": worst, "resolved": resolved, "per_size": per}
+    return {"worst": worst, "resolved": resolved, "per_size": per,
+            "step": _step_multiscale(name, sizes)}
+
+
+def _ratio(got, ref, floor):
+    """got/ref, or None where the reference has nothing to be a share of."""
+    if ref is None or abs(ref) < floor:
+        return None
+    return abs(got) / abs(ref)
+
+
+def _step_multiscale(name, sizes):
+    """The step-aware fold reading, worst case over every size and frame.
+
+    Worst case, not an average, and against the author at each frame's own
+    phase: a fold that reads well at 512 and is a discontinuity at 128 is a fold
+    that is wrong at 128, and the ladder is where that shows.
+
+    The frames are the product's (product_cycle), not frame_image's. Until
+    2026-08-22 this walked the nine authored indices, which for the three lit
+    cursors is nine pictures that are shipped nowhere; the reading it took of
+    them is not a reading of the animation anybody sees.
+
+    The inner tip is collected here too but kept in its own key. It is a separate
+    acceptance class - see inner_tip_kept - and merging it into a fold score
+    would let a candidate trade the feature for the shape, which is exactly the
+    trade that has already been made once by mistake."""
+    sizes = [s for s in sizes if s in _STEP_SIZES]
+    out = {"resolved": [], "cover": 1.0, "unident": 0.0, "unres": 0.0,
+           "curv": 0.0,
+           "curv_orig": 0.0, "jumps": 0, "rms": 0.0, "s_conv": 1.0,
+           "s_ratio_lo": None, "s_ratio_hi": None, "step": None,
+           "notch": None, "tip": None, "s_at": {}, "per_size": {}}
+    if not sizes:
+        return out
+    seen = {}
+    for size in sizes:
+        frames, phases = product_cycle(name, size)
+        geom = _cycle_geom(name)
+        rows = {}
+        out["curv_orig"] = max(out["curv_orig"], _orig_curv(name, size))
+        for t, f in enumerate(frames):
+            idx = t if geom is None else geom
+            p = fold_step_profile(name, idx, size, get=_still(f))
+            if p is None:
+                continue
+            rows[t] = p
+            out["cover"] = min(out["cover"], p["cover"])
+            out["unident"] = max(out["unident"], p["unident"])
+            if p["unres"] is not None:
+                out["unres"] = max(out["unres"], p["unres"])
+            out["curv"] = max(out["curv"], p["curv"])
+            out["jumps"] = max(out["jumps"], p["jumps"])
+            out["rms"] = max(out["rms"], p["rms"])
+            ph = phases[t]
+            if p["s"] is not None:
+                seen.setdefault(t, {})[size] = p["s"]
+            for key, r in (("s_ratio",
+                            (_ratio(p["s"], author_at(name, size, "s", ph), 1e-3)
+                             if p["s"] is not None else None)),
+                           ("step",
+                            _ratio(p["step"], author_at(name, size, "step", ph), 1.0)),
+                           ("notch",
+                            _ratio(p["notch"], author_at(name, size, "notch", ph), 1.0))):
+                if r is None:
+                    continue
+                if key == "s_ratio":
+                    lo, hi = out["s_ratio_lo"], out["s_ratio_hi"]
+                    out["s_ratio_lo"] = r if lo is None else min(lo, r)
+                    out["s_ratio_hi"] = r if hi is None else max(hi, r)
+                else:
+                    out[key] = r if out[key] is None else min(out[key], r)
+        if rows:
+            out["resolved"].append(size)
+            widths = [p["s"] for p in rows.values() if p["s"] is not None]
+            if widths:
+                out["s_at"][str(size)] = float(np.median(widths))
+            out["per_size"][str(size)] = {str(i): p for i, p in rows.items()}
+        if size in _TIP_SIZES:
+            for t, f in enumerate(frames):
+                idx = t if geom is None else geom
+                k = inner_tip_kept(name, idx, size, get=_still(f))
+                if k is not None:
+                    out["tip"] = k if out["tip"] is None else min(out["tip"], k)
+    # A width in logical units is the same width at every resolution. Compared
+    # within a frame, so a cursor that redraws itself is not being asked to hold
+    # one number across two different pictures.
+    for _idx, by_size in seen.items():
+        if len(by_size) > 1:
+            v = [x for x in by_size.values() if x > 0]
+            if v:
+                out["s_conv"] = max(out["s_conv"], max(v) / min(v))
+    return out
 
 
 def _fold_band(name, size):
@@ -1071,7 +1605,89 @@ def morph_health(name, get=frame):
     }
 
 
+def _morph_visible_steps(name, get):
+    """Frame-to-frame change as anybody actually sees it, on a fixed grid.
+
+    No threshold and no mask. Every pixel of the frame is composited onto three
+    backgrounds and the steps are the mean absolute difference over pixels,
+    channels and backgrounds. That removes the whole class of error the masked
+    reading had: `_deltas` selects pixels above a fraction of the pair's own
+    peak alpha, and the author's peak is 249..255 where ours is 222..248, so the
+    two silhouettes were compared through different masks of different sizes -
+    on NO's third step his held one pixel and ours thirty-six, and a mean over
+    one pixel is not a cadence. Here the denominator is the number of pixels,
+    which is the same for him, for us and for every step.
+
+    Change in RGB under zero alpha drops out, because it is invisible; growth of
+    geometry and of alpha is counted, because it is not."""
+    n = nframes(name)
+    fr = [np.asarray(get(name, i, _MORPH_SIZE), dtype=np.float64) for i in range(n)]
+    comp = [[f[..., :3] * (f[..., 3:4] / 255.0) + bg * (1.0 - f[..., 3:4] / 255.0)
+             for bg in _BACKGROUNDS.values()] for f in fr]
+    return np.array([float(np.mean([np.abs(a - b).mean()
+                                    for a, b in zip(comp[i], comp[i + 1])]))
+                     for i in range(n - 1)])
+
+
 _BACKGROUNDS = {"white": 255.0, "grey": 128.0, "black": 0.0}
+
+_HOLE_FRAMES = (7, 8, 9)   # the frames of NO whose sign has a hole with glass in
+_HOLE_GREY = 60.0          # channel spread under which one of his pixels is glass
+_HOLE_INSET = 0.2          # logical units clear of the ring's inner edge
+
+
+@functools.lru_cache(maxsize=None)
+def _hole_cells(idx):
+    """His glass seen through NO's ring, as a fixed set of his own pixels.
+
+    Chosen off the author and never re-chosen from a candidate: a zone that
+    reselects itself after the render moves cannot say whether the render got
+    better. Grey because the sign is the one saturated thing there, and inset
+    because the ring's own inner edge is not this zone's business."""
+    fit = H._ring_fit("NO", idx)
+    if fit is None:
+        return None
+    cx, cy, _R, r = fit
+    o = np.asarray(H.original("NO", idx), dtype=np.float64)
+    n = o.shape[0]
+    ys, xs = np.mgrid[0:n, 0:n]
+    d = np.hypot((xs + 0.5) * H.V.LOGICAL / n - cx,
+                 (ys + 0.5) * H.V.LOGICAL / n - cy)
+    grey = (o[..., :3].max(-1) - o[..., :3].min(-1)) < _HOLE_GREY
+    m = (d < r - _HOLE_INSET) & grey & (o[..., 3] > 20)
+    return (m, o) if m.sum() >= 4 else None
+
+
+def hole_glass(name):
+    """What the pointer behind NO's sign costs, alpha and colour, worst case.
+
+    Neither reading has a target. delta_e in this file records NO's frame 5,
+    where the sign has no hole yet, so nothing in the gate could see this zone
+    move at all - which is the whole reason it exists. Both are ratchets."""
+    if name != "NO":
+        return None
+    k = _MORPH_SIZE
+    worst_a, worst_e = 0.0, 0.0
+    for idx in _HOLE_FRAMES:
+        got = _hole_cells(idx)
+        if got is None:
+            continue
+        m, o = got
+        f = np.asarray(frame(name, idx, JITTER_SIZE), dtype=np.float64)
+        s = JITTER_SIZE // k
+        al = f[..., 3:4] / 255.0
+        pm = np.concatenate([f[..., :3] * al, al], -1)             .reshape(k, s, k, s, 4).mean(axis=(1, 3))
+        a32 = pm[..., 3] * 255.0
+        rgb32 = pm[..., :3] / np.maximum(pm[..., 3:4], 1e-6)
+        worst_a = max(worst_a, float(np.abs(a32 - o[..., 3])[m].mean()))
+        for bg in _BACKGROUNDS.values():
+            ours = rgb32[m] * (a32[m][:, None] / 255.0)                 + bg * (1.0 - a32[m][:, None] / 255.0)
+            his = o[..., :3][m] * (o[..., 3][m][:, None] / 255.0)                 + bg * (1.0 - o[..., 3][m][:, None] / 255.0)
+            worst_e = max(worst_e, float(_delta_e_2000(
+                _srgb_to_lab(np.clip(ours, 0, 255)), _srgb_to_lab(his)).mean()))
+    if worst_a == 0.0 and worst_e == 0.0:
+        return None
+    return {"alpha_err": worst_a, "delta_e": worst_e}
 
 _TIP_SIZE = 256       # where the points are read
 _TIP_REACH = 1.5      # logical units of the disc the extremum is taken over
@@ -1194,6 +1810,48 @@ def tip_profile(name, size=_TIP_SIZE):
                   if len(pairs) * 2 >= len(o) else None)
     vals = [v for v in out.values() if v is not None]
     return (min(vals) if vals else None), out
+
+
+_NEST_SIZE = 512      # where the chisel is read: at 256 the band is five pixels
+                      # and the line behind it one
+_NEST_STEP = 1 / 16.0  # logical units between samples along the bisector
+_NEST_SPAN = (0.75, 3.0)
+                      # logical units behind the point the step is looked for:
+                      # past the silhouette's own last pixels, short of the body
+
+
+def tip_nest(name, size=_NEST_SIZE, get=frame):
+    """How hard the body starts behind each point: the chisel.
+
+    The rim is a band of constant depth, so the two bands that meet at a sharp
+    point close some way behind it, the tip is band up to there, and the body
+    starts after it with its own, second, inner point. Drawn crisp at 128 and
+    up, that reads as a flat bevel on the end of the cursor rather than a point.
+    It is not the author's: his point is one 32px pixel of rim, and resampled
+    it is a soft ramp, not a second apex.
+
+    Read along each corner's inward bisector, composited on grey: the largest
+    change in luma over an eighth of a logical unit, anywhere 0.75-3 units
+    behind the point. The author's frames read 4-14 levels, a crisp inner apex
+    20-110. The worst corner."""
+    a = get(name, 0, size)
+    al = a[..., 3] / 255.0
+    comp = a[..., :3].mean(-1) * al + 128.0 * (1.0 - al)
+    L = size / 32.0
+    rs = np.arange(0.0, _NEST_SPAN[1] + 2 * _NEST_STEP + 1e-9, _NEST_STEP)
+    out = {}
+    for (px, py), (ox, oy) in corners(name):
+        x = np.clip((px - ox * rs) * L - 0.5, 0, size - 2)
+        y = np.clip((py - oy * rs) * L - 0.5, 0, size - 2)
+        x0, y0 = x.astype(int), y.astype(int)
+        fx, fy = x - x0, y - y0
+        prof = (comp[y0, x0] * (1 - fx) * (1 - fy) + comp[y0, x0 + 1] * fx * (1 - fy)
+                + comp[y0 + 1, x0] * (1 - fx) * fy + comp[y0 + 1, x0 + 1] * fx * fy)
+        step = np.abs(prof[2:] - prof[:-2])
+        mid = rs[1:-1]
+        m = (mid >= _NEST_SPAN[0]) & (mid <= _NEST_SPAN[1])
+        out[f"{px:.1f},{py:.1f}"] = float(step[m].max())
+    return (max(out.values()) if out else None), out
 
 
 _RIM_SIZE = 512       # where the rim is measured. The band this looks for is a
@@ -1478,7 +2136,7 @@ def edge_straight(name, idx=0, size=_RIM_SIZE, get=frame):
     window. Reported in logical units, so it is a property of the vector rather
     than of the rung it was rasterised at.
 
-    It is a vector defect. traced.json stores a straight edge as a run of
+    It is a vector defect. data/traced.json stores a straight edge as a run of
     vertices alternating either side of it, and C.smooth turns that sawtooth
     into a slower S-curve rather than removing it - which is why the wander
     grows with size instead of averaging out, and why it is fixed in trace.py
@@ -1486,7 +2144,7 @@ def edge_straight(name, idx=0, size=_RIM_SIZE, get=frame):
 
     Arrow, Arrow_Down, UpArrow, Hand, Wait and AppStarting all read the same
     number, and that is right, not a bug worth chasing: in this set they are
-    one arrow in six colours, and traced.json stores one 51-vertex polygon for
+    one arrow in six colours, and data/traced.json stores one 51-vertex polygon for
     all of them. rim_layers separates them because it reads the render; this
     reads the silhouette, and the silhouette is shared."""
     mask = H._mask(name, idx, size)
@@ -1564,7 +2222,7 @@ def mirror_asym(name, idx=0, size=_RIM_SIZE, get=frame):
 
     A remaster should make a symmetric drawing more symmetric, not less. Ours
     runs about twice the author's and grows with size, because the asymmetry is
-    in traced.json - the outline itself - and rasterising it finer reproduces it
+    in data/traced.json - the outline itself - and rasterising it finer reproduces it
     more faithfully rather than averaging it away.
 
     Read at two rungs, and they answer different questions. `native` is 32px,
@@ -1721,6 +2379,34 @@ def validate_topology(name):
     return bad
 
 
+def crisp_ratios(name, sizes):
+    """docs/dev/IDEAL.md's target on frame 0: per size, (X, A, F) as shares of
+    their references - X and F of release 1.1.0, A of 201694a. Only the sizes
+    tools/crisp.py has references for and the ladder renders."""
+    ref = _crisp_refs()
+    out = {}
+    for size in CR.SIZES:
+        if size not in sizes:
+            continue
+        key = "%s@%d" % (name, size)
+        im = H.frame_image(name, 0, size)
+        x, a = CR.measure(im, name, size, ref["zone"].get(key))
+        f = CR.fold(im, name, size)
+        rx, _ra, rf = ref["rel"][key]
+        out[str(size)] = (x / rx, a / ref["even"][key][1],
+                          f / rf if f is not None and rf else None)
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _crisp_refs():
+    with open(CR.REF, "rb") as fh:
+        rel = json.loads(fh.read().decode())
+    with open(CR.EVEN, "rb") as fh:
+        even = json.loads(fh.read().decode())
+    return {"rel": rel, "even": even, "zone": CR._load_zone()}
+
+
 def _collect_one(job):
     name, sizes, vsizes = job
     e = {}
@@ -1732,6 +2418,8 @@ def _collect_one(job):
     e["tip_extreme_contrast"], _ = tip_extreme_contrast(name)
     e["tip_extreme_contrast_orig"], _ = tip_extreme_contrast(name, get=orig_frame)
     e["tip_profile"], _ = tip_profile(name)
+    e["tip_nest"], _ = tip_nest(name)
+    e["tip_nest_orig"], _ = tip_nest(name, get=orig_frame)
     e["rim_layers"] = rim_layers(name)
     e["rim_layers_orig"] = rim_layers_author(name)
     e["edge_straight"] = edge_straight(name)
@@ -1739,6 +2427,8 @@ def _collect_one(job):
     e["mirror_asym_orig"] = mirror_asym_author(name)
     e["multiscale"] = validate_multiscale(name, vsizes)
     e["delta_e"] = delta_e(name)
+    if name in CR.CURSORS:
+        e["crisp"] = crisp_ratios(name, sizes)
     if name in H.ANIM:
         e["interp"] = interp_uniformity(name)
         e["temporal"] = temporal_smoothness(name)
@@ -1746,9 +2436,18 @@ def _collect_one(job):
         e["tip_sheen_orig"] = tip_sheen(name, author_frames(name))
         if name in H.INTERP:
             e["inner_jitter"] = inner_jitter(name)
+            e["fold_jitter"] = fold_jitter(name)
         else:
+            e["hole_glass"] = hole_glass(name)
             e["morph"] = morph_health(name)
             e["morph_orig"] = morph_health(name, get=orig_frame)
+            # Step by step against his own, which peak/mean cannot do: it is a
+            # ratio, and a render that stops over-moving in one part of the
+            # cycle shrinks the denominator and reads worse for it.
+            mine = _morph_visible_steps(name, frame)
+            his = _morph_visible_steps(name, orig_frame)
+            e["morph"]["peak_abs"] = float(mine.max())
+            e["morph"]["cadence_err"] = float(np.abs(mine - his).mean())
     return name, e
 
 
@@ -1763,7 +2462,7 @@ def collect(sizes, names=None, jobs=1):
     if jobs > 1 and len(work) > 1:
         # One whole cursor per worker, not one frame. Every metric here wants
         # several sizes and several frames of the same cursor, and the caches
-        # that make that affordable (_master, _base128, _up_alpha - seconds
+        # that make that affordable (glass frames, the ghost field - seconds
         # each) live inside a process. Split any finer and the workers spend
         # their time recomputing what a sibling just threw away.
         #
@@ -1773,8 +2472,13 @@ def collect(sizes, names=None, jobs=1):
         prev = {v: os.environ.get(v) for v in env}
         os.environ.update({v: "1" for v in env})     # BLAS threads would fight the pool
         try:
-            with cf.ProcessPoolExecutor(max_workers=min(jobs, len(work))) as ex:
-                for name, e in ex.map(_collect_one, work):
+            from cgr import gpu
+            with cf.ProcessPoolExecutor(max_workers=min(gpu.workers(jobs), len(work)),
+                                        initializer=gpu.apply_limits) as ex:
+                # the long ones (animated, many frames) first, so the pool does
+                # not end on one of them with the other workers idle
+                heavy = sorted(work, key=lambda w: -len(H.BY_NAME[w[0]]["frames"]))
+                for name, e in ex.map(_collect_one, heavy):
                     rep[name] = e
                     print(f"  {name} done", file=sys.stderr)
         finally:
@@ -1804,12 +2508,10 @@ def gate(rep, base=None):
     is judged as a share of his own frame. His drawing is the standard; ours
     does not get to invent one.
 
-    Image diagnostics - fold wander, luma step and jag - have no target at all
-    (see _FOLD_DIAG). They were written as zeros, which said the fold must be a
-    straight line of constant brightness with an identical cross-section on
-    every row, and that is not a property of lit glass. They are still measured,
-    still printed, and still fail on a move away from the accepted render - they
-    just no longer sit in the debt column forever for being above nothing.
+    Image diagnostics - the dark-line tracker's gap, wander, luma step and jag -
+    decide nothing (see _FOLD_DIAG). They measure a feature the author never
+    drew, and their targets were this repo's own guesses about a shape it had no
+    reference for. They are still measured, still printed and still recorded.
 
     Unmeasured is its own answer, not a pass and not a defect of the render: the
     tracker could not see this fold at all. It is returned separately so it stays
@@ -1827,10 +2529,10 @@ def gate(rep, base=None):
     and a gate that is not running is how those numbers got there. Anything
     that moves further from the target still fails, on the spot."""
     T = THRESHOLDS
-    bad, debt, unmeasured = [], [], []
+    bad, debt, unmeasured, attention = [], [], [], []
     was = {n: (_flat(v) if "multiscale" in v else v) for n, v in (base or {}).items()}
 
-    def fail(name, metric, got, op, want, key=None):
+    def fail(name, metric, got, op, want, key=None, fresh=False):
         line = f"{name:12s} {metric:18s} {got:8.3f} {op} {want}"
         prev = was.get(name, {}).get(key or metric)
         # A tenth of a percent of slack. The render is deterministic, so this is
@@ -1839,21 +2541,25 @@ def gate(rep, base=None):
         # that never moved fails against its own record.
         tol = abs(prev) * 1e-3 + 1e-6 if prev is not None else 0.0
         if prev is None:
-            bad.append(line)
+            # A reading the baseline never recorded cannot have regressed. Only
+            # metrics that say so (`fresh`) get this: for everything else a
+            # missing baseline entry means the file is stale or the wrong one,
+            # and treating that as a pass is how a gate stops gating.
+            (debt if fresh else bad).append(
+                line + ("   (no baseline reading yet)" if fresh else ""))
         elif (got > prev + tol) if op == ">" else (got < prev - tol):
             bad.append(f"{line}  (was {prev:.3f})")
         else:
             debt.append(line)
 
-    def drift(name, worst, prev):
-        """The diagnostic class: no target, only a distance from the baseline."""
-        for k in _FOLD_DIAG:
-            got, ref = worst[k], prev.get("fold_" + k)
-            if ref is None:
-                continue
-            if got > ref * (1.0 + _DIAG_SLACK) + 1e-6:
-                bad.append(f"{name:12s} {'fold_' + k:18s} {got:8.3f} > "
-                           f"{ref * (1.0 + _DIAG_SLACK):.3f}  (was {ref:.3f})")
+    def hold(name, metric, got, op, key):
+        """fail() without a target: only moving past the baseline counts."""
+        prev = was.get(name, {}).get(key)
+        if prev is None:
+            return
+        tol = abs(prev) * 1e-3 + 1e-6
+        if (got > prev + tol) if op == ">" else (got < prev - tol):
+            bad.append(f"{name:12s} {metric:18s} {got:8.3f} {op} {prev:.3f}  (baseline)")
 
     # Ratcheted whatever they read. Every other check here only consults the
     # baseline once a value has already missed its threshold, which leaves a
@@ -1863,7 +2569,7 @@ def gate(rep, base=None):
     # losing most of the headroom above the floor is the regression.
     for name, e in rep.items():
         f, prev = _flat(e), was.get(name, {})
-        for key in ("tip_extreme_contrast", "tip_profile", "tip_sheen"):
+        for key in ("tip_extreme_contrast", "tip_profile", "tip_sheen", "light_key_share"):
             got = f.get(key)
             # baselines written before the rename hold the extremum under its
             # old name; reading both keeps those files comparable instead of
@@ -1884,27 +2590,104 @@ def gate(rep, base=None):
             fail(name, "scale_drift", e["scale_drift"], ">", T["scale_drift"])
         if e["density"] > T["density"]:
             fail(name, "density_%", e["density"], ">", T["density"], "density")
+        # The target (tools/crisp.py), absolute: across the rim no softer than
+        # release 1.1.0, at the worst of 128, 256 and 512. A and F only hold
+        # their baseline: the glass carries the author's tone along the rim and
+        # a soft fold by the owner's call (2026-10-25, GLASS_CHECK.md), so the
+        # 1.1.0 / 201694a targets for them are not a direction any more.
+        for size, (x, a, f) in ((int(k), v) for k, v in
+                                (e.get("crisp") or {}).items()):
+            if x < CR.X_FLOOR:
+                fail(name, f"crisp_x@{size}", x, "<", CR.X_FLOOR, "crisp_x", fresh=True)
+            hold(name, f"crisp_a@{size}", a, ">", "crisp_a")
+            if f is not None:
+                hold(name, f"crisp_f@{size}", f, "<", "crisp_f")
+        declares_fold = any(getattr(H.C, "CURSOR_TOPOLOGY", {})
+                            .get(name, {}).get("fold", []))
         ms = e.get("multiscale")
         if ms:
-            if ms["worst"]["gap"] > T["fold_gap"]:
-                fail(name, "fold_gap", ms["worst"]["gap"], ">", T["fold_gap"])
-            drift(name, ms["worst"], was.get(name, {}))
-            # Declared but never read is not a pass - but it is also not a defect
-            # of the render. It says the tracker could not see a fold this faint,
-            # which is a state of the instrument, so it is reported on its own.
-            # What would be a regression is losing a reading the baseline had:
-            # that is how the fold measurement sat broken for 36 attempts.
-            top = getattr(H.C, "CURSOR_TOPOLOGY", {}).get(name, {})
-            if any(top.get("fold", [])) and not ms["resolved"]:
-                if was.get(name, {}).get("fold_gap") is not None:
+            st = ms.get("step") or {}
+            if st.get("resolved"):
+                if st["cover"] < T["fold_cover"]:
+                    fail(name, "fold_cover", st["cover"], "<", T["fold_cover"],
+                         fresh=True)
+                # A flat width profile is not a narrow fold and not a pass. It
+                # is the instrument saying that several materially different
+                # widths explain the same section. There is no honest absolute
+                # target across the author's ten very different drawings, so
+                # this is a pure ratchet: a renderer change may not make more
+                # stations unidentified than the committed product already has.
+                ref = was.get(name, {}).get("fold_unident")
+                if ref is None:
+                    attention.append(f"{name:12s} {'fold_unident':18s} "
+                                     f"{st['unident']:8.3f}   (no baseline reading yet)")
+                elif st["unident"] > ref * (1.0 + _RATCHET_SLACK) + 1e-6:
+                    bad.append(f"{name:12s} {'fold_unident':18s} "
+                               f"{st['unident']:8.3f} > "
+                               f"{ref * (1.0 + _RATCHET_SLACK):.3f}"
+                               f"  (was {ref:.3f})")
+                # fold_unres, fold_s_thin and fold_s_conv are recorded and decide
+                # nothing. All three ask for a transition at least the author's
+                # 0.60 units wide, which is his 32px grid pitch, not a width he
+                # drew; release 1.1.0, the render the owner holds up, reads
+                # 0.08-0.42 of it, and docs/dev/IDEAL.md takes its crease as the
+                # target (crisp_f below). The wide side still gates: a smear is
+                # a smear at any reference.
+                hi = st["s_ratio_hi"]
+                if hi is not None and hi > T["fold_s_max"]:
+                    fail(name, "fold_s_wide", hi, ">", T["fold_s_max"],
+                         "fold_s_max_ratio", fresh=True)
+                # Where the author's own path bends more than the flat bound, his
+                # is the standard: SizeAll's chord is short and his centre swings
+                # 1.4 logical units along it, which no render has to beat.
+                want = max(T["fold_curv"], 2.0 * st["curv_orig"])
+                if st["curv"] > want:
+                    fail(name, "fold_curv", st["curv"], ">", round(want, 3),
+                         fresh=True)
+                if st["step"] is not None and st["step"] < T["fold_step"]:
+                    fail(name, "fold_step", st["step"], "<", T["fold_step"],
+                         fresh=True)
+                if st["notch"] is not None and st["notch"] < T["fold_notch"]:
+                    fail(name, "fold_notch", st["notch"], "<", T["fold_notch"],
+                         fresh=True)
+            elif declares_fold:
+                # Declared but never read is not a pass - but it is also not a
+                # defect of the render. It says the instrument could not see this
+                # fold, so it is reported on its own. What would be a regression
+                # is losing a reading the baseline had: that is how the fold
+                # measurement sat broken for 36 attempts.
+                if was.get(name, {}).get("fold_cover") is not None:
                     bad.append(f"{name:12s} {'fold_unmeasured':18s} "
                                f"the baseline resolved this fold and this run does not")
                 else:
                     unmeasured.append(f"{name:12s} {'fold':18s} "
                                       f"declared in CURSOR_TOPOLOGY, no size resolved it")
+            # The inner tip has no target and never will: the author's frames are
+            # 32px art and carry no such structure, so the only standard is the
+            # render this repo has already accepted by eye. One station of twelve
+            # is the resolution of the reading and is allowed to move; two is a
+            # feature coming apart.
+            tip, tip_was = st.get("tip"), was.get(name, {}).get("inner_tip")
+            if tip is not None and tip_was is not None:
+                slack = 1.0 / FF.INNER_STATIONS + 1e-9
+                if tip < tip_was - slack:
+                    bad.append(f"{name:12s} {'inner_tip':18s} {tip:8.3f} < "
+                               f"{tip_was - slack:.3f}  (was {tip_was:.3f})")
         de = e.get("delta_e")
         if de and de["mean"] > T["delta_e"]:
             fail(name, f"delta_e[{de['frame']}]", de["mean"], ">", T["delta_e"], "delta_e")
+        elif de:
+            # Under the threshold, so neither bad nor debt - but a jump this
+            # size is still somebody's decision to make. Handwriting went
+            # 3.553 -> 4.682 between two baselines and nothing said a word,
+            # because the ratchet only compares against targets that are
+            # already missed (NEXT.md 47). Raised, never fatal: the number is
+            # allowed to move, it is just not allowed to move quietly.
+            prev = was.get(name, {}).get("delta_e")
+            if prev is not None and de["mean"] > prev + _DE_ATTENTION:
+                attention.append(f"{name:12s} {'delta_e[' + str(de['frame']) + ']':18s} "
+                                 f"{de['mean']:8.3f}   (was {prev:.3f}, "
+                                 f"+{de['mean'] - prev:.2f})")
         sh, sh0 = e.get("tip_sheen"), e.get("tip_sheen_orig")
         if sh and sh0 and sh0.get("amp"):
             want = sh0["amp"] * T["tip_sheen"]
@@ -1927,7 +2710,7 @@ def gate(rep, base=None):
                 # held to a flat 1.0 on the grounds that their silhouette is
                 # frozen, so any hurrying was the shading's own - true while the
                 # shading was ours to place, and no longer true now that it is
-                # his nine samples reconstructed (hybrid.LIGHT_ANIM). Measured
+                # his nine keys splined between. Measured
                 # on what ships they read 1.04-1.12 against his own 1.11-1.19:
                 # steadier than the drawing they come from, and a flat 1.0 would
                 # be this repo inventing a standard the reference does not meet.
@@ -1958,34 +2741,66 @@ def gate(rep, base=None):
                 pm = it["visible_peak_over_mean"]
                 if pm > T["liveliness_max"]:
                     fail(name, "cadence", pm, ">", T["liveliness_max"])
-                want = it["cycle_motion_keys"] * T["liveliness_min"]
+                pw = it.get("visible_peak_over_mean_win")
+                if pw is not None and pw > T["liveliness_max"]:
+                    fail(name, "cadence_win", pw, ">", T["liveliness_max"])
+                ref = it.get("cycle_motion_light_keys")
+                want = (it["cycle_motion_keys"] if ref is None else ref) * T["liveliness_min"]
                 if it["cycle_motion"] < want:
                     fail(name, "sheen_damped", it["cycle_motion"], "<", round(want, 2))
-        ij = e.get("inner_jitter")
-        if ij and ij.get("why") is None:
-            if ij["p95"] > T["inner_jitter"]:
-                fail(name, "inner_jitter_p95", ij["p95"], ">", T["inner_jitter"], "inner_jitter")
-        elif name in H.INTERP and any(
-                getattr(H.C, "CURSOR_TOPOLOGY", {}).get(name, {}).get("fold", [])):
-            # Same rule as fold_unmeasured, for the same reason. AppStarting's
-            # crease is four to seven levels deep where Arrow's is eighteen to
-            # twenty-three, so few enough rows resolve that this returns nothing
-            # at all - and nothing at all must not read as a pass.
-            if was.get(name, {}).get("inner_jitter") is not None:
+        # inner_jitter is the dark-line tracker's reading and is diagnostic now,
+        # migrated with the rest of that instrument: it is built on _fold_track,
+        # so a render that stops drawing a dark line stops being measurable by it,
+        # and that showed up as a jitter regression on a candidate whose fold had
+        # not moved at all.
+        fj = e.get("fold_jitter")
+        if fj and fj.get("why") is None:
+            if fj["p95"] > T["fold_jitter"]:
+                fail(name, "fold_jitter_p95", fj["p95"], ">", T["fold_jitter"],
+                     "fold_jitter", fresh=True)
+        elif name in H.INTERP and declares_fold:
+            # Same rule as fold_unmeasured, for the same reason: nothing at all
+            # must not read as a pass.
+            if was.get(name, {}).get("fold_jitter") is not None:
                 bad.append(f"{name:12s} {'jitter_unmeasured':18s} "
                            f"the baseline measured this jitter and this run does not")
             else:
-                unmeasured.append(f"{name:12s} {'inner_jitter':18s} "
-                                  + (ij["why"] if ij else "the cursor has no chord to anchor on"))
+                unmeasured.append(f"{name:12s} {'fold_jitter':18s} "
+                                  + (fj["why"] if fj else "the cursor has no chord to anchor on"))
+        # No target on either, and none is wanted: delta_e records NO's frame 5,
+        # where the sign has no hole, so this zone is invisible to every other
+        # reading in the file. Ratchets, so a candidate aimed here has to show
+        # its work and one aimed elsewhere cannot quietly spend it.
+        hg = e.get("hole_glass")
+        if hg:
+            for key, got in (("no_hole_alpha_err", hg["alpha_err"]),
+                             ("no_hole_delta_e", hg["delta_e"])):
+                ref = was.get(name, {}).get(key)
+                if ref is not None and got > ref * (1.0 + _RATCHET_SLACK):
+                    bad.append(f"{name:12s} {key:18s} {got:8.3f} > "
+                               f"{ref * (1.0 + _RATCHET_SLACK):.3f}"
+                               f"  (was {ref:.3f})")
         mo, mo0 = e.get("morph"), e.get("morph_orig")
         if mo and mo0:
             if mo["iou_min"] < mo0["iou_min"] * T["morph_iou"]:
                 fail(name, "morph_iou_min", mo["iou_min"], "<",
                      round(mo0["iou_min"] * T["morph_iou"], 3), "morph_iou")
-            if mo["peak_over_mean"] > mo0["peak_over_mean"] * T["morph_peak"]:
-                fail(name, "morph_peak", mo["peak_over_mean"], ">",
-                     round(mo0["peak_over_mean"] * T["morph_peak"], 2))
-    return bad, debt, unmeasured
+            # peak/mean is diagnostic, not a veto - see docs and NEXT.md 54.
+            # It is not monotone in quality: removing genuine over-motion from
+            # part of a cycle lowers the mean, and an untouched old outlier then
+            # reads as a regression. What decides is the distance from his own
+            # cadence, step by step, plus the largest step in absolute terms so
+            # that a real new spike cannot hide behind a quieter average.
+            for key, got in (("morph_peak_abs", mo["peak_abs"]),
+                             ("morph_cadence_err", mo.get("cadence_err"))):
+                ref = was.get(name, {}).get(key)
+                if got is None or ref is None:
+                    continue
+                if got > ref * (1.0 + _RATCHET_SLACK):
+                    bad.append(f"{name:12s} {key:18s} {got:8.3f} > "
+                               f"{ref * (1.0 + _RATCHET_SLACK):.3f}"
+                               f"  (was {ref:.3f})")
+    return bad, debt, unmeasured, attention
 
 
 def _flat(e):
@@ -1994,7 +2809,16 @@ def _flat(e):
         return e                       # already flat: a committed baseline file
     it, ij, mo = e.get("interp"), e.get("inner_jitter"), e.get("morph")
     ms, ts, de = e.get("multiscale"), e.get("temporal") or {}, e.get("delta_e")
+    fj = e.get("fold_jitter")
+    st = (ms or {}).get("step") or {}
+    got = bool(st.get("resolved"))
+    cr = list((e.get("crisp") or {}).values())
+    crf = [v[2] for v in cr if v[2] is not None]
     return {
+        # the target itself (docs/dev/IDEAL.md), worst size of 128-512
+        "crisp_x": min(v[0] for v in cr) if cr else None,
+        "crisp_a": max(v[1] for v in cr) if cr else None,
+        "crisp_f": min(crf) if crf else None,
         "scale_drift": e["scale_drift"],
         "density": e["density"],
         "tip_convergence": e["tip_convergence"],
@@ -2006,21 +2830,59 @@ def _flat(e):
         # None, not zero, when no size resolved the fold. The zeros these used to
         # carry are what let an unmeasured fold read as a perfect one, in the file
         # the gate compares everything against.
-        "fold_gap": ms["worst"]["gap"] if ms and ms["resolved"] else None,
-        "fold_wander": ms["worst"]["wander"] if ms and ms["resolved"] else None,
-        "fold_luma_step": ms["worst"]["luma_step"] if ms and ms["resolved"] else None,
-        "fold_jag": ms["worst"]["jag"] if ms and ms["resolved"] else None,
+        #
+        # `legacy_` is the dark-line tracker. It decides nothing since
+        # 2026-08-22 - it reads a defect the author does not have, and it stops
+        # reading at all once the render stops having it either - but it is
+        # recorded, because a diagnostic that changes is still information.
+        "legacy_fold_gap": ms["worst"]["gap"] if ms and ms["resolved"] else None,
+        "legacy_fold_wander": ms["worst"]["wander"] if ms and ms["resolved"] else None,
+        "legacy_fold_luma_step": ms["worst"]["luma_step"] if ms and ms["resolved"] else None,
+        "legacy_fold_jag": ms["worst"]["jag"] if ms and ms["resolved"] else None,
+        # ...and these are the acceptance readings: the fold fitted as a step
+        # between two facets, worst case over every size and frame, as a share of
+        # the author's own where he has one to be a share of.
+        "fold_cover": st["cover"] if got else None,
+        "fold_unident": st.get("unident") if got else None,
+        "fold_unres": st["unres"] if got else None,
+        "fold_s": (st["s_at"][max(st["s_at"], key=int)]
+                   if got and st.get("s_at") else None),
+        "fold_s_min_ratio": st.get("s_ratio_lo") if got else None,
+        "fold_s_max_ratio": st.get("s_ratio_hi") if got else None,
+        "fold_s_conv": st["s_conv"] if got else None,
+        "fold_curv": st["curv"] if got else None,
+        "fold_jumps": st["jumps"] if got else None,
+        "fold_step": st.get("step") if got else None,
+        "fold_notch": st.get("notch") if got else None,
+        "fold_rms": st["rms"] if got else None,
+        # Its own class, never merged into a fold score - see inner_tip_kept.
+        "inner_tip": st.get("tip"),
         "delta_e": de["mean"] if de else None,
         "ghost_rgb": it["ghost_rgb"] if it else None,
         "cadence": it["visible_peak_over_mean"] if it else None,
+        "cadence_win": it.get("visible_peak_over_mean_win") if it else None,
+        # the light's keys against the render's: how much of the sweep the
+        # light model carries at all. Ratcheted, since the loop is held to the
+        # light's keys and a weaker light would take its own reference down
+        "light_key_share": (it["cycle_motion_light_keys"] / it["cycle_motion_keys"]
+                            if it and it.get("cycle_motion_light_keys") is not None
+                            and it["cycle_motion_keys"] > 0 else None),
         # None the moment the reading is not trusted: a number kept next to its
         # own "not enough data" note is a number something will compare against
-        "inner_jitter": ij.get("p95") if ij and ij.get("why") is None else None,
-        "jitter_rows": ij.get("rows") if ij else None,
-        "jitter_coverage": ij.get("pair_coverage") if ij else None,
+        "fold_jitter": fj.get("p95") if fj and fj.get("why") is None else None,
+        "fold_jitter_stations": fj.get("stations") if fj else None,
+        "fold_jitter_coverage": fj.get("pair_coverage") if fj else None,
+        "legacy_inner_jitter": ij.get("p95") if ij and ij.get("why") is None else None,
+        "legacy_jitter_rows": ij.get("rows") if ij else None,
+        "legacy_jitter_coverage": ij.get("pair_coverage") if ij else None,
+        "no_hole_alpha_err": (e.get("hole_glass") or {}).get("alpha_err"),
+        "no_hole_delta_e": (e.get("hole_glass") or {}).get("delta_e"),
         "morph_iou": mo["iou_min"] if mo else None,
+        "morph_peak_abs": mo.get("peak_abs") if mo else None,
+        "morph_cadence_err": mo.get("cadence_err") if mo else None,
         "temporal_fold": ts.get("fold"),
         "temporal_body": ts.get("body"),
+        "tip_nest": e.get("tip_nest"),
         "tip_sheen": (e.get("tip_sheen") or {}).get("amp"),
         "tip_wobble": (e.get("tip_sheen") or {}).get("wobble"),
         "rim_layers": (e.get("rim_layers") or {}).get("share"),
@@ -2038,7 +2900,7 @@ def _flat(e):
 
 
 _KNOWN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      "metrics-known-issues.json")
+                      "data", "metrics-known-issues.json")
 
 
 def _known_issues(path):
@@ -2055,12 +2917,17 @@ def _known_issues(path):
 def show(rep, base=None):
     cols = [("drift(L)", "scale_drift", 10, ".3f"), ("dens%", "density", 7, ".2f"),
             ("tipconv", "tip_convergence", 8, ".2f"), ("tipcon", "tip_extreme_contrast", 7, ".3f"),
-            ("tipprof", "tip_profile", 8, ".2f"),
-            ("gap", "fold_gap", 6, ".2f"), ("wander", "fold_wander", 7, ".2f"),
-            ("jag", "fold_jag", 6, ".0f"), ("dE", "delta_e", 6, ".2f"),
+            ("tipprof", "tip_profile", 8, ".2f"), ("nest", "tip_nest", 6, ".2f"),
+            ("cover", "fold_cover", 6, ".2f"), ("unid", "fold_unident", 6, ".2f"),
+            ("unres", "fold_unres", 6, ".2f"),
+            ("s", "fold_s", 6, ".2f"), ("sconv", "fold_s_conv", 6, ".2f"),
+            ("curv", "fold_curv", 6, ".2f"), ("stepR", "fold_step", 6, ".2f"),
+            ("notchR", "fold_notch", 7, ".2f"), ("tip", "inner_tip", 5, ".2f"),
+            ("dE", "delta_e", 6, ".2f"),
             ("sheen", "tip_sheen", 7, ".2f"), ("wob", "tip_wobble", 6, ".2f"),
             ("ghost", "ghost_rgb", 7, ".2f"), ("cad", "cadence", 6, ".2f"),
-            ("jit95", "inner_jitter", 7, ".2f"), ("iou", "morph_iou", 6, ".3f"),
+            ("cadW", "cadence_win", 6, ".2f"),
+            ("jit95", "fold_jitter", 7, ".2f"), ("iou", "morph_iou", 6, ".3f"),
             ("tsm", "temporal_fold", 6, ".2f"), ("rim", "rim_layers", 6, ".2f"),
             ("straight", "edge_straight", 9, ".3f"), ("mirr", "mirror_asym", 6, ".1f")]
     hdr = f"{'cursor':12s}" + "".join(h.rjust(w) for h, _, w, _ in cols)
@@ -2096,7 +2963,7 @@ def main():
                     help="cursors to measure in parallel (one process each)")
     ap.add_argument("--known", metavar="FILE", default=_KNOWN,
                     help="complaints that carry no number and are already "
-                         "accepted (default: metrics-known-issues.json)")
+                         "accepted (default: data/metrics-known-issues.json)")
     args = ap.parse_args()
 
     sizes = LADDER_FAST if args.fast else LADDER_FULL if args.full else LADDER
@@ -2128,12 +2995,12 @@ def main():
         print(f"\nratchet written to {args.ratchet}")
 
     if args.check is not None:
-        bad, debt, unmeasured = gate(rep, base)
+        bad, debt, unmeasured, attention = gate(rep, base)
         # The same subtraction build.check_quality does, for the same reason:
         # a complaint that carries no number ("this could not be measured at
         # all") cannot be ratcheted, so it lands in `bad` on every run and would
         # wedge the gate shut for good. Those are listed in
-        # metrics-known-issues.json with a note on each. Reading it here is what
+        # data/metrics-known-issues.json with a note on each. Reading it here is what
         # makes CI and the local build gate say the same thing - without it the
         # two disagreed, and the workflow that runs this command was red on
         # exactly the entries build.py had already accepted.
@@ -2154,6 +3021,11 @@ def main():
                   " which is a state of the instrument, not of the render")
             for u in unmeasured:
                 print("  " + u)
+        if attention:
+            print(f"\nattention ({len(attention)}) - moved a long way and stayed under"
+                  " target, so nothing else here would have said so")
+            for a in attention:
+                print("  " + a)
         print()
         if bad:
             print(f"FAIL ({len(bad)})")

@@ -31,19 +31,19 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Regenerate traced silhouettes
-        run: python trace.py
+        run: python -m cgr.trace
 
       - name: Traced silhouettes must match the committed ones
-        run: git diff --exit-code traced.json
+        run: git diff --exit-code data/traced.json
 
       - name: Build cursor themes and packages
         env:
           RELEASE_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
-        run: python build.py
+        run: python -m cgr.build
 
       - name: Checksums
         working-directory: packages
-        run: sha256sum ChromeGlassRemastered-windows.zip ChromeGlassRemastered-linux.tar.gz ChromeGlassRemastered.cape *_all.deb > SHA256SUMS
+        run: sha256sum ChromeGlassRemastered-windows.zip ChromeGlassRemastered-linux.tar.xz ChromeGlassRemastered.cape *_all.deb > SHA256SUMS
 
       # The PKGBUILD in the repo carries the previous tag and sha256sums=SKIP so
       # that a plain clone still builds. The copy attached to the release gets
@@ -52,20 +52,31 @@ jobs:
         run: |
           set -eu
           ver="${TAG#v}"
-          sum=$(sha256sum packages/ChromeGlassRemastered-linux.tar.gz | cut -d' ' -f1)
+          sum=$(sha256sum packages/ChromeGlassRemastered-linux.tar.xz | cut -d' ' -f1)
           sed -e "s/^pkgver=.*/pkgver=$ver/" \
+              -e 's/\.tar\.gz::/.tar.xz::/; s/linux\.tar\.gz"/linux.tar.xz"/' \
               -e "s/^sha256sums=.*/sha256sums=('$sum')/" \
               packaging/PKGBUILD > packages/PKGBUILD
           grep -q "^pkgver=$ver$" packages/PKGBUILD
           grep -q "^sha256sums=('$sum')$" packages/PKGBUILD
+          grep -q 'linux\.tar\.xz")$' packages/PKGBUILD
+
+      # docs/releases/<tag>.md, when there is one, is the release page's text;
+      # without it the body is left alone, so rebuilding an old tag keeps its text
+      - name: Release notes
+        id: notes
+        run: |
+          if [ -f "docs/releases/$TAG.md" ]; then echo "path=docs/releases/$TAG.md" >> "$GITHUB_OUTPUT"; fi
 
       - name: Attach artifacts to the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
+          name: Chrome Glass Remastered ${{ env.TAG }}
+          body_path: ${{ steps.notes.outputs.path }}
           files: |
             packages/ChromeGlassRemastered-windows.zip
-            packages/ChromeGlassRemastered-linux.tar.gz
+            packages/ChromeGlassRemastered-linux.tar.xz
             packages/ChromeGlassRemastered.cape
             packages/chrome-glass-remastered-cursors_*_all.deb
             packages/PKGBUILD

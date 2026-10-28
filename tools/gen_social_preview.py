@@ -23,7 +23,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import curlib
+from cgr import curlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CUR_DIR = os.path.join(ROOT, "dist", "windows", "Chrome Glass Remastered")

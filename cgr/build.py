@@ -1,0 +1,1618 @@
+#!/usr/bin/env python3
+"""Reproducible builder for the Chrome Glass Remastered cursor theme.
+
+Frames come from glass.py, drawn as glass on the author's traced outlines in
+his tones (through hybrid.frame_image and hybrid.anim_frames), packaged for:
+  * Windows - multi-size .cur (32-256px) + .ani at his timing + Install.inf
+              (17 scheme slots incl. the Windows 10/11 Pin and Person)
+  * Linux   - native Xcursor theme (multi-size + animated) with name aliases
+  * Debian  - installable .deb (aliases as symlinks)
+  * packages/ - release artifacts: windows .zip, linux .tar.xz, .deb
+  * assets/preview.png + animated assets/*.webp (the READMEs embed these) and
+    a .gif
+    of each, for the places that still refuse animated webp - forum posts,
+    DeviantArt, Reddit. Nothing in the repo links the gifs; they exist to be
+    uploaded by hand.
+
+Every build prints superiority metrics against the original frames and warns
+when anything drifts out of tolerance.
+"""
+import os, io, json, struct, gzip, lzma, tarfile, hashlib, time, shutil, sys, zipfile, argparse
+import concurrent.futures as cf
+import numpy as np
+from PIL import Image, ImageDraw
+
+from . import hybrid as H
+from . import glyphs as G
+from . import curlib
+from . import xcurlib
+from .paths import ASSETS, DATA, ROOT, TOOLS
+
+THEME = "Chrome Glass Remastered"
+PKG = "chrome-glass-remastered-cursors"
+# CI passes the tag. The local fallback is deliberately lower than any release
+# so a dev build can never masquerade as one: dpkg used to happily see a
+# hand-built 1.0.0 as newer-or-equal to nothing and refuse the real package.
+VERSION = os.environ.get("RELEASE_VERSION", "0.0.0+local").lstrip("v")
+
+SIZES = [32, 40, 48, 56, 64, 96, 128, 256]  # static .cur sizes (256 is the .cur ceiling)
+# 40 and 56 are 32 at 125 % and 175 % DPI. Without an image of that size
+# Windows takes the next one up and scales it down, close to bilinear,
+# which blurs the outline (measured off LoadImageW).
+# Xcursor has no per-image size cap, so Linux ships the extra HiDPI sizes the
+# classic .cur format cannot express (its ICONDIRENTRY width/height is a single
+# byte, 256 encoded as 0 - 384/512 are simply not representable there).
+LINUX_SIZES = [32, 40, 48, 56, 64, 96, 128, 256, 384, 512]  # static Xcursor sizes
+# 40 and 56 as on Windows: GNOME and KDE at 125 % and 175 % ask for them, and
+# without them they get the nearest size, as is or rescaled by the compositor.
+# animated Xcursor sizes: up to 384 for HiDPI (4K + large pointer), matching
+# the static cursors bar 512. These were once capped at 128 to chase a flicker
+# blamed on the ~26 MB files GTK/Mutter had to re-parse, but the flicker was
+# really the 60 fps cadence (see anim_frames' interp arg) and the cap did not
+# fix it. At the author's ~20 fps these files are a third the size, so the
+# HiDPI sizes are affordable again. 512 stays static-only: a 9-frame animation
+# at native 512 is ~1 MB/frame of raw ARGB, for the rarest case there is.
+ANI_SIZES = [32, 40, 48, 56, 64, 96, 128, 256, 384]
+# sizes inside each .ani frame, largest first. Windows refuses an animated
+# cursor whose frame holds more than about 70 KB of images (LoadImageW,
+# verified empirically): as DIBs that is 96/64/48/32 and no more, which is
+# why 128 never fit. The frames are stored as PNG, which leaves room for 40,
+# 56 and 128 (heaviest frame 55 KB, AppStarting); 256 alone is ~75 KB.
+ANI_SIZES_WIN = [128, 96, 64, 56, 48, 40, 32]
+ANI_SIZE = 128                          # reference size for timing
+PREVIEW_CELL = 192                      # build_preview's tile size
+ANIM_STRIP_BOX = 160                    # build_animations' combined-strip cell size
+
+# Built into dist/ but kept out of the shipped archive. No scheme slot has
+# pointed at Arrow_Down since the link-hover experiment was reverted, and
+# tools/gen_social_preview.py reads it straight out of dist/, so shipping it
+# only cost every user 407 KB in %SystemRoot%.
+WIN_UNSHIPPED = {"Arrow_Down.cur"}
+
+# NOTICE asks that the acknowledgement travels with the artwork, so both
+# archives carry it next to the cursors rather than only in the repo.
+LEGAL = ("LICENSE", "NOTICE")
+
+# Xcursor role -> every name that should resolve to it. The first entry is the
+# real file, the rest become symlinks in the tar/deb, so length here is free.
+#
+# The hex names are the legacy MD5 aliases. Firefox, Chromium/Electron, Java and
+# older GTK2 request cursors by those and by nothing else; without them the
+# pointer silently reverts to the fallback theme mid-drag or on link hover,
+# which is the most visible way this theme can look unfinished on X11.
+#
+# Each hex below is placed by the canonical name Bibata's configs/normal/x.build.toml
+# links it to, not from memory - a hex under the wrong role is worse than no hex
+# at all, because the fallback theme would at least have shown the right shape.
+XROLES = {
+    "Arrow":     ["left_ptr", "default", "arrow", "top_left_arrow", "right_ptr"],
+    # The blue arrow, his pressed state, for the arrow that tells of another
+    # operation: a menu, a drop that copies or links. On Hand a drag showed the
+    # link hand's animation. Windows has no slot for it (WIN_UNSHIPPED).
+    "Arrow_Down": ["context-menu", "copy", "dnd-copy", "alias", "link", "dnd-link",
+                   "1081e37283d90000800003c07f3ef6bf",
+                   "6407b0e94181790501fd1e167b474872",
+                   "b66166c04f8c3109214a4fbd64a50fc8",
+                   "3085a0e285430894940527032f8b26df",
+                   "640fb0e74195791501fd1ed57b41487f",
+                   "a2a266d0498c3104214a47bd64ab0fc8"],
+    "Help":      ["help", "question_arrow", "left_ptr_help", "whats_this", "dnd-ask",
+                  "5c6cd98b3f3ebcb1f9c7f1c204630408",
+                  "d9ce0ab605698f320427677b458ad60b"],
+    "AppStarting": ["progress", "left_ptr_watch", "half-busy",
+                    "00000000000000020006000e7e9ffc3f",
+                    "08e8e1c95fe2fc01f976f1e063a24ccd",
+                    "3ecb610c1bf2410f44200f48c40d3599"],
+    "Wait":      ["watch", "wait"],
+    # `cell` is a plus/crosshair in spreadsheets, so it belongs here rather than
+    # falling through to another theme.
+    "Cross":     ["cross", "crosshair", "tcross", "cross_reverse", "diamond_cross",
+                  "cell", "plus", "X_cursor"],
+    "IBeam":     ["xterm", "text", "ibeam", "vertical-text"],
+    "Handwriting": ["pencil", "draft"],
+    # `circle` stays on NO. It is a literal circle outline in X11 rather than a
+    # forbidden sign, but a near-miss glyph from this theme beats the jarring
+    # jump to whatever the fallback theme draws - the same call made for
+    # `cell`/`plus` above.
+    "NO":        ["not-allowed", "crossed_circle", "forbidden", "no-drop", "dnd-none",
+                  "circle", "03b6e0fcb3499374a867c041f52298f0"],
+    "SizeNS":    ["size_ver", "ns-resize", "sb_v_double_arrow", "v_double_arrow",
+                  "n-resize", "s-resize", "double_arrow", "row-resize", "top_side",
+                  "bottom_side", "00008160000006810000408080010102",
+                  "2870a09082c103050810ffdffffe0204"],
+    "SizeWE":    ["size_hor", "ew-resize", "sb_h_double_arrow", "h_double_arrow",
+                  "e-resize", "w-resize", "col-resize", "left_side", "right_side",
+                  "028006030e0e7ebffc7f7070c0600140"],
+    # bd_double_arrow is the NW-SE diagonal (it links to nwse-resize/size_fdiag),
+    # so it belongs here. It sat under SizeNESW and drew the wrong diagonal.
+    "SizeNWSE":  ["size_fdiag", "nwse-resize", "nw-resize", "se-resize",
+                  "top_left_corner", "bottom_right_corner", "bd_double_arrow",
+                  "c7088f0f3e6c8088236ef8e1e3e70000"],
+    "SizeNESW":  ["size_bdiag", "nesw-resize", "ne-resize", "sw-resize",
+                  "top_right_corner", "bottom_left_corner", "fd_double_arrow",
+                  "fcf1c3c7cd4491d801f1e1c78f100000"],
+    "SizeAll":   ["size_all", "move", "fleur", "all-scroll", "dnd-move",
+                  "4498f0e0c1937ffe01fd06f973665830",
+                  "9081237383d90e509aa00f00170e968f"],
+    "UpArrow":   ["up_arrow", "up-arrow", "center_ptr", "sb_up_arrow"],
+    # openhand/grab and closedhand/grabbing are one pair: sending the closed half
+    # to SizeAll turned a hand into a four-way arrow mid-drag. The grabbing hex
+    # follows them here for the same reason.
+    "Hand":      ["pointer", "hand", "hand1", "hand2", "pointing_hand",
+                  "openhand", "grab", "closedhand", "grabbing",
+                  "9d800788f1b08800ae810202380a0822",
+                  "e29285e634086352946a0e7090d73106",
+                  "fcf21c00b30f7e3f83fe0dfd12e71cff"],
+}
+
+# Windows scheme slots in registry order (17 on Windows 10/11: pin and person
+# come after link - verified against the stock Aero scheme definitions).
+WIN_SLOTS = [
+    ("pointer", "Arrow.cur"), ("help", "Help.cur"), ("work", "AppStarting.ani"),
+    ("busy", "Wait.ani"), ("cross", "Cross.cur"), ("text", "IBeam.cur"),
+    ("hand", "Handwriting.ani"), ("unavailable", "NO.ani"), ("vert", "SizeNS.cur"),
+    ("horz", "SizeWE.cur"), ("dgn1", "SizeNWSE.cur"), ("dgn2", "SizeNESW.cur"),
+    ("move", "SizeAll.cur"), ("alternate", "UpArrow.cur"), ("link", "Hand.ani"),
+    ("pin", "Pin.cur"), ("person", "Person.cur"),
+]
+
+STATIC = H.STATIC + G.NAMES             # 11 originals + Pin + Person
+ANIM = H.ANIM
+
+
+def is_glyph(name):
+    return name in G.NAMES
+
+
+def hotspot(name):
+    return G.HOTSPOT if is_glyph(name) else H.hotspot(name)
+
+
+def static_image(name, size):
+    return G.frame(name, size) if is_glyph(name) else H.frame_image(name, 0, size)
+
+
+# ----------------------------------------------------------------------------- parallel warm-up
+# Every frame the build emits comes from H.frame_image, which is pure and
+# lru-cached but single-threaded - and a 512px glass render is the expensive
+# part (~seconds each). One machine core did all of it. This renders
+# every frame the build will ask for across all CPU cores up front, then feeds
+# the results back into H.frame_image's cache, so the sequential build code
+# below just reads warm values. Torch/GPU do not enter here: the cost is polygon
+# rasterisation and numpy, not tensor math, so cores are the lever.
+#
+# The unit of work is one (name, idx) frame rendered at ALL sizes, not one
+# (name, idx, size): within a frame the sizes share the author's tone and the
+# outline's geometry through lru_caches, and a whole frame on one worker keeps
+# that sharing.
+_WARM_SIZES = ()
+
+def _init_worker(sizes):
+    global _WARM_SIZES                                  # spawned workers re-import
+    _WARM_SIZES = sizes                                 # this module, so seed it here
+    from . import gpu
+    gpu.apply_limits()                                  # below-normal priority, VRAM ceiling
+
+
+def _gen_frame(job):
+    name, idx = job
+    t0 = time.perf_counter()
+    # the preview tile size is only drawn for the handful of frames it shows
+    make = (lambda n, i, s: G.frame(n, s)) if is_glyph(name) else H.frame_image
+    out = [((name, idx, s), make(name, idx, s)) for s in _WARM_SIZES
+           if s != PREVIEW_CELL or _preview_needs(name, idx)]
+    if os.environ.get("CGR_JOB_LOG"):
+        print("  job %s %d: %.1fs" % (name, idx, time.perf_counter() - t0), file=sys.stderr, flush=True)
+    return out
+
+
+def _gen_anim(job):
+    """One animation at one size: H.anim_frames from keyframes the first stage
+    already rendered (seeded into this worker's frame_image), so the worker does
+    only the light cycle and the pacing."""
+    name, size, interp, key_frames = job
+    inner = H.frame_image
+
+    def seeded(n, i, sz):
+        a = key_frames.get((n, i, sz)) if sz == size else None
+        return Image.fromarray(a, "RGBA") if a is not None else inner(n, i, sz)
+    H.frame_image = seeded
+    try:
+        frames, rates = H.anim_frames(name, size, interp)
+    finally:
+        H.frame_image = inner
+    return (name, size, interp), ([np.asarray(f) for f in frames], rates)
+
+
+def _anim_keys():
+    """(name, size, interp) that the build asks H.anim_frames for."""
+    true_sizes = set(ANI_SIZES_WIN) | {ANI_SIZE, 128, ANIM_STRIP_BOX}
+    keys = [(n, s, True) for n in ANIM for s in sorted(true_sizes)]
+    false_sizes = set(ANI_SIZES) | set(ANI_SIZES_WIN) | {32 * sc for sc in MAC_SCALES}
+    keys += [(n, s, False) for n in ANIM for s in sorted(false_sizes)]
+    return keys
+
+
+def _strip_job(assets, per):
+    """The combined strip's encode job: the five animations side by side at
+    ANIM_STRIP_BOX, `per` maps name -> its frames at that size."""
+    box, gap = ANIM_STRIP_BOX, 14
+    n = max(len(f) for f in per.values())
+    W = len(ANIM) * (box + gap) + gap
+    strip = []
+    for f in range(n):
+        canvas = Image.new("RGBA", (W, box + 2 * gap), (0, 0, 0, 0))
+        for j, name in enumerate(ANIM):
+            fr = per[name][f % len(per[name])]
+            canvas.alpha_composite(fr, (gap + j * (box + gap), gap))
+        strip.append(canvas)
+    return (os.path.join(assets, "animations.webp"), os.path.join(assets, "animations.gif"),
+            [np.asarray(f) for f in strip], 17, _gif_ms(17))
+
+
+_QUALITY = None              # the gate's measurement thread, once started
+
+
+def _warm_frames():
+    # PREVIEW_CELL and ANIM_STRIP_BOX are not sizes anything else ships at, so
+    # they used to be missing here: build_preview and build_animations' strip
+    # each rendered its own frames cold, one core, after the warm-up had
+    # already finished - 72s and part of 267s that looked like encoding time
+    # but was actually this. Measured: adding them here costs the warm-up
+    # ~46s (two more sizes across the same frames) and gets back ~72s from
+    # build_preview alone falling to ~4s, before even parallelising the
+    # webp encode below.
+    sizes = tuple(sorted(set(SIZES) | set(LINUX_SIZES) | set(ANI_SIZES) | set(ANI_SIZES_WIN)
+                         | {ANI_SIZE, 512, PREVIEW_CELL, ANIM_STRIP_BOX}, reverse=True))
+    # the glyph cursors first: two vector renders per size, the longest jobs there are
+    jobs = [(name, 0) for name in G.NAMES] + [(name, 0) for name in H.STATIC]
+    for name in ANIM:
+        jobs += [(name, idx) for idx in range(len(H.BY_NAME[name]["frames"]))]
+    from . import gpu
+    workers = min(gpu.workers(os.cpu_count() or 1), len(jobs))
+    t0 = time.time()
+    cache = {}
+    # numpy/PIL already thread internally via BLAS; 12 processes each spawning
+    # 12 BLAS threads oversubscribes the 12 cores and cancels the win. Pin each
+    # spawned worker to a single BLAS thread (env is inherited by spawn before
+    # its numpy import) so the process pool is the only parallelism.
+    prev_env = {v: os.environ.get(v) for v in
+                ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")}
+    os.environ.update({v: "1" for v in prev_env})
+    try:
+        with cf.ProcessPoolExecutor(max_workers=workers, initializer=_init_worker,
+                                    initargs=(sizes,)) as ex:
+            for pairs in ex.map(_gen_frame, jobs):
+                cache.update(pairs)
+    finally:
+        for v, old in prev_env.items():
+            if old is None:
+                os.environ.pop(v, None)
+            else:
+                os.environ[v] = old
+    inner = H.frame_image
+    def cached(name, idx, size):
+        hit = cache.get((name, idx, size))
+        return hit if hit is not None else inner(name, idx, size)
+    H.frame_image = cached
+    glyph_inner = G.frame
+    def glyph_cached(name, size):
+        hit = cache.get((name, 0, size))
+        return hit if hit is not None else glyph_inner(name, size)
+    G.frame = glyph_cached
+    print("  warm-up: %d frames x %d sizes on %d cores in %.1fs"
+          % (len(jobs), len(sizes), workers, time.time() - t0))
+    # the quality gate reads rendered frames and the animations, all in the
+    # run's cache now: it measures beside the packaging
+    _warm_anims(cache, workers)
+    global _QUALITY
+    if os.path.exists(_BASELINE):
+        _QUALITY = _quality_start()
+
+
+def _warm_anims(cache, workers):
+    """Second stage: every animation the build asks for, across the cores.
+    windows, linux, the previews and the checks all read H.anim_frames, which is
+    the light cycle over nine rendered keyframes and has no cache of its own."""
+    t0 = time.time()
+    jobs = []
+    for name, size, interp in _anim_keys():
+        n = len(H.BY_NAME[name]["frames"])
+        kf = {(name, i, size): np.asarray(cache[(name, i, size)])
+              for i in range(n) if (name, i, size) in cache}
+        jobs.append((name, size, interp, kf))
+    done = {}
+    prev_env = {v: os.environ.get(v) for v in
+                ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")}
+    os.environ.update({v: "1" for v in prev_env})
+    try:
+        with cf.ProcessPoolExecutor(max_workers=min(workers, len(jobs)), initializer=_init_worker,
+                                    initargs=(_WARM_SIZES,)) as ex:
+            for key, (arrays, rates) in ex.map(_gen_anim, jobs):
+                done[key] = ([Image.fromarray(a, "RGBA") for a in arrays], rates)
+    finally:
+        for v, old in prev_env.items():
+            if old is None:
+                os.environ.pop(v, None)
+            else:
+                os.environ[v] = old
+    inner = H.anim_frames
+    def anim_cached(name, size, interp=True):
+        hit = done.get((name, size, interp))
+        return (list(hit[0]), list(hit[1])) if hit is not None else inner(name, size, interp)
+    H.anim_frames = anim_cached
+    print("  anim warm-up: %d animations on %d cores in %.1fs" % (len(jobs), workers, time.time() - t0))
+
+
+def _hot_point(name):
+    """The hotspot as a point in logical units.
+
+    His hotspot is a pixel at 32, the square [h, h + 1), and which point of it
+    the click means depends on the shape: an arrow's apex sits on its top-left
+    corner, a centred cursor's centre - the middle of the canvas - on its
+    bottom-right one. Scaled as a top-left corner throughout, the hotspots of
+    Cross, IBeam and the size arrows drifted up and left of their centre by a
+    logical unit from 48 up, 7 px at 256."""
+    hx, hy = hotspot(name)
+    c = 32 / 2
+    if hx < c <= hx + 1 and hy < c <= hy + 1:
+        return float(hx + 1), float(hy + 1)
+    return float(hx), float(hy)
+
+
+def _scale_hot(name, size):
+    """The pixel at `size` that holds _hot_point, taken inside his own pixel
+    where the point lies on its edge."""
+    hot = hotspot(name)
+    return tuple(int(np.floor(np.clip(p, h + 1e-6, h + 1 - 1e-6) * size / 32))
+                 for p, h in zip(_hot_point(name), hot))
+
+
+# ----------------------------------------------------------------------------- Windows
+def _make_anih(nframes, disp_rate):
+    return struct.pack("<9I", 36, nframes, nframes, 0, 0, 32, 1, disp_rate, 1)
+
+
+def build_windows(dist):
+    out = os.path.join(dist, "windows", THEME)
+    os.makedirs(out, exist_ok=True)
+    for name in STATIC:
+        frames = []
+        for s in SIZES:
+            hx, hy = _scale_hot(name, s)
+            frames.append({"img": static_image(name, s), "hx": hx, "hy": hy})
+        open(os.path.join(out, name + ".cur"), "wb").write(curlib.write_cur(frames, png=True))
+    for name in ANIM:
+        # stock aero .ani ships every frame as a multi-size .cur and no rate
+        # chunk when the timing is uniform - mirror that so the Pointers-tab
+        # preview animates and Windows picks a native size at any DPI.
+        # His nine frames at his rate: 27 at rate 1 jerked and dragged in the
+        # Pointers preview where his 9 x 3 played even (owner, 2026-10-27)
+        per_size = {s: H.anim_frames(name, s, interp=False)[0] for s in ANI_SIZES_WIN}
+        rates = H.anim_frames(name, ANI_SIZE, interp=False)[1]
+        blobs = []
+        for i in range(len(rates)):
+            entries = [{"img": per_size[s][i], "hx": _scale_hot(name, s)[0],
+                        "hy": _scale_hot(name, s)[1]} for s in ANI_SIZES_WIN]
+            blobs.append(curlib.write_cur(entries, png=True))
+        uniform = len(set(rates)) == 1
+        ani = {"anih": _make_anih(len(rates), rates[0] if uniform else 1),
+               "rates": None if uniform else rates, "seqs": None}
+        open(os.path.join(out, name + ".ani"), "wb").write(
+            curlib.write_ani(ani, blobs))
+    write_inf(out)
+    return out
+
+
+def build_original(dist):
+    """The authentic 2006 set, byte for byte at its native 32px - a reference
+    baseline next to the remaster (and a fallback to generate from). No Pin or
+    Person: those slots did not exist in the original.
+
+    Deliberately a local artefact only: it is not packaged into packages/ and
+    not attached to releases. It exists to diff the remaster against, not to
+    install - so it ships no Install.inf either."""
+    out = os.path.join(dist, "original", "Chrome Glass (2006)")
+    os.makedirs(out, exist_ok=True)
+    for name in H.STATIC:
+        hx, hy = H.hotspot(name)
+        frames = [{"img": H.original(name, 0), "hx": hx, "hy": hy}]
+        open(os.path.join(out, name + ".cur"), "wb").write(curlib.write_cur(frames))
+    for name in H.ANIM:
+        hx, hy = H.hotspot(name)
+        rates = list(H.BY_NAME[name]["rates"])
+        blobs = [curlib.write_cur([{"img": H.original(name, i), "hx": hx, "hy": hy}])
+                 for i in range(len(rates))]
+        uniform = len(set(rates)) == 1
+        ani = {"anih": _make_anih(len(rates), rates[0] if uniform else 1),
+               "rates": None if uniform else rates, "seqs": None}
+        open(os.path.join(out, name + ".ani"), "wb").write(
+            curlib.write_ani(ani, blobs))
+    return out
+
+
+def write_inf(out):
+    strings = 'CUR_DIR      = "%s"\nSCHEME_NAME  = "%s"' % (THEME, THEME)
+    slot_strings = "\n".join('%-12s = "%s"' % (role, fn) for role, fn in WIN_SLOTS)
+    reg_val = ",".join("%%10%%\\%%CUR_DIR%%\\%%%s%%" % role for role, _ in WIN_SLOTS)
+    names = "\n".join('"%s"' % fn for _, fn in WIN_SLOTS)
+    # 0x4 overwrite whatever is there, 0x8 replace a file the active scheme
+    # holds (swapped in at the next restart): without them a second install
+    # left the old cursors in place until the scheme was removed first
+    copy = "\n".join('"%s",,,0x0000000C' % fn for _, fn in WIN_SLOTS)
+    inf = f""";  {THEME} - cursor scheme installer
+;  Right-click this file, choose "Install", then pick "{THEME}" in
+;  Settings > Bluetooth & devices > Mouse > Additional mouse settings > Pointers.
+;
+;  To remove it again, switch the Pointers tab back to a system scheme first, then
+;  run the [DefaultUninstall] section below by hand, with the full path:
+;    rundll32.exe setupapi,InstallHinfSection DefaultUninstall 132 "<path>\\Install.inf"
+;  There is no Uninstall item in the right-click menu: Windows 10/11 register a
+;  single verb for .inf, Install, under
+;  HKLM\\SOFTWARE\\Classes\\SystemFileAssociations\\.inf\\shell, and it runs
+;  InfDefaultInstall.exe, which only ever executes [DefaultInstall].
+
+[Version]
+signature="$CHICAGO$"
+
+[DefaultInstall]
+CopyFiles = Scheme.Cur
+AddReg    = Scheme.Reg
+
+[DefaultUninstall]
+DelFiles = Scheme.Del
+DelReg   = Scheme.Reg
+
+[DestinationDirs]
+Scheme.Cur = 10,"%CUR_DIR%"
+Scheme.Del = 10,"%CUR_DIR%"
+
+; HKCU only. Writing the same scheme name to the machine-wide hive as well
+; (HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Control Panel\\Cursors\\Schemes)
+; would fix the rare case where the elevating admin is not the logged-in user,
+; but the Pointers tab merges both hives, so the common case would get the
+; scheme listed twice. Not worth the trade until it can be checked on a real
+; machine.
+[Scheme.Reg]
+HKCU,"Control Panel\\Cursors\\Schemes","%SCHEME_NAME%",,"{reg_val}"
+
+[Scheme.Cur]
+{copy}
+
+; DelFiles reads the flag field as DELFLG_*, so it gets the bare names
+[Scheme.Del]
+{names}
+
+[Strings]
+{strings}
+
+{slot_strings}
+"""
+    open(os.path.join(out, "Install.inf"), "w", newline="\r\n", encoding="utf-8").write(inf)
+
+
+# ----------------------------------------------------------------------------- Linux
+IMG_TYPE = 0xfffd0002
+HOLD_MS = 1000000                       # "freeze on last frame" for Xcursor
+
+
+def _jiffies_ms(rate):
+    return min(round(rate * 1000 / 60), HOLD_MS)
+
+
+def _pack_ximage(size, img, xh, yh, delay):
+    w, h = img.size
+    arr = xcurlib.premultiply(img).astype(np.uint32)
+    v = (arr[..., 3] << 24) | (arr[..., 0] << 16) | (arr[..., 1] << 8) | arr[..., 2]
+    return (struct.pack("<9I", 36, IMG_TYPE, size, 1, w, h, xh, yh, delay)
+            + v.astype("<u4").tobytes())
+
+
+def _xcursor(images):
+    header = struct.pack("<IIII", 0x72756358, 16, 0x00010000, len(images))
+    toc = bytearray(); pos = 16 + len(images) * 12
+    for c in images:
+        toc += struct.pack("<III", IMG_TYPE, struct.unpack_from("<I", c, 8)[0], pos)
+        pos += len(c)
+    return header + bytes(toc) + b"".join(images)
+
+
+def _theme_files():
+    """index.theme names the theme and falls back to Adwaita for the names it
+    lacks; cursor.theme, which inherits this theme, is the one a system makes
+    its default with."""
+    return {"index.theme": "[Icon Theme]\nName=%s\nComment=Chrome Glass remaster - "
+                           "redrawn to stay sharp from 32 to 512 px\nInherits=Adwaita\n" % THEME,
+            "cursor.theme": "[Icon Theme]\nName=%s\nInherits=%s\n" % (THEME, THEME)}
+
+
+def build_linux(dist):
+    out = os.path.join(dist, "linux", THEME)
+    cur = os.path.join(out, "cursors")
+    os.makedirs(cur, exist_ok=True)
+    aliases = {}
+    for role, names in XROLES.items():
+        imgs = []
+        if role in ANIM:
+            for size in ANI_SIZES:
+                # interp=False: Xcursor animated cursors (GNOME/Mutter) flicker
+                # at the interpolated 60 fps cadence on at least one hybrid
+                # Intel+NVIDIA X11 setup - the swap has no compositor-side
+                # frame sync, so on a 60 Hz panel it periodically lands out of
+                # phase with the refresh. The author's native ~20 fps cadence
+                # (same as Handwriting/NO) doesn't reproduce it. Windows .ani
+                # plays it too since 2026-10-27.
+                frames, rates = H.anim_frames(role, size, interp=False)
+                hx, hy = _scale_hot(role, size)
+                for img, rate in zip(frames, rates):
+                    imgs.append(_pack_ximage(size, img, hx, hy, _jiffies_ms(rate)))
+        else:
+            for size in LINUX_SIZES:
+                hx, hy = _scale_hot(role, size)
+                imgs.append(_pack_ximage(size, static_image(role, size), hx, hy, 0))
+        data = _xcursor(imgs)
+        real = os.path.join(cur, names[0])
+        open(real, "wb").write(data)
+        for alias in names[1:]:
+            shutil.copyfile(real, os.path.join(cur, alias))
+        aliases[names[0]] = names[1:]
+    for fn, text in _theme_files().items():
+        open(os.path.join(out, fn), "w", newline="\n").write(text)
+    build_hyprcursor(out)
+    return out, aliases
+
+
+HYPR_DIR = "hyprcursors"
+
+
+def _hypr_shapes():
+    """(role, shape, override names, [(size, image, delay_ms | None)]) for
+    every XROLES role: the Xcursor sizes and frames, PNG instead of
+    premultiplied ARGB. Hex names stay out: only X11 clients ask by them."""
+    for role, names in XROLES.items():
+        over = [n for n in names[1:] if not (len(n) == 32 and all(c in "0123456789abcdef" for c in n))]
+        if role in ANIM:
+            imgs = []
+            for size in ANI_SIZES:
+                frames, rates = H.anim_frames(role, size, interp=False)
+                imgs += [(size, f, _jiffies_ms(r)) for f, r in zip(frames, rates)]
+        else:
+            imgs = [(size, static_image(role, size), None) for size in LINUX_SIZES]
+        yield role, names[0], over, imgs
+
+
+def build_hyprcursor(out):
+    """A hyprcursor theme beside the Xcursor one in the same directory, laid
+    out as hyprcursor-util --create does: manifest.hl, and per shape a zip
+    (.hlc) of meta.hl and its PNGs. Hyprland reads it in place of cursors/ and
+    scales between our sizes itself.
+
+    The hotspot is a fraction of the canvas, one for all sizes, so a centred
+    cursor lands on the canvas centre: a pixel right and down of the Xcursor
+    one, which takes the pixel inside his."""
+    d = os.path.join(out, HYPR_DIR)
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(out, "manifest.hl"), "w", newline="\n").write(
+        "name = %s\ndescription = The 2006 Chrome Glass cursors, redrawn to stay "
+        "sharp from 32 to 512 px\nversion = %s\ncursors_directory = %s\n"
+        % (THEME, VERSION, HYPR_DIR))
+    for role, shape, over, imgs in _hypr_shapes():
+        hx, hy = _hot_point(role)
+        meta = ["resize_algorithm = bilinear",
+                "hotspot_x = %.4f" % (hx / 32), "hotspot_y = %.4f" % (hy / 32)]
+        meta += ["define_override = %s" % n for n in over]
+        files = [("meta.hl", None)]
+        for k, (size, img, delay) in enumerate(imgs):
+            fn = "%d_%d.png" % (size, k)
+            b = io.BytesIO()
+            img.convert("RGBA").save(b, "PNG", optimize=True)
+            files.append((fn, b.getvalue()))
+            meta.append("define_size = %d, %s" % (size, fn) + (", %d" % delay if delay else ""))
+        files[0] = ("meta.hl", ("\n".join(meta) + "\n").encode())
+        # a fixed timestamp: the same pixels make the same bytes
+        with zipfile.ZipFile(os.path.join(d, shape + ".hlc"), "w") as z:
+            for fn, data in files:
+                zi = zipfile.ZipInfo(fn, (1980, 1, 1, 0, 0, 0))
+                zi.compress_type = zipfile.ZIP_DEFLATED if fn == "meta.hl" else zipfile.ZIP_STORED
+                z.writestr(zi, data)
+
+
+# ----------------------------------------------------------------------------- packaging
+def _tar(entries, mtime):
+    """entries: (arcname, data_bytes | None, mode, linkname | None)."""
+    raw = io.BytesIO()
+    tf = tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT)
+    seen = set()
+    def adddir(p):
+        c = "."
+        for part in p.strip("/").split("/"):
+            c += "/" + part
+            if c not in seen:
+                seen.add(c)
+                ti = tarfile.TarInfo(c); ti.type = tarfile.DIRTYPE
+                ti.mode = 0o755; ti.mtime = mtime; tf.addfile(ti)
+    for arc, data, mode, link in entries:
+        dn = os.path.dirname(arc)
+        if dn: adddir(dn)
+        ti = tarfile.TarInfo("./" + arc); ti.mode = mode; ti.mtime = mtime
+        if link is not None:
+            ti.type = tarfile.SYMTYPE; ti.linkname = link
+            tf.addfile(ti)
+        else:
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+    tf.close()
+    return raw.getvalue()
+
+
+def _tar_xz(entries, mtime):
+    # raw ARGB frames: xz takes them a third smaller than gzip -9, and
+    # dpkg-deb itself defaults to it (preset 6 is its level too)
+    return lzma.compress(_tar(entries, mtime), format=lzma.FORMAT_XZ, preset=6)
+
+
+def _tar_gz(entries, mtime):
+    gz = io.BytesIO()
+    with gzip.GzipFile(fileobj=gz, mode="wb", mtime=mtime) as g:
+        g.write(_tar(entries, mtime))
+    return gz.getvalue()
+
+
+def _linux_entries(linux_dir, aliases, root):
+    """Real files once, aliases as symlinks (saves ~85% of the payload)."""
+    alias_of = {a: real for real, al in aliases.items() for a in al}
+    entries = []
+    for r, _, files in os.walk(linux_dir):
+        for fn in sorted(files):
+            rel = os.path.relpath(os.path.join(r, fn), linux_dir).replace("\\", "/")
+            arc = root + "/" + rel
+            if fn in alias_of and rel.startswith("cursors/"):
+                entries.append((arc, None, 0o777, alias_of[fn]))
+            else:
+                entries.append((arc, open(os.path.join(r, fn), "rb").read(), 0o644, None))
+    return entries
+
+
+MAINTAINER = "mikedigriz <mikedigriz@users.noreply.github.com>"
+HOMEPAGE = "https://github.com/mikedigriz/" + PKG
+
+
+def _deb_changelog(mtime):
+    """gzipped Debian changelog - Policy 12.7 makes it mandatory, and lintian
+    fails the package without it.
+
+    Generated rather than kept in the repository: the only fact it can state is
+    which version this is, and that already lives in the git tag. gzip mtime is
+    pinned to 0 so the member is byte-stable across builds."""
+    import email.utils, datetime
+    when = email.utils.format_datetime(
+        datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc))
+    text = ("%s (%s) unstable; urgency=medium\n\n"
+            "  * Release %s. Release notes: %s/releases\n\n"
+            " -- %s  %s\n" % (PKG, VERSION, VERSION, HOMEPAGE, MAINTAINER, when))
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=9, mtime=0) as g:
+        g.write(text.encode())
+    return buf.getvalue()
+
+
+def _deb_scripts():
+    """(postinst, prerm) of the .deb."""
+    # The alternative is the system's "default" cursor theme, of which
+    # libXcursor reads one key: Inherits. cursor.theme inherits this theme;
+    # index.theme inherits Adwaita for the names it lacks, and registered in
+    # its place up to 1.1.0 the pick resolved to Adwaita outright. Priority 20
+    # leaves auto mode to Adwaita's 90 (xcursor-themes ships 30): the entry
+    # makes the theme a choice in `update-alternatives --config
+    # x-cursor-theme`, and a manual pick is never overridden.
+    theme_dir = "/usr/share/icons/%s" % THEME
+    sh_vars = "old='%s/index.theme'\nnew='%s/cursor.theme'\n" % (theme_dir, theme_dir)
+    postinst = (
+        "#!/bin/sh\nset -e\n" + sh_vars +
+        "if command -v update-alternatives >/dev/null 2>&1; then\n"
+        # /usr/share/icons/default is normally provided by another package;
+        # on a bare system it does not exist and update-alternatives refuses
+        # to create the link, which under `set -e` fails the whole install.
+        "    mkdir -p /usr/share/icons/default\n"
+        "    update-alternatives --install /usr/share/icons/default/index.theme "
+        "x-cursor-theme \"$new\" 20\n"
+        # An upgrade keeps the old registration (prerm drops it on removal
+        # only). A manual pick of it moves to the new one.
+        "    if update-alternatives --list x-cursor-theme 2>/dev/null"
+        " | grep -qxF \"$old\"; then\n"
+        "        q=$(update-alternatives --query x-cursor-theme)\n"
+        "        update-alternatives --remove x-cursor-theme \"$old\"\n"
+        "        if printf '%s\\n' \"$q\" | grep -qx 'Status: manual' &&\n"
+        "           printf '%s\\n' \"$q\" | grep -qxF \"Value: $old\"; then\n"
+        "            update-alternatives --set x-cursor-theme \"$new\"\n"
+        "        fi\n"
+        "    fi\n"
+        "fi\n"
+        "exit 0\n")
+    prerm = (
+        "#!/bin/sh\nset -e\n" + sh_vars +
+        'if [ "$1" = remove ] || [ "$1" = deconfigure ]; then\n'
+        "    if command -v update-alternatives >/dev/null 2>&1; then\n"
+        "        update-alternatives --remove x-cursor-theme \"$new\"\n"
+        "    fi\nfi\n"
+        "exit 0\n")
+    return postinst, prerm
+
+
+def build_deb(linux_dir, aliases, packages):
+    os.makedirs(packages, exist_ok=True)
+    mtime = int(time.time())
+    root = "usr/share/icons/" + THEME
+    entries = _linux_entries(linux_dir, aliases, root)
+    # Policy 12.5: every package needs a copyright file. LICENSE covers the
+    # code, NOTICE the artwork, and both matter here.
+    copyright_txt = b"\n\n".join(open(os.path.join(ROOT, fn), "rb").read() for fn in LEGAL)
+    entries.append(("usr/share/doc/%s/copyright" % PKG, copyright_txt, 0o644, None))
+    entries.append(("usr/share/doc/%s/changelog.gz" % PKG, _deb_changelog(mtime), 0o644, None))
+    total = sum(len(d) for _, d, _, _ in entries if d)
+    md5 = ["%s  %s" % (hashlib.md5(d).hexdigest(), arc)
+           for arc, d, _, link in entries if link is None]
+    data_tar = _tar_xz(entries, mtime)
+    control = (f"Package: {PKG}\nVersion: {VERSION}\nArchitecture: all\n"
+               f"Maintainer: {MAINTAINER}\n"
+               f"Installed-Size: {max(1,total//1024)}\n"
+               f"Section: x11\nPriority: optional\n"
+               f"Homepage: {HOMEPAGE}\n"
+               f"Description: {THEME} cursor theme\n"
+               f" The 2006 Chrome Glass cursors, redrawn to stay sharp from 32 to 512 px.\n")
+    postinst, prerm = _deb_scripts()
+    ctl = _tar_gz([("control", control.encode(), 0o644, None),
+                   ("md5sums", ("\n".join(md5) + "\n").encode(), 0o644, None),
+                   ("postinst", postinst.encode(), 0o755, None),
+                   ("prerm", prerm.encode(), 0o755, None)], mtime)
+    def ar(name, dd):
+        h = "%-16s%-12d%-6d%-6d%-8o%-10d`\n" % (name, mtime, 0, 0, 0o100644, len(dd))
+        return h.encode() + dd + (b"\n" if len(dd) % 2 else b"")
+    deb = b"!<arch>\n" + ar("debian-binary", b"2.0\n") + ar("control.tar.gz", ctl) + ar("data.tar.xz", data_tar)
+    path = os.path.join(packages, f"{PKG}_{VERSION}_all.deb")
+    open(path, "wb").write(deb)
+    return path
+
+
+# ----------------------------------------------------------------------------- macOS (Mousecape)
+# macOS has no system cursor themes; Mousecape applies "capes". Only cursor
+# identifiers with a confident mapping are included - Mousecape leaves the
+# rest at the system default.
+# Identifiers checked against cursorMap() in Mousecape's mousecloak/MCDefs.m.
+# com.apple.cursor.3 is "Forbidden", NOT the crosshair it was mapped to here -
+# the cape was replacing the no-entry cursor with a plus sign. The crosshair is
+# com.apple.cursor.7. com.apple.cursor.13 ("Pointing") was already right.
+MAC_CURSORS = [
+    ("com.apple.coregraphics.Arrow", "Arrow", False),
+    ("com.apple.coregraphics.IBeam", "IBeam", False),
+    ("com.apple.coregraphics.Move", "SizeAll", False),
+    ("com.apple.coregraphics.Wait", "Wait", True),
+    ("com.apple.cursor.7", "Cross", False),        # Crosshair
+    ("com.apple.cursor.13", "Hand", False),        # Pointing
+    ("com.apple.cursor.3", "NO", False),           # Forbidden
+    ("com.apple.cursor.40", "Help", False),        # Help
+    ("com.apple.cursor.23", "SizeNS", False),      # Resize N-S
+    ("com.apple.cursor.28", "SizeWE", False),      # Resize E-W
+    ("com.apple.cursor.30", "SizeNESW", False),    # Resize NE-SW
+    ("com.apple.cursor.34", "SizeNWSE", False),    # Resize NW-SE
+    # The same calls XROLES makes on Linux: a one-way resize gets the two-way
+    # arrow of its axis, the grab hands the pointing one, the arrow that tells
+    # of another operation the blue one. ArrowCtx is left alone: apply.m takes
+    # it for an Arrow synonym and would put the blue arrow on every Arrow.
+    ("com.apple.cursor.19", "SizeWE", False),      # Resize W-E
+    ("com.apple.cursor.17", "SizeWE", False),      # Resize W
+    ("com.apple.cursor.18", "SizeWE", False),      # Resize E
+    ("com.apple.cursor.27", "SizeWE", False),      # Window E
+    ("com.apple.cursor.38", "SizeWE", False),      # Window W
+    ("com.apple.cursor.32", "SizeNS", False),      # Window N-S
+    ("com.apple.cursor.21", "SizeNS", False),      # Resize N
+    ("com.apple.cursor.22", "SizeNS", False),      # Resize S
+    ("com.apple.cursor.31", "SizeNS", False),      # Window N
+    ("com.apple.cursor.36", "SizeNS", False),      # Window S
+    ("com.apple.cursor.29", "SizeNESW", False),    # Window NE
+    ("com.apple.cursor.37", "SizeNESW", False),    # Window SW
+    ("com.apple.cursor.33", "SizeNWSE", False),    # Window NW
+    ("com.apple.cursor.35", "SizeNWSE", False),    # Window SE
+    ("com.apple.cursor.8", "Cross", False),        # Crosshair 2
+    ("com.apple.cursor.41", "Cross", False),       # Cell
+    ("com.apple.cursor.12", "Hand", False),        # Open
+    ("com.apple.cursor.11", "Hand", False),        # Closed
+    ("com.apple.cursor.4", "AppStarting", True),   # Busy
+    ("com.apple.coregraphics.Copy", "Arrow_Down", False),
+    ("com.apple.coregraphics.Alias", "Arrow_Down", False),
+    ("com.apple.cursor.5", "Arrow_Down", False),   # Copy Drag
+    ("com.apple.cursor.2", "Arrow_Down", False),   # Link
+    ("com.apple.cursor.24", "Arrow_Down", False),  # Ctx Menu
+]
+MAC_SCALES = [1, 2, 5, 10]                         # points x scale = pixels
+# 10x for a Retina screen (2x) with the pointer size slider near its 4x end,
+# which asks for more than 5x. Mousecape hands every representation to the
+# system as is (apply.m), the system picks by pixel size.
+MAC_MAX_FRAMES = 24     # MCMaxFrameCount: apply.m refuses a cursor with more
+
+
+def _cape_strip(name, animated, scale):
+    """Vertical film strip (Mousecape layout) of all frames at one scale, the
+    frame count and the one FrameDuration a cape has, in seconds."""
+    size = 32 * scale
+    duration = 1.0 / 60.0
+    if animated:
+        # The author's keys at his own pace: the 60 fps sweep is 27 frames and
+        # Mousecape refuses to apply more than MAC_MAX_FRAMES.
+        frames, rates = H.anim_frames(name, size, interp=False)
+        assert len(frames) <= MAC_MAX_FRAMES and len(set(rates)) == 1, (name, rates)
+        duration = rates[0] / 60.0
+    elif name in ANIM:
+        # A cape has one FrameDuration, so it cannot express the author's
+        # "play once, then hold" rate chunk. Ship the settled last frame
+        # instead of frame 0, which is the start of the draw-on.
+        frames = [H.frame_image(name, len(H.BY_NAME[name]["frames"]) - 1, size)]
+    else:
+        frames = [static_image(name, size)]
+    strip = Image.new("RGBA", (size, size * len(frames)), (0, 0, 0, 0))
+    for i, f in enumerate(frames):
+        strip.alpha_composite(f, (0, i * size))
+    buf = io.BytesIO()
+    strip.save(buf, "PNG")
+    return buf.getvalue(), len(frames), duration
+
+
+def _cape_version(ver):
+    """'1.2.5' -> 1.0205: monotonic in a single float, two digits per component."""
+    parts = [int(p) for p in ver.split(".")[:3] if p.isdigit()]
+    parts += [0] * (3 - len(parts))
+    return parts[0] + parts[1] / 100.0 + parts[2] / 10000.0
+
+
+def build_mac(packages):
+    import plistlib
+    cursors, strips = {}, {}
+    for ident, name, animated in MAC_CURSORS:
+        if (name, animated) not in strips:      # one cursor serves several ids
+            strips[name, animated] = [_cape_strip(name, animated, sc) for sc in MAC_SCALES]
+        reps = [data for data, _, _ in strips[name, animated]]
+        _, nframes, duration = strips[name, animated][0]
+        hx, hy = _hot_point(name)
+        cursors[ident] = {
+            "FrameCount": nframes,
+            "FrameDuration": duration,
+            "HotSpotX": float(hx), "HotSpotY": float(hy),
+            "PointsWide": 32.0, "PointsHigh": 32.0,
+            "Representations": reps,
+        }
+    cape = {
+        "Author": "Chrome Glass Remastered",
+        "CapeName": THEME,
+        # Mousecape wants a number, so fold the patch component in rather than
+        # dropping it - "1.0.5" used to become 1.0 and no patch release ever
+        # looked newer than the one before it.
+        "CapeVersion": _cape_version(VERSION),
+        "Cloud": False,
+        "HiDPI": True,
+        "Identifier": "com.github.chrome-glass-remastered",
+        "MinimumVersion": 2.0,
+        "Version": 2.0,
+        "Cursors": cursors,
+    }
+    path = os.path.join(packages, "ChromeGlassRemastered.cape")
+    with open(path, "wb") as f:
+        plistlib.dump(cape, f, fmt=plistlib.FMT_XML)
+    return path
+
+
+def build_artifacts(win_dir, linux_dir, aliases, packages):
+    os.makedirs(packages, exist_ok=True)
+    zpath = os.path.join(packages, "ChromeGlassRemastered-windows.zip")
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+        for fn in sorted(os.listdir(win_dir)):
+            if fn not in WIN_UNSHIPPED:
+                z.write(os.path.join(win_dir, fn), THEME + "/" + fn)
+        for fn in LEGAL:
+            z.write(os.path.join(ROOT, fn), THEME + "/" + fn)
+    tpath = os.path.join(packages, "ChromeGlassRemastered-linux.tar.xz")
+    entries = _linux_entries(linux_dir, aliases, THEME)
+    entries += [(THEME + "/" + fn, open(os.path.join(ROOT, fn), "rb").read(), 0o644, None)
+                for fn in LEGAL]
+    open(tpath, "wb").write(_tar_xz(entries, int(time.time())))
+    return zpath, tpath
+
+
+# ----------------------------------------------------------------------------- previews
+def _onbg(im, light=(244, 244, 246), dark=(222, 222, 226)):
+    b = Image.new("RGB", im.size, light); px = b.load()
+    for y in range(im.size[1]):
+        for x in range(im.size[0]):
+            if (x // 10 + y // 10) % 2 == 0: px[x, y] = dark
+    b = b.convert("RGBA"); b.alpha_composite(im); return b
+
+
+_PREVIEW_ORDER = ["Arrow", "Help", "IBeam", "Cross", "SizeAll", "SizeNS", "SizeWE",
+                  "SizeNWSE", "SizeNESW", "UpArrow", "Pin", "Person",
+                  "NO", "Wait", "AppStarting"]
+_PREVIEW_STILL = {"NO": 7}          # the animated tile's frame; 2 for the others
+
+
+def _preview_needs(name, idx):
+    """Is (name, idx) a frame build_preview draws?"""
+    if name not in _PREVIEW_ORDER:
+        return False
+    return idx == (_PREVIEW_STILL.get(name, 2) if name in ANIM else 0)
+
+
+def build_preview(root=None):
+    # Hand and Handwriting are skipped here: in the 2006 original they're the
+    # same arrow silhouette as Arrow with only a per-frame shimmer, so a single
+    # still frame just duplicates the Arrow tile. They're still built and
+    # shipped - only this showcase grid leaves them out, and assets/animations
+    # shows them moving, which is the only way they read as distinct anyway.
+    # Arrow_Down is left out for the opposite reason: WIN_UNSHIPPED keeps it out
+    # of the archive, so putting it in the showcase advertises a cursor nobody
+    # who downloads the release actually gets.
+    order = _PREVIEW_ORDER
+    # 5 columns divides the 15 tiles evenly, and the labels are sized for what
+    # a README actually shows: GitHub caps the content column near 880 px, so
+    # a 1092 px sheet lands close to 1:1 instead of shrinking the text to mush.
+    cell, pad, cols, lab = PREVIEW_CELL, 22, 5, 34
+    rows = (len(order) + cols - 1) // cols
+    # the cursors are pale translucent glass, invisible on white - use a dark
+    # sheet with a subtle checkerboard so every one of them reads. Render each
+    # at 192px, drawn at that size, so nothing looks soft.
+    sheet = Image.new("RGBA", (pad + cols * (cell + pad), pad + rows * (cell + pad + lab)), (43, 45, 51, 255))
+    d = ImageDraw.Draw(sheet)
+    f = _font(26)
+    # Frame 2 reads fine for the cursors that only shimmer, but NO animates a
+    # red forbidden sign growing from nothing, and frame 2 catches it as a red
+    # smear across the arrow. 7 of its 11 is the last frame where the sign is
+    # complete and still fits the cell - past that it outgrows the frame and
+    # clips, and it also hides the arrow underneath.
+    still = _PREVIEW_STILL
+    for i, name in enumerate(order):
+        if name in ANIM:
+            img = H.frame_image(name, still.get(name, 2), cell)
+        else:
+            img = static_image(name, cell)
+        r, c = divmod(i, cols); x = pad + c * (cell + pad); y = pad + r * (cell + pad + lab)
+        sheet.alpha_composite(_onbg(img, light=(84, 87, 96), dark=(66, 69, 77)), (x, y))
+        d.text((x + 2, y + cell + 3), name, fill=(198, 200, 206), font=f)
+    assets = os.path.join(root, "assets") if root else ASSETS
+    os.makedirs(assets, exist_ok=True)
+    sheet.convert("RGB").save(os.path.join(assets, "preview.png"))
+
+
+def _pad(img, box):
+    c = Image.new("RGBA", (box, box), (0, 0, 0, 0))
+    c.alpha_composite(img, ((box - img.size[0]) // 2, (box - img.size[1]) // 2))
+    return c
+
+
+def _gif_frame(rgba, bg=(248, 248, 250)):
+    flat = Image.new("RGB", rgba.size, bg); flat.paste(rgba, (0, 0), rgba)
+    return flat.quantize(colors=256, method=Image.MEDIANCUT, dither=Image.NONE)
+
+
+# Lossless webp on a 27-frame animation is what made assets/animations.webp
+# 914 KB - a README-only asset heavier than any release artifact, re-fetched on
+# every page view. These are translucent glass gradients viewed at a couple of
+# hundred pixels; q=90 is indistinguishable and roughly a tenth the bytes.
+#
+# method is encoder effort, not quality. Measured on the combined strip: method 6
+# takes 117 s on one core for 645 KB, method 4 takes 1.9 s for 680 KB (+5%) at
+# the same error (premultiplied rgb mse 1.65 vs 1.63, alpha exact in both), so
+# the two minutes of one core that used to end every build are not worth 35 KB.
+# CGR_WEBP_METHOD=6 gives the smallest files back, for a release.
+_WEBP = dict(lossless=False, quality=90, method=int(os.environ.get("CGR_WEBP_METHOD", "4")))
+
+# GIF counts delay in centiseconds, and browsers (and ffmpeg) play 0 or 1 of
+# them as 10: the 17 ms a frame the cursors run at went out as 1 cs, so the
+# per-cursor gifs looped in 2.7 s instead of 0.45. 20 ms is the nearest delay
+# they keep.
+_GIF_MIN_MS = 20
+
+
+def _gif_ms(ms):
+    return max(int(ms), _GIF_MIN_MS)
+
+
+def _encode_anim_job(job):
+    """One webp + one gif, from already-rendered frames. Runs in a worker
+    process: webp at method=6 is the whole cost of this phase - measured,
+    17-18s a cursor and 122s for the combined strip alone, one core each and
+    nothing else running while it does - and every file is independent of
+    every other, so six cores each doing one file beats one core doing six.
+    Frames travel as plain arrays because a worker process does not have this
+    module's own PIL.Image instances; same pixels, same encoder, same
+    settings, so the bytes this writes are what the sequential loop used to
+    write - verified with a byte-for-byte diff before this replaced it."""
+    webp_path, gif_path, arrays, duration, gif_duration = job
+    frames = [Image.fromarray(a, "RGBA") for a in arrays]
+    frames[0].save(webp_path, save_all=True, append_images=frames[1:],
+                   duration=duration, loop=0, **_WEBP)
+    gif = [_gif_frame(f) for f in frames]
+    gif[0].save(gif_path, save_all=True, append_images=gif[1:],
+               duration=gif_duration, loop=0, disposal=2, optimize=True)
+
+
+def build_animations(root=None, defer=False):
+    assets = os.path.join(root, "assets") if root else ASSETS
+    os.makedirs(assets, exist_ok=True)
+    # Only clear what this function rewrites. Wiping the whole directory also
+    # took assets/social-preview.png with it - that one is committed and comes
+    # from tools/gen_social_preview.py, which the build never calls, so every
+    # build silently deleted the repo's cover image.
+    stale = [n + ext for n in ANIM for ext in (".webp", ".gif")]
+    stale += ["animations.webp", "animations.gif"]
+    for fn in stale:
+        p = os.path.join(assets, fn)
+        if os.path.exists(p): os.remove(p)
+    disp = 128
+    jobs = []
+    for name in ANIM:
+        frames, rates = H.anim_frames(name, disp)
+        # previews loop: cap the author's freeze-forever at 2 s
+        durs = [min(_jiffies_ms(r), 2000) for r in rates]
+        rgba = [_pad(f, disp + 32) for f in frames]
+        jobs.append((os.path.join(assets, name + ".webp"),
+                    os.path.join(assets, name + ".gif"),
+                    [np.asarray(f) for f in rgba], durs, [_gif_ms(d) for d in durs]))
+    # Combined strip at 60 fps, and the heaviest asset in the repo: 27 frames of
+    # the full width, re-fetched on every README view. 128 px cells made a 712 px
+    # sheet that every README then stretched to its ~880 px content column, so it
+    # showed blurry as well. 160 px puts the sheet at 884 px, near enough 1:1 that
+    # nothing is resampled either way - and since weight here scales with pixels
+    # rather than with quality (dropping q from 90 to 70 buys ~11%, visibly),
+    # sizing the sheet to the column is the whole optimisation.
+    # The cells stay unlabelled and the sheet stays transparent on purpose: text
+    # baked in here would be one language only, and a fill light enough to read
+    # on GitHub's dark theme disappears on the light one. The READMEs name the
+    # five in order in their own prose.
+    jobs.append(_strip_job(assets, {n: H.anim_frames(n, ANIM_STRIP_BOX)[0] for n in ANIM}))
+    # the strip alone is ~2 min of one core; the encoders run beside the checks
+    # when the caller asks (defer) and only finish() has to wait for them
+    from . import gpu
+    ex = cf.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 1, len(jobs)),
+                                initializer=gpu.lower_priority)
+    futs = [ex.submit(_encode_anim_job, j) for j in reversed(jobs)]   # the strip first
+
+    def finish():
+        try:
+            for f in futs:
+                f.result()
+        finally:
+            ex.shutdown()
+        for job in jobs:
+            with Image.open(job[1]) as g:
+                for i in range(g.n_frames):
+                    g.seek(i)
+                    assert g.info["duration"] >= _GIF_MIN_MS, \
+                        f"{_rel(job[1])} frame {i}: {g.info['duration']} ms, browsers play it as 100"
+
+    if defer:
+        return assets, finish
+    finish()
+    return assets
+
+
+# ----------------------------------------------------------------------------- checks
+def _font(size):
+    from PIL import ImageFont
+    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    from PIL import ImageFont as F
+    return F.load_default()
+
+
+def build_comparison(assets):
+    """assets/comparison.png: what a 4K/HiDPI screen actually shows - the 2006
+    bitmap stretched by the OS vs the remaster's native detail. Dark sheet so
+    the pale translucent glass reads.
+
+    Stacked in pairs rather than laid out in one row. Six 512 px cells side by
+    side came to 3328 px, and a README scales that to its ~880 px column: a 3.8x
+    downscale, which resamples away the exact stair-stepping the picture exists
+    to prove. Two pairs deep is 1120 px wide, near 1:1, and the aliasing
+    survives. Arrow and Wait carry it - the pointer you look at all day, plus a
+    saturated animated one - so the third pair only added width.
+
+    Labels are bare pixel counts, and the explanatory sentence that used to be
+    drawn across the top is gone: it was English baked into a file README.ru.md
+    embeds too, so half of the Russian page's headline visual was untranslated.
+    Numbers need no translation; each README captions the picture in its own
+    language."""
+    cell, pad, lab = 512, 32, 40
+    pairs = [("Arrow", 0), ("Wait", 2)]
+    W = pad + 2 * (cell + pad)
+    height = pad + len(pairs) * (cell + lab + pad)
+    sheet = Image.new("RGBA", (W, height), (43, 45, 51, 255))
+    d = ImageDraw.Draw(sheet)
+    f = _font(28)
+    onbg = lambda im: _onbg(im, light=(84, 87, 96), dark=(66, 69, 77))
+    for i, (name, idx) in enumerate(pairs):
+        y = pad + i * (cell + lab + pad)
+        orig = H.original(name, idx).resize((cell, cell), Image.NEAREST)
+        new = H.frame_image(name, idx, cell)
+        sheet.alpha_composite(onbg(orig), (pad, y))
+        sheet.alpha_composite(onbg(new), (pad + cell + pad, y))
+        d.text((pad + 4, y + cell + 8), "32 px", fill=(232, 150, 150), font=f)
+        d.text((pad + cell + pad + 4, y + cell + 8), "512 px",
+               fill=(150, 224, 165), font=f)
+    sheet.convert("RGB").save(os.path.join(assets, "comparison.png"))
+
+
+def check_inf(win):
+    """Every filename referenced by Install.inf must exist next to it."""
+    import re
+    inf = open(os.path.join(win, "Install.inf"), encoding="utf-8").read()
+    referenced = set(re.findall(r'"([\w\-]+\.(?:cur|ani))"', inf))
+    missing = [f for f in referenced if not os.path.exists(os.path.join(win, f))]
+    if missing:
+        raise SystemExit("Install.inf references missing files: %s" % ", ".join(missing))
+    # every slot, not just the two newest - a slot silently dropping out of
+    # WIN_SLOTS used to be invisible until someone installed the scheme
+    lost = [fn for _, fn in WIN_SLOTS if fn not in referenced]
+    if lost:
+        raise SystemExit("Install.inf lost slots: %s" % ", ".join(lost))
+    for section in ("[DefaultInstall]", "[DefaultUninstall]"):
+        if section not in inf:
+            raise SystemExit("Install.inf lost %s" % section)
+
+
+def _med_alpha(img):
+    a = np.asarray(img)[..., 3].astype(float)
+    vis = a > 0.25 * a.max()
+    return float(np.median(a[vis])) if vis.any() else 0.0
+
+
+def _sat(img):
+    arr = np.asarray(img).astype(float)
+    return H._mean_sat(arr[..., :3], arr[..., 3])
+
+
+# Frames whose 32 px departs from his by design since 32 is drawn as glass
+# (2026-10-27): SizeAll's pinwheel, the Handwriting pen growing, NO's hole
+# frames, the glass of Cross/IBeam denser than his 1 px antialias. Ceilings sit
+# ~3 points above the drift measured then, so a further slide still warns.
+_ALPHA_DRIFT_CAP = {("Cross", 0): 27, ("IBeam", 0): 15, ("SizeAll", 0): 15,
+                    ("Handwriting", 5): 13, ("Handwriting", 6): 29,
+                    ("Handwriting", 8): 12, ("NO", 7): 12, ("NO", 8): 12}
+
+
+def check_metrics():
+    """Superiority metrics vs the original frames; drift prints a WARN.
+
+    Saturation is checked at 128px and at 512, the largest shipped size.
+
+    Alpha level is checked at the author's own resolution instead, against his
+    own frame. Reading our 128 or 512 median against his 32 one compares two
+    different quantities: on a thin cursor every pixel of his visible zone is
+    antialiased edge (Cross 148 of 148, IBeam 88 of 88), so that pairing scored
+    a comfortable +0.0..+2.4% while the frames it passed sat 1.4..10.7% under
+    him at his own size, worst on the grey family. See
+    hybrid._up_alpha_native, which had its anchor mismatched the same way."""
+    warns = 0
+    for name in H.STATIC + ANIM:
+        n = len(H.BY_NAME[name]["frames"])
+        for idx in range(n):
+            o = H.original(name, idx)
+            his = o.size[0]
+            mo = _med_alpha(o)
+            da = (_med_alpha(H.frame_image(name, idx, his)) - mo) / max(mo, 1e-6) * 100
+            cap = _ALPHA_DRIFT_CAP.get((name, idx), 8)
+            if abs(da) > cap:
+                print(f"  WARN {name}[{idx}]@{his}: median alpha drift {da:+.1f}% (>{cap}%)")
+                warns += 1
+            for size in (128, 512):
+                h = H.frame_image(name, idx, size)
+                so, sh = _sat(o), _sat(h)
+                sat_ok = (so <= 1e-6 or -2 <= (sh - so) / max(so, 1e-6) * 100 <= 12
+                          or abs(sh - so) <= 0.02)
+                if not sat_ok:
+                    print(f"  WARN {name}[{idx}]@{size}: saturation {so:.3f} -> {sh:.3f}")
+                    warns += 1
+    return warns
+
+
+def _rgba_equal(a_img, b_img, mask_rgb_by_alpha=False):
+    """Pixel-exact, not perceptual - this is a codec check, not a quality one.
+    .cur's 32bpp DIB only carries meaningful RGB where alpha is nonzero
+    (curlib.py's AND mask exists for legacy readers, not for us), and
+    _cape_strip's alpha_composite onto a transparent canvas zeroes RGB
+    wherever the result is fully transparent even though the canonical
+    render can carry leftover RGB there - so both .cur and .cape callers
+    pass mask_rgb_by_alpha=True. _pack_ximage premultiplies and does nothing
+    else, so Xcursor is compared in full against _xcur_expect() - the
+    writer's own helper applied to the render, not a second copy of it."""
+    a = np.asarray(a_img.convert("RGBA"))
+    b = np.asarray(b_img.convert("RGBA"))
+    if a.shape != b.shape or not np.array_equal(a[..., 3], b[..., 3]):
+        return False
+    if mask_rgb_by_alpha:
+        vis = a[..., 3] > 0
+        return np.array_equal(a[..., :3][vis], b[..., :3][vis])
+    return np.array_equal(a[..., :3], b[..., :3])
+
+
+def _xcur_expect(img):
+    """What an Xcursor chunk of the canonical render must decode to."""
+    return Image.fromarray(xcurlib.premultiply(img), "RGBA")
+
+
+def _read_cape(path):
+    """.cape -> {ident: {"HotSpotX", "HotSpotY", "FrameCount",
+    "frames_by_scale": {scale: [PIL.Image, ...]}}}. Representations are PNG
+    strips (_cape_strip's own layout); this only re-cuts them, it does not
+    invent a binary format the way xcurlib has to for Xcursor."""
+    import plistlib
+    with open(path, "rb") as fh:
+        cape = plistlib.load(fh)
+    out = {}
+    for ident, rec in cape["Cursors"].items():
+        nf = rec["FrameCount"]
+        frames_by_scale = {}
+        for sc, blob in zip(MAC_SCALES, rec["Representations"]):
+            strip = Image.open(io.BytesIO(blob)).convert("RGBA")
+            size = 32 * sc
+            frames_by_scale[sc] = [strip.crop((0, i * size, size, (i + 1) * size))
+                                   for i in range(nf)]
+        assert 1 <= nf <= MAC_MAX_FRAMES, f"{ident} cape FrameCount {nf}, Mousecape refuses it"
+        out[ident] = {"FrameCount": nf, "FrameDuration": rec["FrameDuration"],
+                     "HotSpotX": rec["HotSpotX"],
+                     "HotSpotY": rec["HotSpotY"], "frames_by_scale": frames_by_scale}
+    return out
+
+
+def check_packages(win, lin, aliases, cape):
+    """Round-trip every package this build wrote: decode what actually landed
+    on disk and compare it, pixel for pixel, to the canonical render still in
+    cache from _warm_frames() - no re-rendering, so this costs seconds. A
+    check on the codecs (curlib, xcurlib, plistlib), not on rendered quality -
+    that question belongs to tools/analyze.py and tools/visual_audit.py."""
+    for name in STATIC:
+        frames = curlib.read_cur(open(os.path.join(win, name + ".cur"), "rb").read())
+        sizes = sorted(f["img"].size[0] for f in frames)
+        assert sizes == sorted(SIZES), f"{name}.cur sizes {sizes}"
+        for f, s in zip(frames, SIZES):
+            hx, hy = _scale_hot(name, s)
+            assert (f["hx"], f["hy"]) == (hx, hy), \
+                f"{name}.cur[{s}] hotspot {(f['hx'], f['hy'])} != {(hx, hy)}"
+            assert _rgba_equal(f["img"], static_image(name, s), mask_rgb_by_alpha=True), \
+                f"{name}.cur[{s}] pixels != canonical render"
+    for name in ANIM:
+        ani = curlib.read_ani(open(os.path.join(win, name + ".ani"), "rb").read())
+        nf = struct.unpack_from("<I", ani["anih"], 4)[0]
+        disp = struct.unpack_from("<I", ani["anih"], 28)[0]
+        sizes = sorted(f["img"].size[0] for f in curlib.read_cur(ani["frames"][0]))
+        assert sizes == sorted(ANI_SIZES_WIN), f"{name}.ani frame sizes {sizes}"
+        # LoadImageW took a 69042-byte frame and refused a 71914-byte one
+        big = max(len(f) for f in ani["frames"])
+        assert big <= 69000, f"{name}.ani frame of {big} bytes, Windows refuses it"
+        orig_rates = H.BY_NAME[name]["rates"]
+        # his frames at his rates: a uniform cycle carries them in the anih
+        # alone, as stock aero does, the rest keep the rate chunk
+        got = ani["rates"] if ani["rates"] is not None else [disp] * nf
+        assert nf == len(orig_rates) and got == list(orig_rates),             f"{name}.ani must keep the author's frames and rates"
+        if name in H.INTERP:
+            uniq = len({f for f in ani["frames"]})
+            assert uniq == nf, f"{name}.ani only {uniq}/{nf} distinct frames"
+        per_size = {s: H.anim_frames(name, s, interp=False)[0] for s in ANI_SIZES_WIN}
+        for i in range(nf):
+            by_size = {f["img"].size[0]: f for f in curlib.read_cur(ani["frames"][i])}
+            for s in ANI_SIZES_WIN:
+                f = by_size[s]
+                hx, hy = _scale_hot(name, s)
+                assert (f["hx"], f["hy"]) == (hx, hy), \
+                    f"{name}.ani[{i}][{s}] hotspot {(f['hx'], f['hy'])} != {(hx, hy)}"
+                assert _rgba_equal(f["img"], per_size[s][i], mask_rgb_by_alpha=True), \
+                    f"{name}.ani[{i}][{s}] pixels != canonical render"
+    print("  .cur: %d cursors x %d sizes (incl. 256px)" % (len(STATIC), len(SIZES)))
+    print("  .ani: the author's frames and timing (%s)" % ", ".join(ANIM))
+
+    for role, names in XROLES.items():
+        real_path = os.path.join(lin, "cursors", names[0])
+        data = open(real_path, "rb").read()
+        chunks = xcurlib.read_xcursor(data)
+        if role in ANIM:
+            idx = 0
+            for size in ANI_SIZES:
+                frames, rates = H.anim_frames(role, size, interp=False)
+                for img, rate in zip(frames, rates):
+                    c = chunks[idx]
+                    hx, hy = _scale_hot(role, size)
+                    assert c["size"] == size and (c["hx"], c["hy"]) == (hx, hy), \
+                        f"{role} xcursor[{idx}] size/hotspot mismatch"
+                    assert c["delay"] == _jiffies_ms(rate), \
+                        f"{role} xcursor[{idx}] delay {c['delay']} != {_jiffies_ms(rate)}"
+                    assert _rgba_equal(c["img"], _xcur_expect(img)), \
+                        f"{role} xcursor[{idx}] pixels"
+                    idx += 1
+            assert idx == len(chunks), f"{role} xcursor chunk count {len(chunks)} != {idx}"
+        else:
+            assert len(chunks) == len(LINUX_SIZES), f"{role} xcursor chunk count"
+            for c, size in zip(chunks, LINUX_SIZES):
+                hx, hy = _scale_hot(role, size)
+                assert c["size"] == size and (c["hx"], c["hy"]) == (hx, hy), \
+                    f"{role} xcursor[{size}] hotspot mismatch"
+                assert c["delay"] == 0, f"{role} xcursor[{size}] delay {c['delay']} != 0"
+                assert _rgba_equal(c["img"], _xcur_expect(static_image(role, size))), \
+                    f"{role} xcursor[{size}] pixels != canonical render"
+        for alias in names[1:]:
+            assert open(os.path.join(lin, "cursors", alias), "rb").read() == data, \
+                f"{role} alias {alias} != {names[0]}"
+        assert aliases[names[0]] == names[1:], f"{role} alias list drifted"
+    print("  xcursor: %d roles, aliases byte-identical to their real file" % len(XROLES))
+    check_hyprcursor(lin)
+    print("  hyprcursor: %d shapes, frames equal to the render" % len(XROLES))
+
+    cape_data = _read_cape(cape)
+    for ident, name, animated in MAC_CURSORS:
+        rec = cape_data[ident]
+        hx, hy = _hot_point(name)
+        assert (rec["HotSpotX"], rec["HotSpotY"]) == (float(hx), float(hy)), \
+            f"{name} cape hotspot mismatch"
+        for sc in MAC_SCALES:
+            size = 32 * sc
+            got = rec["frames_by_scale"][sc]
+            if animated:
+                want, rates = H.anim_frames(name, size, interp=False)
+                assert rec["FrameDuration"] == rates[0] / 60.0, f"{name} cape FrameDuration"
+            elif name in ANIM:
+                want = [H.frame_image(name, len(H.BY_NAME[name]["frames"]) - 1, size)]
+            else:
+                want = [static_image(name, size)]
+            assert len(got) == len(want) == rec["FrameCount"], \
+                f"{name} cape[{sc}] frame count {len(got)} != {len(want)}"
+            for g, w in zip(got, want):
+                assert _rgba_equal(g, w, mask_rgb_by_alpha=True), \
+                    f"{name} cape[{sc}] pixels != canonical render"
+    print("  cape: %d cursors x %d scales" % (len(MAC_CURSORS), len(MAC_SCALES)))
+
+
+def check_hyprcursor(lin):
+    """Each .hlc read back: meta.hl's sizes, delays, hotspot and overrides, and
+    every PNG equal to the frame it stands for."""
+    import re
+    man = open(os.path.join(lin, "manifest.hl"), encoding="utf-8").read()
+    assert "cursors_directory = %s\n" % HYPR_DIR in man, "manifest.hl cursors_directory"
+    d = os.path.join(lin, HYPR_DIR)
+    shapes = list(_hypr_shapes())
+    assert set(os.listdir(d)) == {sh + ".hlc" for _, sh, _, _ in shapes}, \
+        f"hyprcursors/ holds {sorted(os.listdir(d))}"
+    for role, shape, over, imgs in shapes:
+        with zipfile.ZipFile(os.path.join(d, shape + ".hlc")) as z:
+            meta = z.read("meta.hl").decode()
+            assert re.findall(r"^define_override = (.+)$", meta, re.M) == over, f"{shape} overrides"
+            hx, hy = _hot_point(role)
+            assert "hotspot_x = %.4f\n" % (hx / 32) in meta and \
+                "hotspot_y = %.4f\n" % (hy / 32) in meta, f"{shape} hotspot"
+            sizes = re.findall(r"^define_size = (\d+), (\S+?)(?:, (\d+))?$", meta, re.M)
+            assert len(sizes) == len(imgs), f"{shape}: {len(sizes)} sizes for {len(imgs)} frames"
+            for (sz, fn, delay), (size, img, dl) in zip(sizes, imgs):
+                assert int(sz) == size and (int(delay) if delay else None) == dl, \
+                    f"{shape} {fn} size/delay"
+                got = Image.open(io.BytesIO(z.read(fn)))
+                assert got.size == (size, size) and \
+                    _rgba_equal(got, img, mask_rgb_by_alpha=True), f"{shape} {fn} pixels != canonical render"
+
+
+def _rel(p):
+    """Path for the summary lines. relpath raises across Windows drives, and
+    --out-dir routinely points at another one, so fall back to the absolute."""
+    try:
+        return os.path.relpath(p, ROOT)
+    except ValueError:
+        return p
+
+
+class _phase:
+    """Times one build phase into _PHASE_TIMES. No-op cost when nobody reads
+    it - BUILD_PERF_JSON is what turns the dict into a file, see main()."""
+    _times = {}
+
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, *exc):
+        _phase._times[self.name] = time.perf_counter() - self.t0
+        return False
+
+
+def main(argv=None):
+    # frames the warm-up renders are read back by the quality gate's processes
+    # from this directory. By default it exists for this run only; with
+    # CGR_KEEP_CACHE=1 it is keyed by a hash of the code and art (framecache.py)
+    # and the next build reuses it.
+    if "CGR_FRAME_CACHE" in os.environ:
+        return _main(argv)
+    keep = os.environ.get("CGR_KEEP_CACHE") == "1"
+    if keep:
+        from . import framecache
+        cache, msg = framecache.open_cache()
+        print(msg, flush=True)
+        n = int(os.environ.get("CGR_CACHE_VERIFY", "0") or 0)
+        if n and "hit" in msg:
+            os.environ["CGR_FRAME_CACHE"] = cache
+            done, bad = framecache.verify(cache, n)
+            print("frame cache: verified %d frames, %d differ" % (done, len(bad)), flush=True)
+            if bad:
+                os.environ.pop("CGR_FRAME_CACHE", None)
+                shutil.rmtree(cache, ignore_errors=True)
+                raise SystemExit("frame cache is stale (%s); removed, run again" % ", ".join(bad[:5]))
+    else:
+        import tempfile
+        cache = tempfile.mkdtemp(prefix="cgr-frames-")
+    os.environ["CGR_FRAME_CACHE"] = cache
+    try:
+        return _main(argv)
+    finally:
+        os.environ.pop("CGR_FRAME_CACHE", None)
+        if not keep:
+            shutil.rmtree(cache, ignore_errors=True)
+
+
+def _main(argv=None):
+    ap = argparse.ArgumentParser(description="Build the cursor theme.")
+    ap.add_argument("--out-dir", default=ROOT, metavar="DIR",
+                    help="where dist/, packages/ and assets/ (preview.png, "
+                         "the animations) are "
+                         "written (default: the repo itself). Point it "
+                         "somewhere else to render an experiment without "
+                         "overwriting the committed preview and assets.")
+    args = ap.parse_args(argv)
+    out = os.path.abspath(args.out_dir)
+    os.makedirs(out, exist_ok=True)
+    dist = os.path.join(out, "dist")
+    if os.path.exists(dist): shutil.rmtree(dist)
+    if os.environ.get("BUILD_SERIAL") != "1":           # escape hatch: BUILD_SERIAL=1
+        with _phase("warm_frames"):
+            _warm_frames()                               # renders single-core instead
+    # the webp of the strip is two minutes of one core: it starts as soon as the
+    # frames exist and runs under everything below
+    with _phase("animations"):
+        assets, finish_animations = build_animations(out, defer=True)
+    with _phase("windows"):
+        win = build_windows(dist)
+    with _phase("check_inf"):
+        check_inf(win)
+    with _phase("original"):
+        orig_theme = build_original(dist)
+    with _phase("linux"):
+        lin, aliases = build_linux(dist)
+    packages = os.path.join(out, "packages")
+    if os.path.exists(packages): shutil.rmtree(packages)
+    with _phase("deb"):
+        deb = build_deb(lin, aliases, packages)
+    with _phase("artifacts"):
+        zpath, tpath = build_artifacts(win, lin, aliases, packages)
+    with _phase("mac"):
+        cape = build_mac(packages)
+    with _phase("preview"):
+        build_preview(out)
+    with _phase("comparison"):
+        build_comparison(assets)
+    print("macOS   :", _rel(cape))
+    print("Windows :", _rel(win), "-", len(os.listdir(win)), "files")
+    print("Original:", _rel(orig_theme), "-", len(os.listdir(orig_theme)), "files (2006, 32px)")
+    print("Linux   :", _rel(lin), "-", len(os.listdir(os.path.join(lin, "cursors"))), "cursor files")
+    print("Debian  :", _rel(deb))
+    print("Zips    :", _rel(zpath), "+", _rel(tpath))
+    print("Preview :", _rel(os.path.join(out, "assets", "preview.png")),
+          "  Animations:", _rel(os.path.join(out, "assets")) + "/*.webp")
+    print("Checks:")
+    with _phase("check_packages"):
+        check_packages(win, lin, aliases, cape)
+    with _phase("check_metrics"):
+        warns = check_metrics()
+    print("  alpha/sat: %s" % ("within tolerance" if not warns else f"{warns} warning(s)"))
+    if warns and os.environ.get("ALLOW_METRIC_WARN") != "1":
+        raise SystemExit(f"check_metrics: {warns} warning(s) out of tolerance "
+                          "(set ALLOW_METRIC_WARN=1 to ship anyway)")
+    try:
+        with _phase("check_quality"):
+            check_quality(_QUALITY.join() if _QUALITY else None)
+    finally:
+        with _phase("animations_wait"):
+            finish_animations()
+        perf_path = os.environ.get("BUILD_PERF_JSON")
+        if perf_path:
+            with open(perf_path, "w") as fh:
+                json.dump(_phase._times, fh, indent=1)
+
+
+_BASELINE = os.path.join(DATA, "metrics-baseline.json")
+_KNOWN = os.path.join(DATA, "metrics-known-issues.json")
+
+
+class _quality_start:
+    """The measurement half of check_quality, on a thread from the moment the
+    frames exist. It reads nothing the packaging builds - only rendered frames,
+    which the run's frame cache already holds - so it runs beside them instead
+    of after them. join() hands back its numbers or re-raises its failure."""
+
+    def __init__(self):
+        import threading
+        self.rep = self.err = None
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+
+    def _run(self):
+        try:
+            sys.path.insert(0, TOOLS)
+            import analyze as A
+            self.rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
+        except BaseException as e:               # noqa: BLE001 - handed to join()
+            self.err = e
+
+    def join(self):
+        self.t.join()
+        if self.err is not None:
+            raise self.err
+        return self.rep
+
+
+def check_quality(rep=None):
+    """The real gate: tools/analyze.py's own thresholds and ratchet.
+
+    check_metrics above reads exactly two things - median alpha drift at the
+    author's own resolution, and saturation. It printed "metrics: all within tolerance" while the frames it
+    passed carried twelve of fifty-eight over the delta_e tolerance (NO[7] at
+    8.96 against a limit of 5.0), a fold that no size could resolve on one
+    cursor, and seven cursors rendering a fifth of their area darker than
+    anything in the author's own art. None of that is in its scope, and the
+    tool that does measure it was never run by the build - so "the build is
+    green" meant almost nothing.
+
+    analyze.gate already separates a regression from a known miss: `bad` is
+    something that got worse than the committed baseline (or broke an absolute
+    threshold the baseline has no entry for), `debt` is a target not yet met
+    but no worse than it was. Only `bad` stops a build; `debt` is printed with
+    its count so the standing gap stays visible instead of silently growing.
+
+    Skipped if the baseline is missing rather than treated as a failure - a
+    fresh clone should build - and overridable the same way check_metrics is.
+
+    `rep` is the measurement when _quality_start already took it."""
+    sys.path.insert(0, TOOLS)
+    import analyze as A
+    if not os.path.exists(_BASELINE):
+        print("  quality : skipped, no data/metrics-baseline.json")
+        return
+    with open(_BASELINE) as fh:
+        base = json.load(fh)
+    known = set()
+    if os.path.exists(_KNOWN):
+        with open(_KNOWN) as fh:
+            known = {" ".join(x.split()) for x in json.load(fh)["accepted"]}
+    if rep is None:
+        rep = A.collect(A.LADDER, None, os.cpu_count() or 1)
+    bad, debt, unmeasured, attention = A.gate(rep, base)
+    # The ratchet compares numbers, so a complaint that carries no number -
+    # "this could not be measured at all" - lands in `bad` on every run,
+    # baseline or not, and would wedge the build shut for good. Those are
+    # listed in data/metrics-known-issues.json with a note on each, so the standing
+    # ones are visible and only a new one stops a build.
+    new = [b for b in bad if " ".join(b.split()) not in known]
+    seen = len(bad) - len(new)
+    print("  quality : %s%s%s%s" % ("clean" if not new else f"{len(new)} REGRESSION(S)",
+                                    f", {seen} accepted" if seen else "",
+                                    f", {len(debt)} known debt" if debt else "",
+                                    f", {len(unmeasured)} unmeasured" if unmeasured else ""))
+    # Never fatal, but never silent either - see analyze._DE_ATTENTION.
+    for a in attention:
+        print("    attention: " + a)
+    if new:
+        for b in new:
+            print("    " + b)
+        if os.environ.get("ALLOW_METRIC_WARN") != "1":
+            raise SystemExit(f"check_quality: {len(new)} regression(s) vs "
+                             "data/metrics-baseline.json (set ALLOW_METRIC_WARN=1 to ship anyway)")
+
+
+if __name__ == "__main__":
+    main()

@@ -6,13 +6,13 @@
 # straight from a clone; grab the one off the release page if you want the
 # checksum filled in.
 pkgname=chrome-glass-remastered-cursors
-pkgver=1.0.5
+pkgver=2.0.0
 pkgrel=1
-pkgdesc="Chrome Glass (2006) cursor remaster: original pixels, crisp 32-512px, vector edges"
+pkgdesc="Chrome Glass (2006) cursor remaster: glass drawn from geometry, crisp 32-512px"
 arch=('any')
 url="https://github.com/mikedigriz/chrome-glass-remastered-cursors"
 license=('custom:MIT')
-source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/ChromeGlassRemastered-linux.tar.gz")
+source=("$pkgname-$pkgver.tar.xz::$url/releases/download/v$pkgver/ChromeGlassRemastered-linux.tar.xz")
 sha256sums=('SKIP')
 
 package() {

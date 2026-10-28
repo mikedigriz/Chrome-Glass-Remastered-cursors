@@ -1,4 +1,4 @@
-"""Regenerate src/ai: a Real-ESRGAN x4 pass over the original 32px frames
+"""Regenerate art/ai: a Real-ESRGAN x4 pass over the original 32px frames
 (32 -> 128 directly), replacing the previously-committed 128px sources with
 a version that never saw a black background.
 
@@ -10,8 +10,8 @@ the network never sees that edge.
 
 Needs `pip install py-real-esrgan opencv-python` (pulls torch). Results are
 committed, so the normal build never needs torch. Note there is no fallback:
-hybrid._base128 and trace.py both open src/ai unconditionally, so a missing
-src/ai is a FileNotFoundError, not a graceful degradation.
+hybrid._base128 and trace.py both open art/ai unconditionally, so a missing
+art/ai is a FileNotFoundError, not a graceful degradation.
 """
 import os, sys
 
@@ -26,11 +26,11 @@ import json
 import numpy as np
 from PIL import Image
 
-import upscale_lib as U
+from cgr import upscale_lib as U
 
-ORIG = os.path.join(ROOT, "src", "orig")
-OUT = os.path.join(ROOT, "src", "ai")
-MANIFEST = json.load(open(os.path.join(ROOT, "src", "manifest.json")))
+ORIG = os.path.join(ROOT, "art", "orig")
+OUT = os.path.join(ROOT, "art", "ai")
+MANIFEST = json.load(open(os.path.join(ROOT, "art", "manifest.json")))
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
             if big.size != (128, 128):
                 big = big.resize((128, 128), Image.LANCZOS)
             # keep the real silhouette alpha (Lanczos of the 32px original alpha):
-            # trace.py reads the shape from src/ai's alpha, and _base128's Reinhard
+            # trace.py reads the shape from art/ai's alpha, and _base128's Reinhard
             # measures the cursor rather than the bleed-filled background. A flat
             # 255 here traced every frame as a full square and skewed the colour
             # stats over the whole tile.

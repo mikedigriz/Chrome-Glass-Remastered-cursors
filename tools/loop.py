@@ -9,11 +9,11 @@ get back to the last state that measured better.
     python tools/loop.py diagnose --fast      what is broken, and what to try
     python tools/loop.py checkpoint pinch-r5  commit + snapshot the metrics
     python tools/loop.py rollback --reason .. undo it and mark the dead end
-    python tools/loop.py progress "note"      append the iteration to PROGRESS.md
+    python tools/loop.py progress "note"      append the iteration to docs/dev/PROGRESS.md
 
 The rule the loop runs on: one change, then the gate. A change that fails the
-gate is rolled back and its name goes into DEAD_ENDS.md, so the next pass does
-not spend another iteration rediscovering it. PLAN.md section 5 is 36 attempts
+gate is rolled back and its name goes into docs/dev/DEAD_ENDS.md, so the next pass does
+not spend another iteration rediscovering it. docs/dev/PLAN.md section 5 is 36 attempts
 long because nothing wrote them down while they were happening.
 """
 
@@ -33,9 +33,9 @@ sys.path.insert(0, HERE)
 import analyze as A  # noqa: E402
 
 METRICS = os.path.join(ROOT, ".metrics")
-PROGRESS = os.path.join(ROOT, "PROGRESS.md")
-DEAD_ENDS = os.path.join(ROOT, "DEAD_ENDS.md")
-RATCHET = os.path.join(ROOT, "metrics-baseline.json")
+PROGRESS = os.path.join(ROOT, "docs", "dev", "PROGRESS.md")
+DEAD_ENDS = os.path.join(ROOT, "docs", "dev", "DEAD_ENDS.md")
+RATCHET = os.path.join(ROOT, "data", "metrics-baseline.json")
 
 # Every gate failure belongs to exactly one artifact, and every artifact has a
 # fixed order of things to try. The point is not that the order is optimal - it
@@ -47,50 +47,44 @@ RATCHET = os.path.join(ROOT, "metrics-baseline.json")
 # is the other half of what these loops waste their time on.
 DECISION_TREE = {
     "topology": [
-        ("check_trace_input", "src/ai frames feeding trace.py"),
+        ("check_trace_input", "art/ai frames feeding trace.py"),
         ("check_snap_corners", "trace.snap_corners, SNAP_R"),
         ("retrace_tolerance", "trace.trace_frame eps"),
         ("escalate", ""),
     ],
     "fold_broken": [
         ("check_fold_chord", "hybrid._fold_chord: is the chord the right one"),
-        ("freeze_fold_geometry", "hybrid._fold_offsets, one geometry per cycle"),
-        ("widen_fold_band", "hybrid._FOLD_BAND"),
-        ("synth_bevel", "hybrid._SYNTH_BEVEL: draw the fold instead of finding it"),
+        ("check_fold_mix", "glass._FOLD_MIX: his pixels holding both facets"),
+        ("check_fold_soft", "glass.MATERIAL fold_soft"),
         ("escalate", ""),
     ],
     "staircase_edge": [
-        ("check_supersampling", "vectorlib.render ss, floor is 6"),
-        ("increase_supersampling", "vectorlib.render ss to 8"),
-        ("check_distance_field", "hybrid._chamfer, _edge_distance"),
-        ("smooth_field", "hybrid._BEVEL_SMOOTH"),
+        ("check_supersampling", "glass.SS"),
+        ("check_outline", "facets.outline, data/traced.json"),
+        ("check_seen_from", "glass._SEEN_FROM: features narrower than a pixel"),
         ("escalate", ""),
     ],
     "fold_jitter": [
         ("check_temporal", "analyze.temporal_smoothness by zone"),
-        ("freeze_lines", "hybrid._freeze_lines, _FREEZE_UNIT"),
-        ("check_light_field", "lightanim._LIGHT_UNIT, _MASTER_UNIT: the light "
-                              "is what moves, the geometry is one canonical render"),
+        ("check_canonical", "hybrid.CANONICAL: one still outline per cycle"),
+        ("check_keys", "glass.key_frame_image: the author's keys on that outline"),
         ("escalate", ""),
     ],
     "tip_split": [
         ("check_apex", "trace.reconstruct_apex: is the apex where it should be"),
-        ("check_facets", "hybrid._FACET_PCT, _FACET_KEEP_RIM: the two surfaces "
+        ("check_facets", "facets.SURFACE, glass._body: the two facets "
                          "must meet at the vertex without eating the rim"),
-        ("analytic_tip", "hybrid._tip_pinch from geometry, radius under 4 units"),
         ("escalate", ""),
     ],
     "scale_drift": [
-        ("check_alpha_ladder", "hybrid._up_alpha per size vs _LEVEL_REF"),
-        ("check_deburr", "hybrid._deburr, _DEBURR_LOGICAL at small sizes"),
-        ("check_mask_ss", "vectorlib.render ss at 32"),
+        ("check_coverage", "facets.coverage per size"),
+        ("check_rim_depth", "glass._RIM_DEPTH, MATERIAL rim at small sizes"),
         ("escalate", ""),
     ],
     "color_shift": [
         ("check_delta_e", "analyze.delta_e per frame, which frame is worst"),
-        ("adjust_reinhard", "hybrid._reinhard against the author's stats"),
-        ("adjust_sat_match", "hybrid._sat_match, _sat_anchor"),
-        ("reduce_master_weight", "hybrid._BLEND_AI"),
+        ("check_author_tone", "glass._author, _RIM_SIGMA, _FACET_DEG"),
+        ("adjust_sat_band", "glass._SAT_BAND"),
         ("escalate", ""),
     ],
     "ghost_rgb": [
@@ -104,8 +98,7 @@ DECISION_TREE = {
         ("escalate", ""),
     ],
     "morph_broken": [
-        ("check_broken_colour", "hybrid._BROKEN_COLOUR: which frames are substituted"),
-        ("check_ai_dropout", "hybrid._ai_dropout, _CRACK_* on the pencil frames"),
+        ("check_morph", "facets.MORPH, shrink: Handwriting and NO frames"),
         ("author_colour", "fall back to the author's frame for the broken ones"),
         ("escalate", ""),
     ],
@@ -115,10 +108,14 @@ DECISION_TREE = {
 # on the staircase rather than on the broken fold.
 _ARTIFACT = [
     ("topology", "topology"), ("fold_unmeasured", "topology"),
-    ("fold_gap", "fold_broken"), ("fold_luma_step", "fold_broken"),
-    ("fold_wander", "staircase_edge"), ("fold_jag", "staircase_edge"),
-    ("inner_jitter", "fold_jitter"), ("temporal_fold", "fold_jitter"),
-    ("temporal_body", "fold_jitter"),
+    ("fold_cover", "fold_broken"), ("fold_step", "fold_broken"),
+    ("fold_notch", "fold_broken"),
+    ("fold_unres", "staircase_edge"), ("fold_s_thin", "staircase_edge"),
+    ("fold_s_wide", "staircase_edge"), ("fold_s_conv", "staircase_edge"),
+    ("fold_curv", "staircase_edge"),
+    ("inner_tip", "tip_split"),
+    ("fold_jitter", "fold_jitter"), ("jitter_unmeasured", "fold_jitter"),
+    ("temporal_fold", "fold_jitter"), ("temporal_body", "fold_jitter"),
     ("tip_extreme_contrast", "tip_split"), ("tip_convergence", "tip_split"),
     ("scale_drift", "scale_drift"), ("density", "scale_drift"),
     ("delta_e", "color_shift"),
@@ -167,7 +164,7 @@ def ratchet():
 
 
 def dead_ends():
-    """Fix names already tried and rolled back, from DEAD_ENDS.md."""
+    """Fix names already tried and rolled back, from docs/dev/DEAD_ENDS.md."""
     if not os.path.exists(DEAD_ENDS):
         return set()
     with open(DEAD_ENDS, encoding="utf-8") as fh:
@@ -186,7 +183,7 @@ def next_action(artifact, done):
 def cmd_diagnose(args):
     sizes = A.LADDER_FAST if args.fast else A.LADDER_FULL if args.full else A.LADDER
     rep = A.collect(sizes, args.only, args.jobs)
-    bad, debt, _ = A.gate(rep, ratchet())
+    bad, debt, _, _ = A.gate(rep, ratchet())
     A.show(rep)
     print()
     if debt:
@@ -280,11 +277,13 @@ def note(path, line):
 
 def cmd_progress(args):
     rep = A.collect(A.LADDER_FAST if args.fast else A.LADDER, args.only, args.jobs)
-    bad, debt, _ = A.gate(rep, ratchet())
+    bad, debt, _, _ = A.gate(rep, ratchet())
     # Most of these are worst-is-highest. Two are not: a point's contrast and a
     # morph's overlap are both worst at their lowest, and taking a max of them
     # would report the healthiest cursor in the set as the state of the set.
-    lower_is_worse = {"morph_iou", "tip_extreme_contrast", "tip_profile"}
+    lower_is_worse = {"morph_iou", "tip_extreme_contrast", "tip_profile",
+                      "fold_cover", "fold_s_min_ratio", "fold_step",
+                      "fold_notch", "inner_tip"}
     worst = {}
     for name, e in rep.items():
         for k, v in A._flat(e).items():
@@ -293,8 +292,11 @@ def cmd_progress(args):
             worst[k] = (min(worst.get(k, 1e9), v) if k in lower_is_worse
                         else max(worst.get(k, 0.0), v))
     cols = ["tip_extreme_contrast", "tip_profile", "tip_convergence",
-            "temporal_fold", "inner_jitter",
-            "fold_gap", "fold_wander", "fold_jag", "delta_e", "scale_drift"]
+            "temporal_fold", "fold_jitter",
+            "fold_unres", "fold_s_conv", "fold_notch", "inner_tip",
+            "delta_e", "scale_drift"]
+    head = "| when | what changed | reg | debt | " + " | ".join(cols) + " |"
+    rule = "|" + "---|" * (len(cols) + 4)
     if not os.path.exists(PROGRESS):
         note(PROGRESS,
              "# Progress\n\n"
@@ -309,12 +311,15 @@ def cmd_progress(args):
              "column the work is for, and it starts at 84.\n\n"
              "Targets: drift 0.10 logical units, gap and wander 0, delta_e 5, "
              "temporal 1.0. The full list is THRESHOLDS in tools/analyze.py, "
-             "each with why it is that number.\n\n"
-             "| when | what changed | reg | debt | "
-             + " | ".join(cols) + " |\n|" + "---|" * (len(cols) + 4))
+             "each with why it is that number.\n\n" + head + "\n" + rule)
+    elif head not in open(PROGRESS, encoding="utf-8").read():
+        # The column set changed - the fold contract was replaced on 2026-08-22.
+        # A row written under the old header would line its numbers up with the
+        # wrong names and nothing would say so.
+        note(PROGRESS, "\n" + head + "\n" + rule)
     note(PROGRESS, f"| {datetime.date.today()} | {args.note} | {len(bad)} | {len(debt)} | "
                    + " | ".join(f"{worst.get(c, float('nan')):.3f}" for c in cols) + " |")
-    print(f"{len(bad)} regressions, {len(debt)} debt, row appended to PROGRESS.md")
+    print(f"{len(bad)} regressions, {len(debt)} debt, row appended to docs/dev/PROGRESS.md")
     return 0
 
 
