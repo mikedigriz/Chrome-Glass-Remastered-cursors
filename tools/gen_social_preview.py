@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Rebuilds assets/social-preview.png (GitHub repo social preview card, 1280x640).
+"""Rebuilds assets/social-preview.png, the card GitHub, search engines and
+messengers show for a link to the repo (1280x640, uploaded by hand in the
+repo's Settings > Social preview).
 
-Pulls real cursor frames straight out of the built Windows cursor set via
-curlib.read_cur/read_ani, so the cover always shows actual shipped glyphs
-(never mockups). Renders the HTML through a headless Chromium/Edge binary.
+The cursors are drawn by the pipeline itself, the same calls gen_hero.py
+makes: the author's 32 px Arrow blown up pixel for pixel beside the 2.0
+Arrow drawn at 384, on the hero's dark wallpaper. Text is laid out as HTML
+and rendered through a headless Chromium/Edge binary.
 
 Usage:
     python tools/gen_social_preview.py
 
-Requires: dist/windows/Chrome Glass Remastered/ already built (see build.py),
-and a Chromium-based browser installed (Edge on Windows, Chrome/Chromium on
+Requires a Chromium-based browser (Edge on Windows, Chrome/Chromium on
 Linux/macOS) - set EDGE_PATH env var to override the auto-detected binary.
 """
 import base64
@@ -22,101 +24,78 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from cgr import curlib
+from PIL import Image
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CUR_DIR = os.path.join(ROOT, "dist", "windows", "Chrome Glass Remastered")
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, HERE)
+from cgr import hybrid as H         # noqa: E402
+from gen_hero import DARK, wallpaper  # noqa: E402
+
+ROOT = os.path.dirname(HERE)
 OUT_HTML = os.path.join(ROOT, "tools", "_social_preview.html")
 OUT_PNG = os.path.join(ROOT, "assets", "social-preview.png")
 
-# (role in layout) -> (source file, frame index or None for a plain .cur)
-CURSORS = {
-    "main": ("Arrow.cur", None),
-    "t1": ("Arrow_Down.cur", None),
-    "t2": ("Wait.ani", 13),
-    "t3": ("Handwriting.ani", 0),
-}
+NEW = 384           # the 2.0 Arrow, shown 1:1
+OLD = 6             # the 2006 Arrow, each of its pixels as a 6 px block
 
 
-def load_b64(name, frame_idx):
-    path = os.path.join(CUR_DIR, name)
-    with open(path, "rb") as f:
-        data = f.read()
-    if name.endswith(".ani"):
-        ani = curlib.read_ani(data)
-        frames = curlib.read_cur(ani["frames"][frame_idx])
-    else:
-        frames = curlib.read_cur(data)
-    best = max(frames, key=lambda fr: fr["img"].size[0])
+def b64(im):
     buf = io.BytesIO()
-    best["img"].save(buf, format="PNG")
+    im.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def build_html(images):
+def images():
+    new = H.frame_image("Arrow", 0, NEW)
+    new = new.crop(new.getchannel("A").getbbox())
+    old = H.original("Arrow", 0).convert("RGBA")
+    old = old.crop(old.getchannel("A").getbbox())
+    old = old.resize((old.width * OLD, old.height * OLD), Image.NEAREST)
+    return {"bg": b64(wallpaper(1280, 640, DARK).convert("RGB")),
+            "new": b64(new), "old": b64(old)}
+
+
+def build_html(img):
     return f"""<!doctype html><html><head><meta charset=utf-8><style>
-html,body{{margin:0;padding:0;width:1280px;height:640px;overflow:hidden;font-family:-apple-system,Segoe UI,Arial,sans-serif;}}
-.cover{{
-  width:1280px;height:640px;position:relative;
-  background:
-    radial-gradient(1100px 600px at 78% 8%, rgba(70,110,180,0.28), transparent 60%),
-    radial-gradient(900px 500px at 10% 100%, rgba(30,58,138,0.35), transparent 55%),
-    linear-gradient(160deg,#0a1224 0%,#0b1530 45%,#060a16 100%);
-}}
-/* GitHub's own repo page renders this social preview as a wide header banner,
-   not at its native 2:1 ratio - it shows roughly the middle 65% of the height
-   and crops the rest top/bottom. Keep every readable element inside that
-   safe vertical band instead of spreading across the full 640px height. */
-.safe{{
-  position:absolute;left:0;top:130px;width:1280px;height:380px;
-  box-sizing:border-box;padding:0 90px;
-  display:flex;align-items:center;justify-content:space-between;
-}}
-.left{{display:flex;flex-direction:column;gap:22px;}}
-.right{{display:flex;flex-direction:column;align-items:center;gap:18px;}}
-.title{{font-size:78px;font-weight:800;color:#f3f6fc;line-height:1.05;letter-spacing:-1px;}}
+html,body{{margin:0;padding:0;width:1280px;height:640px;overflow:hidden;font-family:"Segoe UI",-apple-system,Arial,sans-serif;}}
+.cover{{width:1280px;height:640px;position:relative;background:url(data:image/png;base64,{img['bg']});}}
+/* GitHub's repo page shows this card as a wide banner and crops the top and
+   bottom, keeping roughly the middle 65%; everything that matters stays in
+   that band. */
+.safe{{position:absolute;left:0;top:120px;width:1280px;height:400px;box-sizing:border-box;
+  padding:0 80px 0 88px;display:flex;align-items:center;justify-content:space-between;}}
+.left{{display:flex;flex-direction:column;gap:20px;}}
+.title{{font-size:76px;font-weight:700;color:#f3f6fc;line-height:1.02;letter-spacing:-1px;}}
 .title .sub{{color:#9db8ee;font-weight:600;display:block;}}
-.tagline{{font-size:28px;color:#c7d2e8;font-weight:400;}}
-.badges{{display:flex;gap:12px;}}
-.badge{{
-  padding:8px 20px;border-radius:999px;border:1px solid rgba(148,180,230,0.55);
-  color:#dbe6fb;font-size:18px;font-weight:600;letter-spacing:.2px;
-  background:rgba(255,255,255,0.03);white-space:nowrap;
-}}
-.tile{{
-  border-radius:26px;
-  background:linear-gradient(160deg,#eef1f7,#dde3ee);
-  box-shadow:0 14px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.7);
-  display:flex;align-items:center;justify-content:center;
-}}
-.tile img{{filter:drop-shadow(0 6px 10px rgba(0,0,0,0.3)) saturate(1.15) contrast(1.05);}}
-.tile-main{{width:220px;height:220px;}}
-.tile-main img{{width:148px;}}
-.mini-row{{display:flex;gap:14px;}}
-.tile-small{{width:74px;height:74px;}}
-.tile-small img{{width:50px;}}
+.tagline{{font-size:27px;color:#c7d2e8;line-height:1.3;}}
+.badges{{display:flex;gap:12px;margin-top:6px;}}
+.badge{{padding:7px 18px;border-radius:999px;border:1px solid rgba(148,180,230,0.5);
+  color:#dbe6fb;font-size:18px;font-weight:600;background:rgba(255,255,255,0.04);white-space:nowrap;}}
+.badge.v{{background:rgba(157,184,238,0.18);border-color:rgba(157,184,238,0.8);}}
+.pair{{display:flex;align-items:flex-end;gap:34px;}}
+.fig{{display:flex;flex-direction:column;align-items:center;gap:12px;}}
+.fig img{{display:block;image-rendering:auto;}}
+.fig.old img{{image-rendering:pixelated;opacity:.92;}}
+.cap{{font-size:20px;font-weight:600;letter-spacing:.3px;}}
+.old .cap{{color:#e8a0a0;}}
+.new .cap{{color:#a0e2b0;}}
 </style></head><body>
 <div class=cover>
   <div class=safe>
     <div class=left>
       <div class=title>Chrome Glass<span class=sub>Remastered</span></div>
-      <div class=tagline>The 2006 glass cursors, reborn for 4K</div>
+      <div class=tagline>The 2006 glass cursors, redrawn<br>sharp at every size up to 512 px</div>
       <div class=badges>
-        <div class=badge>32-256 px</div>
-        <div class=badge>60 fps</div>
+        <div class="badge v">2.0</div>
         <div class=badge>Windows</div>
         <div class=badge>Linux</div>
         <div class=badge>macOS</div>
       </div>
     </div>
-    <div class=right>
-      <div class="tile tile-main"><img src="data:image/png;base64,{images['main']}"></div>
-      <div class=mini-row>
-        <div class="tile tile-small"><img src="data:image/png;base64,{images['t1']}"></div>
-        <div class="tile tile-small"><img src="data:image/png;base64,{images['t2']}"></div>
-        <div class="tile tile-small"><img src="data:image/png;base64,{images['t3']}"></div>
-      </div>
+    <div class=pair>
+      <div class="fig old"><img src="data:image/png;base64,{img['old']}"><div class=cap>2006</div></div>
+      <div class="fig new"><img src="data:image/png;base64,{img['new']}"><div class=cap>2.0</div></div>
     </div>
   </div>
 </div>
@@ -150,11 +129,7 @@ def find_browser():
 
 
 def main():
-    if not os.path.isdir(CUR_DIR):
-        sys.exit(f"Cursor set not built yet: {CUR_DIR!r} - run build.py first.")
-
-    images = {role: load_b64(*src) for role, src in CURSORS.items()}
-    html = build_html(images)
+    html = build_html(images())
 
     browser = find_browser()
     if not browser:
