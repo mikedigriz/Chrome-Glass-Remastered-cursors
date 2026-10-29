@@ -10,7 +10,7 @@
 
 [![Download the latest release](https://img.shields.io/badge/%E2%AC%87%20Download%20the%20latest%20release-1E3A8A?style=for-the-badge)](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest)
 
-**Windows 10/11 · Linux · macOS 15+**
+**Windows 10/11 · Linux · macOS 14+**
 
 <img src="assets/hero.png" alt="Arrow from the 2006 set at its own 32 px enlarged beside the remaster drawn at 512 px, and a row of the cursors on a light and a dark wallpaper">
 
@@ -26,7 +26,7 @@ Here every cursor is drawn again for every size, from 32 to 512 pixels, so it st
 |---|---|---|
 | Windows 10/11 | [`ChromeGlassRemastered-windows.zip`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered-windows.zip) | right-click `Install.inf`, choose **Install** |
 | Linux | `.deb`, or [`ChromeGlassRemastered-linux.tar.xz`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered-linux.tar.xz) | install the package, or unpack into `~/.icons` |
-| macOS 15+ | [`ChromeGlassRemastered.cape`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered.cape) | open it with [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
+| macOS 14+ | [`ChromeGlassRemastered.cape`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered.cape) | open it with [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
 
 <details open>
 <summary><b>🪟 &nbsp;Windows 10 / 11</b></summary>
@@ -38,7 +38,7 @@ Here every cursor is drawn again for every size, from 32 to 512 pixels, so it st
 
 To update: install the new `Install.inf` over the old one as in step 2, then pick the scheme again on the **Pointers** tab and click **Apply**.
 
-To remove it: same **Pointers** tab, select the scheme, click **Delete**, then switch back to **Windows Default**. The files stay in `%WINDIR%` until you delete them - see [full removal](docs/DETAILS.md#windows).
+To remove it: same **Pointers** tab, select the scheme, click **Delete**, then switch back to **Windows Default** and click **Apply**. The files stay in `%WINDIR%` until you delete them - see [full removal](docs/DETAILS.md#windows).
 
 </details>
 
@@ -72,9 +72,9 @@ To remove it: `sudo apt remove chrome-glass-remastered-cursors`, `sudo pacman -R
 </details>
 
 <details>
-<summary><b>🍎 &nbsp;macOS 15+</b></summary>
+<summary><b>🍎 &nbsp;macOS 14+</b></summary>
 
-1. Install [Mousecape SwiftUI](https://github.com/sdmj76/Mousecape-swiftUI/releases) - the regular build, not Debug. It needs macOS Sequoia 15 or later and runs on Intel and Apple Silicon.
+1. Install [Mousecape SwiftUI](https://github.com/sdmj76/Mousecape-swiftUI/releases). It needs macOS Sonoma 14 or later and runs on Intel and Apple Silicon.
 2. Download `ChromeGlassRemastered.cape` from the latest release.
 3. Double-click the cape, or import it in Mousecape, then select it and apply.
 
@@ -103,7 +103,6 @@ Five pointers are animated, left to right: **AppStarting**, **Hand** on a link, 
 ## Not working?
 
 - **The theme is missing from the list, or the old pointer is still there.** Log out and back in. Applications cache the cursor at startup, so restart the ones that still look wrong.
-- **On Linux the animations are slower than on Windows.** On purpose: Linux gets the author's own speed, because the smoother version flickers on some systems.
 - **A pixelated icon when you middle-click to scroll, drag or zoom in a browser.** Those are the browser's own cursors, built into Chrome, Edge and other browsers. Windows has no scheme slot for them, and no cursor theme can replace them there.
 - **macOS changed the pointer only in some places.** Some applications draw their own cursors, and Mousecape cannot safely replace those.
 

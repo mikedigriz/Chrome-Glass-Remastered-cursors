@@ -26,7 +26,7 @@ Read this before filing anything.
 
 256 px is the ceiling of the `.cur` format itself: width and height in an `ICONDIRENTRY` are one byte each, with 256 encoded as 0. There is nothing above that to ship.
 
-The installed scheme is about 2.5 MB in `%WINDIR%\Chrome Glass Remastered`. `Install.inf` writes the scheme to HKCU only - the Pointers tab merges the user and machine hives, so writing both would list the scheme twice for everyone, to fix the rare case of an admin installing for somebody else.
+The installed scheme is about 2.7 MB in `%WINDIR%\Chrome Glass Remastered`. `Install.inf` writes the scheme to HKCU only - the Pointers tab merges the user and machine hives, so writing both would list the scheme twice for everyone, to fix the rare case of an admin installing for somebody else.
 
 ### Full removal
 
@@ -54,7 +54,7 @@ The hex names are not decoration. Firefox, Chromium/Electron, Java and older GTK
 
 **The animations run at the author's ~20 fps on purpose.** Xcursor swaps frames with no compositor-side frame sync, so a 60 fps cadence periodically lands out of phase with a 60 Hz panel and flickers - reproduced on GNOME/Mutter under X11 on a hybrid Intel+NVIDIA machine. The author's native cadence does not do it. Windows `.ani` runs at the same cadence: at 60 fps the Pointers tab preview jerked and dragged.
 
-The unpacked theme is about 78 MB, 8 MB of it hyprcursor. Inside the tarball and the .deb the aliases are symlinks rather than copies, which saves roughly 85% of the payload.
+The unpacked theme is about 76 MB, 9 MB of it hyprcursor. Inside the tarball and the .deb the aliases are symlinks rather than copies, which saves roughly 85% of the payload.
 
 The .deb registers its `cursor.theme`, which inherits this theme, as `x-cursor-theme` in `update-alternatives` at priority 20, under Adwaita's 90: the theme becomes a choice in `sudo update-alternatives --config x-cursor-theme` rather than taking over, and removal unregisters it. Up to 1.1.0 it registered `index.theme`, whose `Inherits=Adwaita` made that pick resolve to Adwaita; an upgrade moves such a pick over. The `PKGBUILD` committed here carries the previous tag and `sha256sums=SKIP` so a plain clone still builds; the copy attached to each release is pinned to that release and carries the real checksum.
 

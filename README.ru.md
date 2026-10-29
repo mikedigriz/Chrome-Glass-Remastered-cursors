@@ -10,7 +10,7 @@
 
 [![Скачать последний релиз](https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D0%BF%D0%BE%D1%81%D0%BB%D0%B5%D0%B4%D0%BD%D0%B8%D0%B9%20%D1%80%D0%B5%D0%BB%D0%B8%D0%B7-1E3A8A?style=for-the-badge)](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest)
 
-**Windows 10/11 · Linux · macOS 15+**
+**Windows 10/11 · Linux · macOS 14+**
 
 <img src="assets/hero.png" alt="Arrow из набора 2006 года в своих 32 px, увеличенный, рядом с ремастером в 512 px, и ряд курсоров на светлых и тёмных обоях">
 
@@ -26,7 +26,7 @@
 |---|---|---|
 | Windows 10/11 | [`ChromeGlassRemastered-windows.zip`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered-windows.zip) | правая кнопка по `Install.inf`, пункт **Установить** |
 | Linux | `.deb` или [`ChromeGlassRemastered-linux.tar.xz`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered-linux.tar.xz) | пакет или распаковка в `~/.icons` |
-| macOS 15+ | [`ChromeGlassRemastered.cape`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered.cape) | открыть в [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
+| macOS 14+ | [`ChromeGlassRemastered.cape`](https://github.com/mikedigriz/Chrome-Glass-Remastered-cursors/releases/latest/download/ChromeGlassRemastered.cape) | открыть в [Mousecape](https://github.com/sdmj76/Mousecape-swiftUI) |
 
 <details open>
 <summary><b>🪟 &nbsp;Windows 10 / 11</b></summary>
@@ -38,7 +38,7 @@
 
 Как обновить: установите новый `Install.inf` поверх старого так же, как в шаге 2, затем на вкладке **Указатели** снова выберите схему и нажмите **Применить**.
 
-Как убрать: та же вкладка **Указатели**, выберите схему, нажмите **Удалить**, затем вернитесь на **Стандартная Windows**. Файлы останутся в `%WINDIR%`, пока вы их не удалите сами: см. [полное удаление](docs/DETAILS.ru.md#windows).
+Как убрать: та же вкладка **Указатели**, выберите схему, нажмите **Удалить**, затем вернитесь на **Стандартная Windows** и нажмите **Применить**. Файлы останутся в `%WINDIR%`, пока вы их не удалите сами: см. [полное удаление](docs/DETAILS.ru.md#windows).
 
 </details>
 
@@ -72,9 +72,9 @@ env = HYPRCURSOR_SIZE,48
 </details>
 
 <details>
-<summary><b>🍎 &nbsp;macOS 15+</b></summary>
+<summary><b>🍎 &nbsp;macOS 14+</b></summary>
 
-1. Установите [Mousecape SwiftUI](https://github.com/sdmj76/Mousecape-swiftUI/releases) - обычную сборку, не Debug. Нужна macOS Sequoia 15 или новее, приложение universal, идёт на Intel и Apple Silicon.
+1. Установите [Mousecape SwiftUI](https://github.com/sdmj76/Mousecape-swiftUI/releases). Нужна macOS Sonoma 14 или новее, приложение universal, идёт на Intel и Apple Silicon.
 2. Скачайте `ChromeGlassRemastered.cape` из последнего релиза.
 3. Откройте cape двойным щелчком или импортируйте его в Mousecape, затем выберите и примените.
 
@@ -103,7 +103,6 @@ env = HYPRCURSOR_SIZE,48
 ## Не работает?
 
 - **Темы нет в списке или указатель остался прежним.** Выйдите из сеанса и войдите снова. Приложения запоминают курсор при запуске, так что перезапустите те, где он не сменился.
-- **На Linux анимация медленнее, чем на Windows.** Так задумано: там стоит авторская скорость, потому что более плавная анимация на части систем мерцает.
 - **Пиксельный значок при прокрутке колесом, перетаскивании или лупе в браузере.** Это курсоры самого браузера, они зашиты в Chrome, Edge и другие браузеры. В схеме Windows для них нет слота, и ни одна тема курсоров их там не заменит.
 - **На macOS курсор сменился не везде.** Часть приложений рисует свои курсоры, и Mousecape не может их безопасно подменить.
 
