@@ -5,8 +5,8 @@ repo's Settings > Social preview).
 
 The cursors are drawn by the pipeline itself, the same calls gen_hero.py
 makes: the author's 32 px Arrow blown up pixel for pixel beside the 2.0
-Arrow drawn at 320, on the hero's dark wallpaper, and below them three of
-the set's coloured cursors at 96. Text is laid out as HTML
+Arrow drawn at 320, on the hero's dark wallpaper, and under the pair three of
+the set's coloured cursors at 80. Text is laid out as HTML
 and rendered through a headless Chromium/Edge binary.
 
 Usage:
@@ -37,9 +37,9 @@ ROOT = os.path.dirname(HERE)
 OUT_HTML = os.path.join(ROOT, "tools", "_social_preview.html")
 OUT_PNG = os.path.join(ROOT, "assets", "social-preview.png")
 
-NEW = 320           # the 2.0 Arrow, shown 1:1
-OLD = 5             # the 2006 Arrow, each of its pixels as a 5 px block
-ROW = 96
+NEW = 288           # the 2.0 Arrow, shown 1:1
+OLD = 4             # the 2006 Arrow, each of its pixels as a 5 px block
+ROW = 80
 # the set's yellow, red and blue: the silver is what the big arrow shows
 ROW_NAMES = [("UpArrow", 0), ("Wait", 2), ("Arrow_Down", 0)]
 
@@ -68,7 +68,7 @@ html,body{{margin:0;padding:0;width:1280px;height:640px;overflow:hidden;font-fam
 /* GitHub's repo page shows this card as a wide banner and crops the top and
    bottom, keeping roughly the middle 65%; everything that matters stays in
    that band. */
-.safe{{position:absolute;left:0;top:56px;width:1280px;height:400px;box-sizing:border-box;
+.safe{{position:absolute;left:0;top:100px;width:1280px;height:440px;box-sizing:border-box;
   padding:0 80px 0 88px;display:flex;align-items:center;justify-content:space-between;}}
 .left{{display:flex;flex-direction:column;gap:20px;}}
 .title{{font-size:76px;font-weight:700;color:#f3f6fc;line-height:1.02;letter-spacing:-1px;}}
@@ -85,7 +85,8 @@ html,body{{margin:0;padding:0;width:1280px;height:640px;overflow:hidden;font-fam
 .cap{{font-size:20px;font-weight:600;letter-spacing:.3px;}}
 .old .cap{{color:#e8a0a0;}}
 .new .cap{{color:#a0e2b0;}}
-.row{{position:absolute;left:78px;top:478px;height:{ROW}px;display:flex;align-items:center;gap:56px;}}
+.right{{display:flex;flex-direction:column;align-items:center;gap:26px;}}
+.row{{display:flex;align-items:center;gap:44px;}}
 .row img{{display:block;width:{ROW}px;height:{ROW}px;filter:drop-shadow(0 4px 8px rgba(0,0,0,0.4));}}
 </style></head><body>
 <div class=cover>
@@ -100,12 +101,14 @@ html,body{{margin:0;padding:0;width:1280px;height:640px;overflow:hidden;font-fam
         <div class=badge>macOS</div>
       </div>
     </div>
+    <div class=right>
     <div class=pair>
       <div class="fig old"><img src="data:image/png;base64,{img['old']}"><div class=cap>2006</div></div>
       <div class="fig new"><img src="data:image/png;base64,{img['new']}"><div class=cap>2.0</div></div>
     </div>
+    <div class=row>{''.join('<img src="data:image/png;base64,%s">' % r for r in img['row'])}</div>
+    </div>
   </div>
-  <div class=row>{''.join('<img src="data:image/png;base64,%s">' % r for r in img['row'])}</div>
 </div>
 </body></html>"""
 
