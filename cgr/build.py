@@ -436,10 +436,12 @@ def write_inf(out):
     slot_strings = "\n".join('%-12s = "%s"' % (role, fn) for role, fn in WIN_SLOTS)
     reg_val = ",".join("%%10%%\\%%CUR_DIR%%\\%%%s%%" % role for role, _ in WIN_SLOTS)
     names = "\n".join('"%s"' % fn for _, fn in WIN_SLOTS)
-    # 0x4 overwrite whatever is there, 0x8 replace a file the active scheme
-    # holds (swapped in at the next restart): without them a second install
-    # left the old cursors in place until the scheme was removed first
-    copy = "\n".join('"%s",,,0x0000000C' % fn for _, fn in WIN_SLOTS)
+    # 0x4 overwrite whatever is there: without it a second install left the
+    # old cursors in place. Not 0x8 (FORCE_FILE_IN_USE): it treats every
+    # existing file as locked, so any install over an old one asked to reboot
+    # and showed the old cursors until then. A file really in use is queued
+    # for the restart by SetupAPI on its own.
+    copy = "\n".join('"%s",,,0x00000004' % fn for _, fn in WIN_SLOTS)
     inf = f""";  {THEME} - cursor scheme installer
 ;  Right-click this file, choose "Install", then pick "{THEME}" in
 ;  Settings > Bluetooth & devices > Mouse > Additional mouse settings > Pointers.
