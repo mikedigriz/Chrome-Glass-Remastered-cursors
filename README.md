@@ -108,7 +108,7 @@ Five pointers are animated, left to right: **AppStarting**, **Hand** on a link, 
 
 ## The original
 
-Chrome Glass is [yoyos' work](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
+Chrome Glass is [yoyos work](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
 
 The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
