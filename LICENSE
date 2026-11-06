@@ -7,8 +7,8 @@ glyphs.py, cursors.py, trace.py, vectorlib.py, curlib.py, install scripts,
 CI workflows and metadata.
 
 It does NOT cover the cursor artwork (src/, traced.json, the built cursor
-files and previews), which is derived from "Chrome Glass" by yoyos
-(DeviantArt, 2006) and remains the creative work of the original author.
+files and previews), which is derived from "Chrome Glass" by RPGFX
+(WinCustomize, 2006) and remains the creative work of the original author.
 See the NOTICE file.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

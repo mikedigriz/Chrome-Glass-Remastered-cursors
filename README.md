@@ -16,7 +16,7 @@
 
 </div>
 
-In 2006 yoyos posted the [Chrome Glass](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748) cursor set on DeviantArt. Screens were small then, and cursors were drawn as 32 by 32 pixel pictures. Today's screens are bigger, the cursor on them is bigger too, and the system simply stretches the old picture. It comes out blurry.
+In 2006 RPGFX released the [Chrome Glass](https://www.wincustomize.com/explore/cursorfx/1875) cursor set on WinCustomize. Screens were small then, and cursors were drawn as 32 by 32 pixel pictures. Today's screens are bigger, the cursor on them is bigger too, and the system simply stretches the old picture. It comes out blurry.
 
 Here every cursor is drawn again for every size, from 32 to 512 pixels, so it stays sharp on any screen and at any pointer size. The shapes, colours and animation are the original's. How it was done: [docs/DETAILS.md](docs/DETAILS.md#how-it-is-built).
 
@@ -92,7 +92,7 @@ To put the system cursors back: **File → Reset System Cursor**, or <kbd>⌘</k
 
 </div>
 
-The names are the files. IBeam selects text, Cross is precision select, SizeAll moves, UpArrow is the alternate select, AppStarting means working in the background, Wait is busy, NO is unavailable, Pin and Person pick a place and a person.
+The names are the files'. IBeam selects text, Cross is precision select, SizeAll moves, UpArrow is the alternate select, AppStarting means working in the background, Wait is busy, NO is unavailable, Pin and Person pick a place and a person.
 
 ## Animation in motion
 
@@ -108,7 +108,9 @@ Five pointers are animated, left to right: **AppStarting**, **Hand** on a link, 
 
 ## The original
 
-Chrome Glass is [yoyos work](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748). This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
+Chrome Glass is [the work of RPGFX](https://www.wincustomize.com/explore/cursorfx/1875), published on WinCustomize on 13 April 2006. This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
+
+> **Attribution:** the original "Chrome Glass" cursor design was created by **RPGFX** (WinCustomize, 13 April 2006). A later DeviantArt upload ([yoyos, 23 April 2006](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748)) was mistaken for the original in earlier releases of this remaster. This release corrects the historical attribution.
 
 The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
