@@ -2,9 +2,9 @@ MIT License
 
 Copyright (c) 2026 Chrome Glass Remastered contributors
 
-This license covers the CODE in this repository: build.py, hybrid.py,
-glyphs.py, cursors.py, trace.py, vectorlib.py, curlib.py, install scripts,
-CI workflows and metadata.
+This license covers the CODE in this repository: the cgr/ package (build,
+tracing, rendering and cursor-format code), tools/, packaging/, CI workflows
+and metadata.
 
 It does NOT cover the cursor artwork (art/, data/traced.json, the built cursor
 files and previews), which is derived from "Chrome Glass" by RPGFX
