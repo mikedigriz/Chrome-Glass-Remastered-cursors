@@ -12,13 +12,13 @@ Ten days later the same set appeared on DeviantArt under the name of yoyos
 someone else's work passed off as their own. Earlier releases of this
 remaster took that copy for the original. The design is by RPGFX.
 
-The cursor frames in src/orig/ are the original 2006 bitmaps; the frames in
-src/ai/ and everything built from them (dist/, release archives, previews)
-are derived from those bitmaps: AI upscaling, colour restoration and
-vector-traced edges applied on top of the original artist's work. The Pin
-and Person cursors are new drawings made for this set in the original's
-style. The 32 px images inside the shipped cursors are the original frames,
-byte for byte.
+The frames in art/orig/ are the original 2006 bitmaps, extracted from the
+.ani files of the DeviantArt copy. The frames in art/ai/ are AI upscales of
+them, used only to trace the outlines in data/traced.json; nothing the
+network drew reaches a cursor. The shipped cursors (dist/, release archives,
+previews) are drawn anew on those outlines, after the original artist's
+work. The Pin and Person cursors are new drawings made for this set in the
+original's style.
 
 The "Chrome Glass" name and the original artwork remain the creative work
 and property of their author; "HD" marks this as an unofficial remaster.

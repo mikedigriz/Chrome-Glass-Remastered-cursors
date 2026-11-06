@@ -6,7 +6,7 @@ This license covers the CODE in this repository: build.py, hybrid.py,
 glyphs.py, cursors.py, trace.py, vectorlib.py, curlib.py, install scripts,
 CI workflows and metadata.
 
-It does NOT cover the cursor artwork (src/, traced.json, the built cursor
+It does NOT cover the cursor artwork (art/, data/traced.json, the built cursor
 files and previews), which is derived from "Chrome Glass" by RPGFX
 (WinCustomize, 2006) and remains the creative work of the original author.
 See the NOTICE file.
