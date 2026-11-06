@@ -112,6 +112,18 @@ Chrome Glass is [the work of RPGFX](https://www.wincustomize.com/explore/cursorf
 
 > **Attribution:** the original "Chrome Glass" cursor design was created by **RPGFX** (WinCustomize, 13 April 2006). Ten days later the same set appeared on DeviantArt under the name of [yoyos (23 April 2006)](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748): someone else's work passed off as their own. Earlier releases of this remaster took that copy for the original. This release corrects the historical attribution.
 
+### How the author got lost
+
+The mid-2000s were the heyday of Windows XP customization. WindowBlinds skins, docks, widgets and cursors were shared on WinCustomize and DeviantArt, and the most striking cursors were made not in the Windows format but for Stardock's CursorXP and CursorFX. Those programs could do what the system could not: translucency, smooth animation, trails and click effects.
+
+That is how Chrome Glass came out: on 13 April 2006 RPGFX published it on [WinCustomize](https://www.wincustomize.com/explore/cursorfx/1875) as a CursorFX pack, a companion to the same author's Vista Pro. It was downloaded more than 55,000 times, but it only worked with CursorFX installed.
+
+Ten days later the same set appeared on DeviantArt under the name of yoyos, already as plain `.cur` and `.ani` files that Windows installs by itself, no extra software needed. For most people that copy was the one that worked, and it was the one that spread.
+
+Then the era changed. CursorXP went away with Windows XP, the skinning scene thinned out, WinCustomize ended up behind bot protection and search engines all but stopped finding it. DeviantArt, by contrast, is indexed very well. Cursor collections were filled from there: on Cursors-4U the [Transparent Chrome Glass Set](https://www.cursors-4u.com/cursor/transparent-chrome-glass-set) was added in June 2010 with yoyos as the creator and the license "Unknown", and has been downloaded more than 24,000 times. Aggregators copied each other along with the credit, and every repost made the mistake stick. Of the sources found, only [Gnome-look](https://www.gnome-look.org/p/999975) names RPGFX as the author.
+
+This remaster started from the same copy: the frames in `art/orig` are extracted from its `.ani` files. That is why earlier releases repeated someone else's credit.
+
 The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
 ## More
