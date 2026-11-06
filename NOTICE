@@ -7,9 +7,10 @@ Chrome Glass Remastered is an unofficial, derivative remaster of:
     Published on WinCustomize (CursorFX), 13 April 2006
     https://www.wincustomize.com/explore/cursorfx/1875
 
-Earlier releases of this remaster credited a later DeviantArt upload
-(yoyos, 23 April 2006, https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748)
-as the original. That was a mistake: the design is by RPGFX.
+Ten days later the same set appeared on DeviantArt under the name of yoyos
+(23 April 2006, https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748),
+someone else's work passed off as their own. Earlier releases of this
+remaster took that copy for the original. The design is by RPGFX.
 
 The cursor frames in src/orig/ are the original 2006 bitmaps; the frames in
 src/ai/ and everything built from them (dist/, release archives, previews)

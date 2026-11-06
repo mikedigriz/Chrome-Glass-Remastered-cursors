@@ -110,7 +110,7 @@ Five pointers are animated, left to right: **AppStarting**, **Hand** on a link, 
 
 Chrome Glass is [the work of RPGFX](https://www.wincustomize.com/explore/cursorfx/1875), published on WinCustomize on 13 April 2006. This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
 
-> **Attribution:** the original "Chrome Glass" cursor design was created by **RPGFX** (WinCustomize, 13 April 2006). A later DeviantArt upload ([yoyos, 23 April 2006](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748)) was mistaken for the original in earlier releases of this remaster. This release corrects the historical attribution.
+> **Attribution:** the original "Chrome Glass" cursor design was created by **RPGFX** (WinCustomize, 13 April 2006). Ten days later the same set appeared on DeviantArt under the name of [yoyos (23 April 2006)](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748): someone else's work passed off as their own. Earlier releases of this remaster took that copy for the original. This release corrects the historical attribution.
 
 The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
