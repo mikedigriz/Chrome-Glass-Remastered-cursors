@@ -92,7 +92,7 @@ To put the system cursors back: **File → Reset System Cursor**, or <kbd>⌘</k
 
 </div>
 
-The names are the files'. IBeam selects text, Cross is precision select, SizeAll moves, UpArrow is the alternate select, AppStarting means working in the background, Wait is busy, NO is unavailable, Pin and Person pick a place and a person.
+The names are the files. IBeam selects text, Cross is precision select, SizeAll moves, UpArrow is the alternate select, AppStarting means working in the background, Wait is busy, NO is unavailable, Pin and Person pick a place and a person.
 
 ## Animation in motion
 
