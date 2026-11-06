@@ -18,7 +18,7 @@
 
 In 2006 RPGFX released the [Chrome Glass](https://www.wincustomize.com/explore/cursorfx/1875) cursor set on WinCustomize. Screens were small then, and cursors were drawn as 32 by 32 pixel pictures. Today's screens are bigger, the cursor on them is bigger too, and the system simply stretches the old picture. It comes out blurry.
 
-Here every cursor is drawn again for every size, from 32 to 512 pixels, so it stays sharp on any screen and at any pointer size. The shapes, colours and animation are the original's. How it was done: [docs/DETAILS.md](docs/DETAILS.md#how-it-is-built).
+Here every cursor is drawn again for every size, from 32 to 512 pixels, so it stays sharp on any screen and at any pointer size. The shapes, colours and animation follow the 2006 set. How it was done: [docs/DETAILS.md](docs/DETAILS.md#how-it-is-built).
 
 ## Installation
 
@@ -108,21 +108,17 @@ Five pointers are animated, left to right: **AppStarting**, **Hand** on a link, 
 
 ## The original
 
-Chrome Glass is [the work of RPGFX](https://www.wincustomize.com/explore/cursorfx/1875), published on WinCustomize on 13 April 2006. This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
+Chrome Glass was designed by **RPGFX** and published on [WinCustomize](https://www.wincustomize.com/explore/cursorfx/1875) on 13 April 2006. This is an unofficial remaster, published as a tribute, keeping the attribution with the artwork.
 
-> **Attribution:** the original "Chrome Glass" cursor design was created by **RPGFX** (WinCustomize, 13 April 2006). Ten days later the same set appeared on DeviantArt under the name of [yoyos (23 April 2006)](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748): someone else's work passed off as their own. Earlier releases of this remaster took that copy for the original. This release corrects the historical attribution.
+> **Attribution:** ten days later Chrome Glass appeared on DeviantArt under the name of [yoyos](https://www.deviantart.com/yoyos/art/Chrome-Glass-32252748) (23 April 2006): someone else's work passed off as their own. Earlier releases of this remaster took that copy for the original; corrected in November 2026.
 
 ### How the author got lost
 
-The mid-2000s were the heyday of Windows XP customization. WindowBlinds skins, docks, widgets and cursors were shared on WinCustomize and DeviantArt, and the most striking cursors were made not in the Windows format but for Stardock's CursorXP and CursorFX. Those programs could do what the system could not: translucency, smooth animation, trails and click effects.
+In the mid-2000s Windows XP customization was at its peak, and the most striking cursors were made not in the Windows format but for Stardock's CursorXP and CursorFX, which could do translucency, smooth animation and click effects. Chrome Glass was one of them: a CursorFX pack, a companion to the same author's Vista Pro, downloaded more than 55,000 times. But it needed CursorFX installed to work.
 
-That is how Chrome Glass came out: on 13 April 2006 RPGFX published it on [WinCustomize](https://www.wincustomize.com/explore/cursorfx/1875) as a CursorFX pack, a companion to the same author's Vista Pro. It was downloaded more than 55,000 times, but it only worked with CursorFX installed.
+The DeviantArt copy came as plain `.cur` and `.ani` files that Windows installs by itself. That version worked for everyone, and it was the one that spread: cursor collections took it from DeviantArt along with the credit. On Cursors-4U the [Transparent Chrome Glass Set](https://www.cursors-4u.com/cursor/transparent-chrome-glass-set) was added in June 2010 with yoyos as the creator and has been downloaded more than 24,000 times. Of the sources found, only [Gnome-look](https://www.gnome-look.org/p/999975) names RPGFX.
 
-Ten days later the same set appeared on DeviantArt under the name of yoyos, already as plain `.cur` and `.ani` files that Windows installs by itself, no extra software needed. For most people that copy was the one that worked, and it was the one that spread.
-
-Then the era changed. CursorXP went away with Windows XP, the skinning scene thinned out, WinCustomize ended up behind bot protection and search engines all but stopped finding it. DeviantArt, by contrast, is indexed very well. Cursor collections were filled from there: on Cursors-4U the [Transparent Chrome Glass Set](https://www.cursors-4u.com/cursor/transparent-chrome-glass-set) was added in June 2010 with yoyos as the creator and the license "Unknown", and has been downloaded more than 24,000 times. Aggregators copied each other along with the credit, and every repost made the mistake stick. Of the sources found, only [Gnome-look](https://www.gnome-look.org/p/999975) names RPGFX as the author.
-
-This remaster started from the same copy: the frames in `art/orig` are extracted from its `.ani` files. That is why earlier releases repeated someone else's credit.
+This remaster started from the same copy: the frames in `art/orig` come from its `.ani` files, so the shapes and animation follow that version. The CursorFX original may have had effects the copy lost.
 
 The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
