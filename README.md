@@ -118,7 +118,7 @@ In the mid-2000s Windows XP customization was at its peak, and the most striking
 
 The DeviantArt copy came as plain `.cur` and `.ani` files that Windows installs by itself. That version worked for everyone, and it was the one that spread: cursor collections took it from DeviantArt along with the credit. On Cursors-4U the [Transparent Chrome Glass Set](https://www.cursors-4u.com/cursor/transparent-chrome-glass-set) was added in June 2010 with yoyos as the creator and has been downloaded more than 24,000 times. Of the sources found, only [Gnome-look](https://www.gnome-look.org/p/999975) names RPGFX.
 
-This remaster started from the same copy: the frames in `art/orig` come from its `.ani` files, so the shapes and animation follow that version. The CursorFX original may have had effects the copy lost.
+This remaster started from the same copy, and the copy is provably RPGFX's: every frame in `art/orig` is a frame of the original theme (its files are all dated 13 April 2006), scaled down from 37 or 50 px to fit 26 px and matching it pixel for pixel. Along the way the copy lost the 35-frame IBeam animation, where the arrow flows into the text cursor (only the last frame was kept), and the pressed states of the hand.
 
 The cursor artwork is **not** covered by the MIT license - see [`NOTICE`](NOTICE). The build and packaging code is MIT, see [`LICENSE`](LICENSE).
 
